@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "التقِ في المنتصف"
+  },
+  "session": {
+    "create": "جلسة جديدة",
+    "join": "انضم إلى الجلسة",
+    "share": "مشاركة الرابط",
+    "expired": "انتهت صلاحية هذه الجلسة",
+    "loading": "جارٍ تحميل الجلسة...",
+    "error": "فشل تحميل الجلسة",
+    "participantCount": "{{count}} / {{max}} انضموا",
+    "status": {
+      "active": "نشط",
+      "expired": "منتهي",
+      "completed": "مكتمل"
+    }
+  },
+  "venue": {
+    "rating": "التقييم",
+    "distance": "{{distance}} بعيد",
+    "open": "مفتوح الآن",
+    "closed": "مغلق",
+    "noRating": "بدون تقييم",
+    "score": "النتيجة: {{score}}",
+    "vote": "تصويت",
+    "votes": "{{count}} أصوات"
+  },
+  "map": {
+    "loading": "جارٍ تحميل الخريطة...",
+    "error": "فشل تحميل الخريطة",
+    "locating": "جارٍ تحديد موقعك...",
+    "findingMidpoint": "جارٍ البحث عن نقطة الاجتماع..."
+  },
+  "venues": {
+    "title": "أماكن الاجتماع المقترحة"
+  },
+  "common": {
+    "back": "رجوع",
+    "cancel": "إلغاء",
+    "confirm": "تأكيد"
+  }
+}

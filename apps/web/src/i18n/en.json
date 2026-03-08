@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "Meet Me Halfway"
+  },
+  "session": {
+    "create": "New Session",
+    "join": "Join Session",
+    "share": "Share Link",
+    "expired": "This session has expired",
+    "loading": "Loading session...",
+    "error": "Failed to load session",
+    "participantCount": "{{count}} / {{max}} joined",
+    "status": {
+      "active": "Active",
+      "expired": "Expired",
+      "completed": "Done"
+    }
+  },
+  "venue": {
+    "rating": "Rating",
+    "distance": "{{distance}} away",
+    "open": "Open now",
+    "closed": "Closed",
+    "noRating": "No rating",
+    "score": "Score: {{score}}",
+    "vote": "Vote",
+    "votes": "{{count}} votes"
+  },
+  "map": {
+    "loading": "Loading map...",
+    "error": "Map failed to load",
+    "locating": "Finding your location...",
+    "findingMidpoint": "Finding your meeting point..."
+  },
+  "venues": {
+    "title": "Suggested Meeting Places"
+  },
+  "common": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "confirm": "Confirm"
+  }
+}

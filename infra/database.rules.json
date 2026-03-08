@@ -1,0 +1,21 @@
+{
+  "rules": {
+    "sessions": {
+      "$session_id": {
+        "participants": {
+          "$participant_id": {
+            ".read": "auth != null",
+            ".write": "auth != null && auth.uid === $participant_id",
+            "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+            "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+            "updated_at": { ".validate": "newData.isNumber()" }
+          }
+        },
+        "centroid": {
+          ".read": "auth != null",
+          ".write": false
+        }
+      }
+    }
+  }
+}

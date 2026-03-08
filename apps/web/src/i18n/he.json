@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "פגשו אותנו באמצע"
+  },
+  "session": {
+    "create": "סשן חדש",
+    "join": "הצטרף לסשן",
+    "share": "שתף קישור",
+    "expired": "הסשן הזה פג תוקף",
+    "loading": "טוען סשן...",
+    "error": "טעינת הסשן נכשלה",
+    "participantCount": "{{count}} / {{max}} הצטרפו",
+    "status": {
+      "active": "פעיל",
+      "expired": "פג תוקף",
+      "completed": "הסתיים"
+    }
+  },
+  "venue": {
+    "rating": "דירוג",
+    "distance": "{{distance}} מרחק",
+    "open": "פתוח כעת",
+    "closed": "סגור",
+    "noRating": "ללא דירוג",
+    "score": "ציון: {{score}}",
+    "vote": "הצבע",
+    "votes": "{{count}} קולות"
+  },
+  "map": {
+    "loading": "טוען מפה...",
+    "error": "הטעינה של המפה נכשלה",
+    "locating": "מאתר את מיקומך...",
+    "findingMidpoint": "מוצא את נקודת הפגישה שלך..."
+  },
+  "venues": {
+    "title": "מקומות פגישה מוצעים"
+  },
+  "common": {
+    "back": "חזרה",
+    "cancel": "ביטול",
+    "confirm": "אישור"
+  }
+}
