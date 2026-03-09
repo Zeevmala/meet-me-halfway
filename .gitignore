@@ -45,5 +45,6 @@ apps/mobile/.expo/
 *.tfstate.backup
 *.tfvars
 
-# Claude Code
-.claude/
+# Claude Code (keep commands/ tracked for team-shared skills)
+.claude/*
+!.claude/commands/
