@@ -282,6 +282,7 @@ async def test_http_get_midpoint(app, mock_db):
         centroid=LatLng(lat=31.93, lng=34.99),
         search_radius_m=1200.0,
         venues=[],
+        participants=[],
         participant_count=2,
     )
     with patch(
@@ -742,6 +743,7 @@ async def test_contract_midpoint_response_keys(app, mock_db):
         centroid=LatLng(lat=31.93, lng=34.99),
         search_radius_m=1200.0,
         venues=[],
+        participants=[],
         participant_count=2,
     )
     with patch(
@@ -759,6 +761,7 @@ async def test_contract_midpoint_response_keys(app, mock_db):
         "centroid",
         "search_radius_m",
         "venues",
+        "participants",
         "participant_count",
     }
     assert set(data["centroid"].keys()) == {"lat", "lng"}
@@ -785,6 +788,7 @@ async def test_contract_venue_out_keys(app, mock_db):
         centroid=LatLng(lat=31.93, lng=34.99),
         search_radius_m=1200.0,
         venues=[venue],
+        participants=[],
         participant_count=2,
     )
     expected_venue_keys = {

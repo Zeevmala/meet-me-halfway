@@ -4,15 +4,12 @@ import type { Venue } from "../../../../packages/shared/types";
 import type { ParticipantRTDB } from "../hooks/useFirebase";
 import "../styles/map.css";
 import CentroidMarker from "./CentroidMarker";
-import ParticipantPin from "./ParticipantPin";
-import VenueMarker from "./VenueMarker";
 
 // lng,lat order — GeoJSON / Mapbox convention
 const DEFAULT_CENTER: [number, number] = [35.2137, 31.7683];
 const DEFAULT_ZOOM = 8;
 
-const LIGHT_STYLE = "mapbox://styles/mapbox/streets-v12";
-const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
+const DEFAULT_STYLE = "mapbox://styles/mapbox/standard";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
@@ -23,17 +20,11 @@ interface MapProps {
 }
 
 function getPreferredStyle(): string {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? DARK_STYLE
-    : LIGHT_STYLE;
+  return DEFAULT_STYLE;
 }
 
 function addSourcesAndLayers(map: mapboxgl.Map): void {
   map.addSource("participants", {
-    type: "geojson",
-    data: { type: "FeatureCollection", features: [] },
-  });
-  map.addSource("centroid", {
     type: "geojson",
     data: { type: "FeatureCollection", features: [] },
   });
@@ -42,42 +33,85 @@ function addSourcesAndLayers(map: mapboxgl.Map): void {
     data: { type: "FeatureCollection", features: [] },
   });
 
+  // Participants: blue circles
   map.addLayer({
     id: "participants-layer",
     type: "circle",
     source: "participants",
+    slot: "top",
     paint: {
       "circle-radius": 8,
       "circle-color": "#3b82f6",
-      "circle-stroke-width": 2,
-      "circle-stroke-color": "#fff",
-    },
-  });
-
-  map.addLayer({
-    id: "centroid-layer",
-    type: "circle",
-    source: "centroid",
-    paint: {
-      "circle-radius": 12,
-      "circle-color": "#1a73e8",
       "circle-stroke-width": 3,
       "circle-stroke-color": "#fff",
-      "circle-opacity": 0.9,
     },
   });
 
+  // Participant labels
+  map.addLayer({
+    id: "participants-label",
+    type: "symbol",
+    source: "participants",
+    slot: "top",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-offset": [0, 1.5],
+      "text-size": 12,
+      "text-anchor": "top",
+    },
+    paint: {
+      "text-color": "#fff",
+      "text-halo-color": "#000",
+      "text-halo-width": 1,
+    },
+  });
+
+  // Venues: colored circles with white stroke
   map.addLayer({
     id: "venues-layer",
     type: "circle",
     source: "venues",
+    slot: "top",
     paint: {
       "circle-radius": 10,
-      "circle-color": ["get", "markerColor"],
+      "circle-color": ["get", "color"],
       "circle-stroke-width": 2,
       "circle-stroke-color": "#fff",
     },
   });
+
+  // Venue labels
+  map.addLayer({
+    id: "venues-label",
+    type: "symbol",
+    source: "venues",
+    slot: "top",
+    layout: {
+      "text-field": ["get", "name"],
+      "text-offset": [0, 1.8],
+      "text-size": 11,
+      "text-anchor": "top",
+    },
+    paint: {
+      "text-color": "#fff",
+      "text-halo-color": "#000",
+      "text-halo-width": 1,
+    },
+  });
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  cafe: "#D4A574",
+  restaurant: "#E85D4A",
+  park: "#4CAF50",
+};
+const DEFAULT_COLOR = "#607D8B";
+
+function venueColor(types: string[]): string {
+  for (const t of types) {
+    if (t in CATEGORY_COLORS) return CATEGORY_COLORS[t];
+  }
+  return DEFAULT_COLOR;
 }
 
 export default function Map({ participants, centroid, venues }: MapProps) {
@@ -104,35 +138,65 @@ export default function Map({ participants, centroid, venues }: MapProps) {
       "top-right",
     );
 
+    let loaded = false;
+
     map.on("load", () => {
       addSourcesAndLayers(map);
+      loaded = true;
       setMapInstance(map);
     });
 
-    // Dark mode switching via matchMedia listener
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleColorSchemeChange = (e: MediaQueryListEvent) => {
-      const newStyle = e.matches ? DARK_STYLE : LIGHT_STYLE;
-      map.setStyle(newStyle);
-    };
-    mq.addEventListener("change", handleColorSchemeChange);
-
-    // Re-add sources/layers after style switch
+    // Re-add sources/layers after dark mode style switch
     map.on("style.load", () => {
-      if (!map.getSource("participants")) {
-        addSourcesAndLayers(map);
-      }
+      if (loaded) addSourcesAndLayers(map);
     });
 
     mapRef.current = map;
 
     return () => {
-      mq.removeEventListener("change", handleColorSchemeChange);
       map.remove();
       mapRef.current = null;
       setMapInstance(null);
     };
   }, []);
+
+  // Update participant GeoJSON source
+  useEffect(() => {
+    if (!mapInstance) return;
+    const source = mapInstance.getSource("participants") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!source) return;
+
+    const features = Object.entries(participants).map(([id, p]) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+      properties: { id, name: p.display_name },
+    }));
+
+    source.setData({ type: "FeatureCollection", features });
+  }, [mapInstance, participants]);
+
+  // Update venue GeoJSON source
+  useEffect(() => {
+    if (!mapInstance) return;
+    const source = mapInstance.getSource("venues") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!source) return;
+
+    const features = venues.map((v) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [v.lng, v.lat] },
+      properties: {
+        name: v.name,
+        color: venueColor(v.types),
+        place_id: v.place_id,
+      },
+    }));
+
+    source.setData({ type: "FeatureCollection", features });
+  }, [mapInstance, venues]);
 
   // Fit bounds to all known coordinates when data changes
   useEffect(() => {
@@ -174,28 +238,6 @@ export default function Map({ participants, centroid, venues }: MapProps) {
           lng={centroid.lng}
         />
       )}
-      {mapInstance &&
-        Object.entries(participants).map(([id, p]) => (
-          <ParticipantPin
-            key={id}
-            map={mapInstance}
-            participantId={id}
-            lat={p.lat}
-            lng={p.lng}
-            displayName={p.display_name}
-          />
-        ))}
-      {mapInstance &&
-        venues.map((v) => (
-          <VenueMarker
-            key={v.place_id}
-            map={mapInstance}
-            lat={v.lat}
-            lng={v.lng}
-            name={v.name}
-            types={v.types}
-          />
-        ))}
     </>
   );
 }

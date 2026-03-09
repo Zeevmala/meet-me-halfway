@@ -27,6 +27,7 @@ from app.models.schemas import (
     JoinSessionRequest,
     LatLng,
     MidpointResponse,
+    ParticipantOut,
     SessionOut,
     UpdateLocationRequest,
     VenueOut,
@@ -247,11 +248,24 @@ async def get_midpoint(db: AsyncSession, session_id: str) -> MidpointResponse:
     # Firebase writes — non-fatal
     await write_centroid(session_id, centroid_lat, centroid_lng)
 
+    participant_list = []
+    for p in participants:
+        p_lat, p_lng = _latlng(p.location)
+        participant_list.append(
+            ParticipantOut(
+                participant_id=p.id,
+                display_name=p.display_name,
+                lat=p_lat,
+                lng=p_lng,
+            )
+        )
+
     return MidpointResponse(
         session_id=session_id,
         centroid=LatLng(lat=centroid_lat, lng=centroid_lng),
         search_radius_m=radius,
         venues=[_venue_out(v) for v in top_venues],
+        participants=participant_list,
         participant_count=len(participants),
     )
 

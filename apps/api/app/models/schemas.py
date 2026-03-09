@@ -103,6 +103,13 @@ class VenueOut(BaseModel):
     vicinity: str | None = None
 
 
+class ParticipantOut(BaseModel):
+    participant_id: str
+    display_name: str
+    lat: float
+    lng: float
+
+
 class MidpointResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -120,6 +127,7 @@ class MidpointResponse(BaseModel):
     centroid: LatLng
     search_radius_m: float
     venues: list[VenueOut]
+    participants: list[ParticipantOut]
     participant_count: int
 
 

@@ -42,6 +42,8 @@ services:
       - "5173:5173"
     env_file:
       - .env
+    environment:
+      API_URL: http://api:8000
 
 volumes:
   pgdata:

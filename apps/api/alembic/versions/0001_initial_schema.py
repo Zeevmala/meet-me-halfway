@@ -69,10 +69,18 @@ def upgrade() -> None:
     )
 
     # Indexes
-    op.execute("CREATE INDEX idx_sessions_active ON sessions (expires_at) WHERE status = 'active'")
-    op.execute("CREATE INDEX idx_participants_session ON participants (session_id)")
-    op.execute("CREATE INDEX idx_participants_location ON participants USING GIST (location)")
-    op.execute("CREATE INDEX idx_venues_session ON selected_venues (session_id)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_active"
+        " ON sessions (expires_at) WHERE status = 'active'"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participants_session" " ON participants (session_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participants_location"
+        " ON participants USING GIST (location)"
+    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_venues_session" " ON selected_venues (session_id)")
 
 
 def downgrade() -> None:

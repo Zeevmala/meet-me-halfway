@@ -4,6 +4,7 @@ import LanguageSwitcher from "./components/LanguageSwitcher";
 import Map from "./components/Map";
 import SessionHeader from "./components/SessionHeader";
 import VenueList from "./components/VenueList";
+import type { ParticipantRTDB } from "./hooks/useFirebase";
 import { useParticipantLocations } from "./hooks/useFirebase";
 import { useSession } from "./hooks/useSession";
 
@@ -12,7 +13,23 @@ export default function App() {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get("session");
   const { session, midpoint, loading, error } = useSession(sessionId);
-  const participants = useParticipantLocations(sessionId);
+  const firebaseParticipants = useParticipantLocations(sessionId);
+
+  // Use Firebase participants if available (real-time), fall back to API data
+  const hasFirebase = Object.keys(firebaseParticipants).length > 0;
+  const participants: Record<string, ParticipantRTDB> = hasFirebase
+    ? firebaseParticipants
+    : Object.fromEntries(
+        (midpoint?.participants ?? []).map((p) => [
+          p.participant_id,
+          {
+            lat: p.lat,
+            lng: p.lng,
+            display_name: p.display_name,
+            updated_at: "",
+          },
+        ]),
+      );
 
   return (
     <div className="flex flex-col h-screen">

@@ -32,8 +32,8 @@ export function useSession(sessionId: string | null): SessionState {
       .then((session) => {
         setState((prev) => ({ ...prev, session, loading: false, error: null }));
 
-        // Begin polling /midpoint every 5s
-        intervalRef.current = setInterval(() => {
+        // Fetch midpoint immediately, then poll every 5s
+        const fetchMidpoint = () => {
           getMidpoint(sessionId)
             .then((midpoint) => setState((prev) => ({ ...prev, midpoint })))
             .catch((err: AxiosError) => {
@@ -44,7 +44,9 @@ export function useSession(sessionId: string | null): SessionState {
                 error: err.message,
               }));
             });
-        }, 5000);
+        };
+        fetchMidpoint();
+        intervalRef.current = setInterval(fetchMidpoint, 5000);
       })
       .catch((err: Error) =>
         setState({

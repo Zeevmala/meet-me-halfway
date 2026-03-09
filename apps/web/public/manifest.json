@@ -7,7 +7,7 @@
   "theme_color": "#1a73e8",
   "icons": [
     {
-      "src": "/vite.svg",
+      "src": "/icons/centroid-pin.svg",
       "sizes": "any",
       "type": "image/svg+xml"
     }

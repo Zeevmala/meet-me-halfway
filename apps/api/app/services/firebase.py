@@ -45,9 +45,12 @@ def initialize_firebase() -> None:
         if not firebase_admin._apps:
             cred_dict = json.loads(settings.FIREBASE_CREDENTIALS_JSON)
             cred = credentials.Certificate(cred_dict)
+            db_url = settings.FIREBASE_DATABASE_URL
+            if not db_url:
+                logger.warning("FIREBASE_DATABASE_URL not set — RTDB writes will fail")
             firebase_admin.initialize_app(
                 cred,
-                {"databaseURL": cred_dict.get("databaseURL", "")},
+                {"databaseURL": db_url},
             )
         _firebase_ready = True
         logger.info("Firebase Admin SDK initialized")
