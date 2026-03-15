@@ -18,6 +18,7 @@ dependencies = [
     "httpx",
     "alembic",
     "structlog>=24.0",
+    "shapely>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -60,6 +60,47 @@ class WhatsAppClient:
             },
         )
 
+    async def send_location_request(self, phone: str, body: str) -> None:
+        """Send a location request interactive message.
+
+        The recipient sees a "Send Location" button that opens WhatsApp's
+        native location picker. When they select a location, a location
+        message webhook is sent back with lat/lng.
+        """
+        await self._http.post(
+            f"/{self._pid}/messages",
+            json={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": phone,
+                "type": "interactive",
+                "interactive": {
+                    "type": "location_request_message",
+                    "body": {"text": body},
+                    "action": {"name": "send_location"},
+                },
+            },
+        )
+
+    async def send_location(
+        self, phone: str, lat: float, lng: float, name: str, address: str
+    ) -> None:
+        """Send a location pin message (e.g. the computed midpoint)."""
+        await self._http.post(
+            f"/{self._pid}/messages",
+            json={
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "location",
+                "location": {
+                    "latitude": lat,
+                    "longitude": lng,
+                    "name": name,
+                    "address": address,
+                },
+            },
+        )
+
     @staticmethod
     def verify_webhook(token: str, challenge: str) -> str | None:
         """Return challenge if token matches WHATSAPP_TOKEN, else None."""

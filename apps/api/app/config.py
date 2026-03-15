@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/meetmehalfway"
     FIREBASE_CREDENTIALS_JSON: str = ""
+    FIREBASE_DATABASE_URL: str = ""
     GOOGLE_PLACES_KEY: str = ""
     MAPBOX_TOKEN: str = ""
     WHATSAPP_TOKEN: str = ""

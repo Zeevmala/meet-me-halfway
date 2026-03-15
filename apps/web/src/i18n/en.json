@@ -1,11 +1,18 @@
 {
   "app": {
-    "title": "Meet Me Halfway"
+    "title": "Meet Me Halfway",
+    "offline": "You are offline",
+    "errorTitle": "Something went wrong",
+    "reload": "Reload"
   },
   "session": {
     "create": "New Session",
     "join": "Join Session",
     "share": "Share Link",
+    "shareCopied": "Link copied!",
+    "shareWhatsApp": "Share via WhatsApp",
+    "shareMessage": "Let's meet halfway! Join here: {{url}}",
+    "locationsReceived": "{{count}} / {{total}} locations received",
     "expired": "This session has expired",
     "loading": "Loading session...",
     "error": "Failed to load session",
@@ -24,7 +31,11 @@
     "noRating": "No rating",
     "score": "Score: {{score}}",
     "vote": "Vote",
-    "votes": "{{count}} votes"
+    "votes": "{{count}} votes",
+    "reviews": "{{count}} reviews",
+    "navigateGoogle": "Google Maps",
+    "navigateWaze": "Waze",
+    "voted": "Voted"
   },
   "map": {
     "loading": "Loading map...",
@@ -33,11 +44,29 @@
     "findingMidpoint": "Finding your meeting point..."
   },
   "venues": {
-    "title": "Suggested Meeting Places"
+    "title": "Suggested Meeting Places",
+    "handle": "{{count}} suggested places",
+    "empty": "No venues found nearby"
+  },
+  "join": {
+    "title": "Join this meeting",
+    "subtitle": "Share your name and location to find a meeting point",
+    "namePlaceholder": "Your name",
+    "shareLocation": "Share your location",
+    "locating": "Finding your location...",
+    "locationGranted": "Location received",
+    "locationDenied": "Location access denied. Please enable location in your browser settings.",
+    "locationUnavailable": "Location not available on this device",
+    "locationError": "Could not get location. Please try again.",
+    "joinButton": "Join Session",
+    "joining": "Joining...",
+    "error": "Failed to join session. Please try again.",
+    "sessionFull": "This session is full"
   },
   "common": {
     "back": "Back",
     "cancel": "Cancel",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "retry": "Try again"
   }
 }

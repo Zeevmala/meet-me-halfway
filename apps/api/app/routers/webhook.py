@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
@@ -23,6 +24,12 @@ from app.models.schemas import CreateSessionRequest
 from app.services import session_service
 
 router = APIRouter(prefix="/api/v1/webhook", tags=["webhook"])
+logger = logging.getLogger(__name__)
+
+
+def _phone_hash(phone: str) -> str:
+    """SHA-256 hash of normalized phone number for privacy-preserving lookup."""
+    return hashlib.sha256(phone.strip().encode()).hexdigest()
 
 
 # ── GET: hub verification ──────────────────────────────────────────────────────
@@ -75,15 +82,81 @@ async def receive_message(
         lower = msg.text.lower()
         if "meetme" in lower or "halfway" in lower:
             session = await session_service.create_session(db, CreateSessionRequest(locale="en"))
-            link = f"{settings.APP_DOMAIN}/s/{session.session_id}"
+            link = f"{settings.APP_DOMAIN}?session={session.session_id}"
+            ph = _phone_hash(msg.phone)
+            await session_service.register_phone_session(db, ph, session.session_id)
+
             if wa_client:
                 await wa_client.send_text(msg.phone, messages.session_created(link, locale="en"))
+                # Send interactive location request — opens native picker
+                await wa_client.send_location_request(
+                    msg.phone, messages.location_request(locale="en")
+                )
+
             return {"status": "session_created", "session_id": session.session_id}
 
-    # ── Location message → best-effort join by phone hash ─────────────────────
+    # ── Location message → auto-join by phone hash ─────────────────────────────
     if msg.msg_type == "location" and msg.lat is not None and msg.lng is not None:
-        # Full phone-hash session lookup deferred to Sprint 6 (requires session
-        # index on participants.phone_hash). Acknowledge receipt for now.
-        return {"status": "location_received"}
+        ph = _phone_hash(msg.phone)
+        session_id = await session_service.find_session_by_phone(db, ph)
+
+        if session_id is None:
+            if wa_client:
+                await wa_client.send_text(msg.phone, messages.no_active_session(locale="en"))
+            return {"status": "no_session"}
+
+        # Use last 4 digits of phone as display name fallback
+        display_name = f"WhatsApp {msg.phone[-4:]}"
+
+        try:
+            participant_id, is_new = await session_service.join_or_update_by_phone(
+                db, session_id, ph, msg.lat, msg.lng, display_name
+            )
+        except HTTPException as exc:
+            if wa_client and exc.status_code == 409:
+                await wa_client.send_text(msg.phone, "Session is full.")
+            return {"status": "error", "detail": str(exc.detail)}
+
+        if wa_client:
+            if is_new:
+                await wa_client.send_text(
+                    msg.phone,
+                    messages.location_received(display_name, locale="en"),
+                )
+
+            # Check if enough participants have location for midpoint
+            count = await session_service.get_participant_count_with_location(db, session_id)
+            if count >= 2:
+                try:
+                    midpoint_data = await session_service.get_midpoint(db, session_id)
+                    top_venue = midpoint_data.venues[0] if midpoint_data.venues else None
+                    link = f"{settings.APP_DOMAIN}?session={session_id}"
+
+                    if top_venue:
+                        await wa_client.send_text(
+                            msg.phone,
+                            messages.midpoint_ready(top_venue.name, link, locale="en"),
+                        )
+                        # Send the midpoint as a tappable location pin
+                        await wa_client.send_location(
+                            msg.phone,
+                            midpoint_data.centroid.lat,
+                            midpoint_data.centroid.lng,
+                            "Meeting Point",
+                            f"Near {top_venue.name}",
+                        )
+                except Exception:
+                    logger.exception("Failed to compute/send midpoint for session %s", session_id)
+            else:
+                await wa_client.send_text(
+                    msg.phone,
+                    messages.waiting_for_others(have=count, need=2, locale="en"),
+                )
+
+        return {
+            "status": "location_joined",
+            "session_id": session_id,
+            "participant_id": participant_id,
+        }
 
     return {"status": "received"}

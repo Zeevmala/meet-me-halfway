@@ -32,7 +32,7 @@ _FIELD_MASK = (
     "places.formattedAddress,"
     "places.photos"
 )
-_MAX_RESULTS = 20
+_MAX_RESULTS = 10
 _TIMEOUT = 10.0
 _MAX_RETRIES = 3
 _RETRY_STATUSES = {429, 500, 502, 503, 504}

@@ -34,10 +34,18 @@ export interface SessionResponse {
   max_participants: number;
 }
 
+export interface ParticipantOut {
+  participant_id: string;
+  display_name: string;
+  lat: number;
+  lng: number;
+}
+
 export interface MidpointResponse {
   session_id: string;
   centroid: LatLng;
   search_radius_m: number;
   venues: Venue[];
+  participants: ParticipantOut[];
   participant_count: number;
 }

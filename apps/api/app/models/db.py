@@ -86,3 +86,25 @@ class SelectedVenue(Base):
     selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     session: Mapped[Session] = relationship("Session", back_populates="selected_venues")
+
+
+class PhoneSessionMap(Base):
+    """Maps a WhatsApp phone hash to a session for location auto-join.
+
+    Created when a user texts "meetme" to the bot, BEFORE they send their location.
+    Enables the webhook to look up which session a location message belongs to.
+    """
+
+    __tablename__ = "phone_session_map"
+    __table_args__ = (UniqueConstraint("phone_hash", "session_id", name="uq_phone_session"),)
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    phone_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

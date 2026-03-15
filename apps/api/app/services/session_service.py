@@ -20,13 +20,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.db import Participant, SelectedVenue, Session
+from app.models.db import Participant, PhoneSessionMap, SelectedVenue, Session
 from app.models.schemas import (
     CreateSessionRequest,
     JoinResponse,
     JoinSessionRequest,
     LatLng,
     MidpointResponse,
+    ParticipantOut,
     SessionOut,
     UpdateLocationRequest,
     VenueOut,
@@ -214,7 +215,7 @@ async def get_midpoint(db: AsyncSession, session_id: str) -> MidpointResponse:
 
     venues_raw = await nearby_search(centroid_lat, centroid_lng, radius, session.locale)
     ranked = rank_venues(venues_raw, (centroid_lat, centroid_lng), radius)
-    top_venues = ranked[:10]
+    top_venues = ranked[:5]
 
     # Persist centroid + upsert top venues
     session.centroid = _point(centroid_lat, centroid_lng)
@@ -247,11 +248,24 @@ async def get_midpoint(db: AsyncSession, session_id: str) -> MidpointResponse:
     # Firebase writes — non-fatal
     await write_centroid(session_id, centroid_lat, centroid_lng)
 
+    participant_list = []
+    for p in participants:
+        p_lat, p_lng = _latlng(p.location)
+        participant_list.append(
+            ParticipantOut(
+                participant_id=p.id,
+                display_name=p.display_name,
+                lat=p_lat,
+                lng=p_lng,
+            )
+        )
+
     return MidpointResponse(
         session_id=session_id,
         centroid=LatLng(lat=centroid_lat, lng=centroid_lng),
         search_radius_m=radius,
         venues=[_venue_out(v) for v in top_venues],
+        participants=participant_list,
         participant_count=len(participants),
     )
 
@@ -301,3 +315,127 @@ async def delete_session(db: AsyncSession, session_id: str) -> None:
     session.status = "completed"
     await db.flush()
     await write_session_status(session_id, "completed")
+
+
+# ── WhatsApp phone-based functions ──────────────────────────────────────────
+
+
+async def register_phone_session(db: AsyncSession, phone_hash: str, session_id: str) -> None:
+    """Link a WhatsApp phone hash to a session at creation time.
+
+    Called when a user texts "meetme" — before they send their location.
+    Enables find_session_by_phone() to resolve the session later.
+    """
+    mapping = PhoneSessionMap(
+        id=str(uuid.uuid4()),
+        phone_hash=phone_hash,
+        session_id=session_id,
+    )
+    db.add(mapping)
+    await db.flush()
+
+
+async def find_session_by_phone(db: AsyncSession, phone_hash: str) -> str | None:
+    """Find the most recent active session for a phone hash.
+
+    Checks phone_session_map first (creator who hasn't joined yet),
+    then falls back to participants table (re-sends / location updates).
+    Returns session_id or None.
+    """
+    now = datetime.now(UTC)
+
+    # Check phone_session_map (creator flow)
+    result = await db.execute(
+        select(PhoneSessionMap)
+        .join(Session, PhoneSessionMap.session_id == Session.id)
+        .where(
+            PhoneSessionMap.phone_hash == phone_hash,
+            Session.status == "active",
+            Session.expires_at > now,
+        )
+        .order_by(PhoneSessionMap.created_at.desc())
+        .limit(1)
+    )
+    mapping = result.scalar_one_or_none()
+    if mapping:
+        return mapping.session_id
+
+    # Fallback: check participants table (already joined, location update)
+    result = await db.execute(
+        select(Participant)
+        .join(Session, Participant.session_id == Session.id)
+        .where(
+            Participant.phone_hash == phone_hash,
+            Session.status == "active",
+            Session.expires_at > now,
+        )
+        .order_by(Participant.updated_at.desc().nulls_last())
+        .limit(1)
+    )
+    participant = result.scalar_one_or_none()
+    return participant.session_id if participant else None
+
+
+async def join_or_update_by_phone(
+    db: AsyncSession,
+    session_id: str,
+    phone_hash: str,
+    lat: float,
+    lng: float,
+    display_name: str,
+) -> tuple[str, bool]:
+    """Join or update a participant by phone hash.
+
+    Returns (participant_id, is_new). If the phone is already a participant
+    in this session, updates their location. Otherwise creates a new participant.
+    """
+    # Check if already a participant in this session
+    result = await db.execute(
+        select(Participant).where(
+            Participant.session_id == session_id,
+            Participant.phone_hash == phone_hash,
+        )
+    )
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        existing.location = _point(lat, lng)
+        existing.updated_at = datetime.now(UTC)
+        await db.flush()
+        await write_participant_location(session_id, existing.id, existing.display_name, lat, lng)
+        return existing.id, False
+
+    # New participant — check capacity
+    session = await _get_active_session(db, session_id)
+    count_result = await db.execute(
+        select(func.count()).select_from(Participant).where(Participant.session_id == session_id)
+    )
+    count = count_result.scalar_one()
+    if count >= session.max_participants:
+        raise HTTPException(status_code=409, detail="Session is full")
+
+    participant = Participant(
+        id=str(uuid.uuid4()),
+        session_id=session_id,
+        display_name=display_name,
+        phone_hash=phone_hash,
+        location=_point(lat, lng),
+        updated_at=datetime.now(UTC),
+    )
+    db.add(participant)
+    await db.flush()
+    await write_participant_location(session_id, participant.id, display_name, lat, lng)
+    return participant.id, True
+
+
+async def get_participant_count_with_location(db: AsyncSession, session_id: str) -> int:
+    """Count participants that have shared their location."""
+    result = await db.execute(
+        select(func.count())
+        .select_from(Participant)
+        .where(
+            Participant.session_id == session_id,
+            Participant.location.is_not(None),
+        )
+    )
+    return result.scalar_one()
