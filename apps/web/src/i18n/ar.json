@@ -1,11 +1,18 @@
 {
   "app": {
-    "title": "التقِ في المنتصف"
+    "title": "التقِ في المنتصف",
+    "offline": "أنت غير متصل بالإنترنت",
+    "errorTitle": "حدث خطأ ما",
+    "reload": "إعادة تحميل"
   },
   "session": {
     "create": "جلسة جديدة",
     "join": "انضم إلى الجلسة",
     "share": "مشاركة الرابط",
+    "shareCopied": "تم نسخ الرابط!",
+    "shareWhatsApp": "مشاركة عبر واتساب",
+    "shareMessage": "لنلتقِ في المنتصف! انضم هنا: {{url}}",
+    "locationsReceived": "{{count}} / {{total}} مواقع مستلمة",
     "expired": "انتهت صلاحية هذه الجلسة",
     "loading": "جارٍ تحميل الجلسة...",
     "error": "فشل تحميل الجلسة",
@@ -24,7 +31,11 @@
     "noRating": "بدون تقييم",
     "score": "النتيجة: {{score}}",
     "vote": "تصويت",
-    "votes": "{{count}} أصوات"
+    "votes": "{{count}} أصوات",
+    "reviews": "{{count}} مراجعات",
+    "navigateGoogle": "Google Maps",
+    "navigateWaze": "Waze",
+    "voted": "تم التصويت"
   },
   "map": {
     "loading": "جارٍ تحميل الخريطة...",
@@ -33,11 +44,29 @@
     "findingMidpoint": "جارٍ البحث عن نقطة الاجتماع..."
   },
   "venues": {
-    "title": "أماكن الاجتماع المقترحة"
+    "title": "أماكن الاجتماع المقترحة",
+    "handle": "{{count}} أماكن مقترحة",
+    "empty": "لم يتم العثور على أماكن قريبة"
+  },
+  "join": {
+    "title": "انضم إلى هذا الاجتماع",
+    "subtitle": "شارك اسمك وموقعك لإيجاد نقطة التقاء",
+    "namePlaceholder": "اسمك",
+    "shareLocation": "شارك موقعك",
+    "locating": "جارٍ تحديد موقعك...",
+    "locationGranted": "تم استلام الموقع",
+    "locationDenied": "تم رفض الوصول إلى الموقع. يرجى تفعيل الموقع في إعدادات المتصفح.",
+    "locationUnavailable": "الموقع غير متاح على هذا الجهاز",
+    "locationError": "تعذر الحصول على الموقع. حاول مرة أخرى.",
+    "joinButton": "انضم إلى الجلسة",
+    "joining": "جارٍ الانضمام...",
+    "error": "فشل الانضمام إلى الجلسة. حاول مرة أخرى.",
+    "sessionFull": "هذه الجلسة ممتلئة"
   },
   "common": {
     "back": "رجوع",
     "cancel": "إلغاء",
-    "confirm": "تأكيد"
+    "confirm": "تأكيد",
+    "retry": "حاول مرة أخرى"
   }
 }

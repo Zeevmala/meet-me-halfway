@@ -1,11 +1,18 @@
 {
   "app": {
-    "title": "פגשו אותנו באמצע"
+    "title": "פגשו אותנו באמצע",
+    "offline": "אין חיבור לאינטרנט",
+    "errorTitle": "משהו השתבש",
+    "reload": "טען מחדש"
   },
   "session": {
     "create": "סשן חדש",
     "join": "הצטרף לסשן",
     "share": "שתף קישור",
+    "shareCopied": "הקישור הועתק!",
+    "shareWhatsApp": "שתף בוואטסאפ",
+    "shareMessage": "בואו ניפגש באמצע! הצטרפו כאן: {{url}}",
+    "locationsReceived": "{{count}} / {{total}} מיקומים התקבלו",
     "expired": "הסשן הזה פג תוקף",
     "loading": "טוען סשן...",
     "error": "טעינת הסשן נכשלה",
@@ -24,7 +31,11 @@
     "noRating": "ללא דירוג",
     "score": "ציון: {{score}}",
     "vote": "הצבע",
-    "votes": "{{count}} קולות"
+    "votes": "{{count}} קולות",
+    "reviews": "{{count}} ביקורות",
+    "navigateGoogle": "Google Maps",
+    "navigateWaze": "Waze",
+    "voted": "הצבעת"
   },
   "map": {
     "loading": "טוען מפה...",
@@ -33,11 +44,29 @@
     "findingMidpoint": "מוצא את נקודת הפגישה שלך..."
   },
   "venues": {
-    "title": "מקומות פגישה מוצעים"
+    "title": "מקומות פגישה מוצעים",
+    "handle": "{{count}} מקומות מוצעים",
+    "empty": "לא נמצאו מקומות בקרבת מקום"
+  },
+  "join": {
+    "title": "הצטרף לפגישה",
+    "subtitle": "שתף את שמך ומיקומך כדי למצוא נקודת מפגש",
+    "namePlaceholder": "השם שלך",
+    "shareLocation": "שתף את מיקומך",
+    "locating": "מאתר את מיקומך...",
+    "locationGranted": "המיקום התקבל",
+    "locationDenied": "הגישה למיקום נדחתה. אנא אפשר מיקום בהגדרות הדפדפן.",
+    "locationUnavailable": "המיקום אינו זמין במכשיר זה",
+    "locationError": "לא ניתן לקבל מיקום. נסה שוב.",
+    "joinButton": "הצטרף לסשן",
+    "joining": "מצטרף...",
+    "error": "ההצטרפות נכשלה. נסה שוב.",
+    "sessionFull": "הסשן מלא"
   },
   "common": {
     "back": "חזרה",
     "cancel": "ביטול",
-    "confirm": "אישור"
+    "confirm": "אישור",
+    "retry": "נסה שוב"
   }
 }

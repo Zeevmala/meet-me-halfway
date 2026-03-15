@@ -44,10 +44,19 @@ export function useParticipantLocations(
     const db = getDatabase(getFirebaseApp());
     const participantsRef = ref(db, `/sessions/${sessionId}/participants`);
 
-    const unsubscribe = onValue(participantsRef, (snapshot) => {
-      const data = snapshot.val() as Record<string, ParticipantRTDB> | null;
-      setParticipants(data ?? {});
-    });
+    const unsubscribe = onValue(
+      participantsRef,
+      (snapshot) => {
+        const data = snapshot.val() as Record<string, ParticipantRTDB> | null;
+        setParticipants(data ?? {});
+      },
+      (error) => {
+        // Firebase listener error — log and degrade gracefully
+        // API polling in useSession will serve as fallback
+        console.warn("[Firebase] Realtime listener error:", error.message);
+        setParticipants({});
+      },
+    );
 
     return () => {
       unsubscribe();

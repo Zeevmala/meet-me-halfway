@@ -11,6 +11,20 @@ export function applyDocumentDir(lang: string): void {
   document.documentElement.lang = lang;
 }
 
+const LANG_STORAGE_KEY = "mmh-lang";
+
+function getSavedLanguage(): string {
+  try {
+    return (
+      localStorage.getItem(LANG_STORAGE_KEY) ||
+      navigator.language.split("-")[0] ||
+      "en"
+    );
+  } catch {
+    return navigator.language.split("-")[0] || "en";
+  }
+}
+
 const i18n = i18next.use(initReactI18next);
 
 i18n.init({
@@ -19,12 +33,19 @@ i18n.init({
     he: { translation: he },
     ar: { translation: ar },
   },
-  lng: navigator.language.split("-")[0] || "en",
+  lng: getSavedLanguage(),
   fallbackLng: "en",
   interpolation: { escapeValue: false },
 });
 
-i18n.on("languageChanged", applyDocumentDir);
+i18n.on("languageChanged", (lang: string) => {
+  applyDocumentDir(lang);
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
+  } catch {
+    /* storage unavailable — degrade silently */
+  }
+});
 // Apply on first load
 applyDocumentDir(i18n.language);
 

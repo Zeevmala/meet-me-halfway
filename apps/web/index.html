@@ -2,11 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#1a73e8" />
     <meta name="description" content="Find the perfect meeting point between multiple participants" />
+
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MeetHalf" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <!-- Open Graph (WhatsApp / Telegram / social link previews) -->
+    <meta property="og:title" content="Meet Me Halfway" />
+    <meta property="og:description" content="Find the perfect meeting point between friends. Share your location, get a fair midpoint, and pick a venue together." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/icons/og-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Favicon + Manifest -->
     <link rel="icon" type="image/svg+xml" href="/icons/centroid-pin.svg" />
     <link rel="manifest" href="/manifest.json" />
+
+    <!-- Preconnect to critical origins -->
+    <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
+    <link rel="preconnect" href="https://events.mapbox.com" crossorigin />
+
+    <!-- Mapbox GL CSS -->
     <link
       href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css"
       rel="stylesheet"
