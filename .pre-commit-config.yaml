@@ -8,27 +8,6 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
 
-  # ── Python: ruff (lint + format) ────────────────────────────────────────────
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.7
-    hooks:
-      - id: ruff
-        args: [--fix]
-        files: ^apps/api/.*\.py$
-      - id: ruff-format
-        files: ^apps/api/.*\.py$
-
-  # ── Python: mypy --strict (requires mypy installed; CI enforces this) ────────
-  - repo: local
-    hooks:
-      - id: mypy
-        name: mypy (strict)
-        language: system
-        entry: bash -c 'python -m mypy --strict apps/api/app/ || echo "mypy not installed — skipping (CI will enforce)"'
-        types: [python]
-        files: ^apps/api/app/.*\.py$
-        pass_filenames: false
-
   # ── JavaScript/TypeScript: ESLint ────────────────────────────────────────────
   - repo: local
     hooks:

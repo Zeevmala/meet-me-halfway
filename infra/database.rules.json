@@ -1,20 +1,25 @@
 {
   "rules": {
-    "sessions": {
-      "$session_id": {
-        "participants": {
-          "$participant_id": {
-            ".read": "auth != null",
-            ".write": "auth != null && auth.uid === $participant_id",
-            "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
-            "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
-            "updated_at": { ".validate": "newData.isNumber()" }
-          }
+    "live-sessions": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        "a": {
+          ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
+          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+          "ts": { ".validate": "newData.isNumber()" }
         },
-        "centroid": {
-          ".read": "auth != null",
-          ".write": false
-        }
+        "b": {
+          ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
+          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+          "ts": { ".validate": "newData.isNumber()" }
+        },
+        "created": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
       }
     }
   }

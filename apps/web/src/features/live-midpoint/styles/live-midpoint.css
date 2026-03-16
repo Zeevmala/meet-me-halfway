@@ -1,0 +1,414 @@
+/* ── Live Midpoint Feature — Dark Theme + Glass-morphism ── */
+
+:root {
+  --live-bg: #0a0a0f;
+  --live-surface: rgba(20, 20, 30, 0.85);
+  --live-glass: rgba(255, 255, 255, 0.06);
+  --live-border: rgba(255, 255, 255, 0.08);
+  --live-text: #e8e8f0;
+  --live-text-muted: #8888a0;
+  --live-green: #00d4aa;
+  --live-blue: #6c8cff;
+  --live-pink: #ff6b9d;
+  --live-whatsapp: #25d366;
+  --live-font: "DM Sans", system-ui, sans-serif;
+  --live-mono: "DM Mono", ui-monospace, monospace;
+}
+
+/* ── Page container ── */
+
+.live-page {
+  position: fixed;
+  inset: 0;
+  background: var(--live-bg);
+  font-family: var(--live-font);
+  color: var(--live-text);
+  overflow: hidden;
+}
+
+.live-map-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Glass-morphism card base ── */
+
+.live-glass {
+  background: var(--live-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--live-border);
+  border-radius: 20px;
+}
+
+/* ── Session Badge (top bar) ── */
+
+.live-badge {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 12px));
+  inset-inline-start: 12px;
+  inset-inline-end: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+}
+
+.live-badge-code {
+  font-family: var(--live-mono);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--live-text);
+}
+
+.live-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--live-green);
+  animation: live-dot-blink 2s ease-in-out infinite;
+}
+
+.live-badge-pills {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+
+.live-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--live-glass);
+  border: 1px solid var(--live-border);
+}
+
+.live-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.live-pill-dot--green {
+  background: var(--live-green);
+}
+
+.live-pill-dot--blue {
+  background: var(--live-blue);
+}
+
+.live-pill-dot--gray {
+  background: #555;
+}
+
+/* ── Bottom cards ── */
+
+.live-card {
+  position: absolute;
+  bottom: max(16px, env(safe-area-inset-bottom, 16px));
+  inset-inline-start: 12px;
+  inset-inline-end: 12px;
+  z-index: 10;
+  padding: 20px;
+  animation: live-card-slide-up 0.4s ease-out;
+}
+
+/* ── Waiting Card ── */
+
+.live-waiting-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.live-waiting-subtitle {
+  font-size: 13px;
+  color: var(--live-text-muted);
+  margin-bottom: 16px;
+}
+
+.live-waiting-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.live-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--live-font);
+  cursor: pointer;
+  min-height: 44px;
+  transition:
+    opacity 0.2s,
+    transform 0.15s;
+}
+
+.live-btn:active {
+  transform: scale(0.97);
+}
+
+.live-btn--whatsapp {
+  background: var(--live-whatsapp);
+  color: #fff;
+}
+
+.live-btn--copy {
+  background: var(--live-glass);
+  color: var(--live-text);
+  border: 1px solid var(--live-border);
+}
+
+.live-btn--nav {
+  background: var(--live-glass);
+  color: var(--live-text);
+  border: 1px solid var(--live-border);
+}
+
+.live-btn--nav:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Midpoint Card ── */
+
+.live-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.live-stat {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--live-glass);
+  border: 1px solid var(--live-border);
+}
+
+.live-stat--full {
+  grid-column: 1 / -1;
+}
+
+.live-stat-label {
+  font-size: 11px;
+  color: var(--live-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.live-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-family: var(--live-mono);
+}
+
+.live-stat-value--green {
+  color: var(--live-green);
+}
+
+.live-stat-value--blue {
+  color: var(--live-blue);
+}
+
+.live-stat-sub {
+  font-size: 12px;
+  color: var(--live-text-muted);
+  margin-top: 2px;
+}
+
+.live-nav-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.live-stale-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background: rgba(255, 107, 107, 0.15);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  font-size: 13px;
+  color: #ff8a8a;
+}
+
+/* ── Error state ── */
+
+.live-error {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  background: var(--live-bg);
+}
+
+.live-error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.live-error-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.live-error-message {
+  font-size: 14px;
+  color: var(--live-text-muted);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ── Copied toast ── */
+
+.live-toast {
+  position: fixed;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: live-toast-in 0.3s ease-out;
+}
+
+/* ── Marker styles ── */
+
+.live-marker {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  position: relative;
+  cursor: default;
+}
+
+.live-marker--a {
+  background: var(--live-green);
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.3);
+}
+
+.live-marker--b {
+  background: var(--live-blue);
+  box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.3);
+}
+
+.live-marker--mid {
+  width: 24px;
+  height: 24px;
+  background: var(--live-pink);
+  box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.3);
+}
+
+.live-marker-ring {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid;
+  opacity: 0;
+}
+
+.live-marker--a .live-marker-ring {
+  border-color: var(--live-green);
+  animation: live-pulse-ring 2s ease-out infinite;
+}
+
+.live-marker--b .live-marker-ring {
+  border-color: var(--live-blue);
+  animation: live-pulse-ring 2s ease-out infinite 0.5s;
+}
+
+.live-marker--mid .live-marker-ring {
+  border-color: var(--live-pink);
+  animation: live-pulse-ring 2s ease-out infinite 1s;
+}
+
+/* ── Animations ── */
+
+@keyframes live-pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@keyframes live-dot-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes live-card-slide-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes live-toast-in {
+  from {
+    transform: translateX(-50%) translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes live-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.live-waiting-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    rgba(255, 255, 255, 0.04) 50%,
+    transparent 75%
+  );
+  background-size: 200% 100%;
+  animation: live-shimmer 2s ease-in-out infinite;
+}

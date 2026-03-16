@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import { validateEnv } from "./lib/env";
 import ErrorBoundary from "./components/ErrorBoundary";
-import App from "./App";
+import LiveMidpointPage from "./features/live-midpoint/LiveMidpointPage";
 
 // Validate env vars before anything renders
 validateEnv();
@@ -14,7 +14,7 @@ if (!root) throw new Error("Root element not found");
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <LiveMidpointPage />
     </ErrorBoundary>
   </StrictMode>,
 );
