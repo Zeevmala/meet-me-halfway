@@ -283,21 +283,6 @@
   line-height: 1.5;
 }
 
-/* ── Copied toast ── */
-
-.live-toast {
-  position: fixed;
-  bottom: 120px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 50;
-  padding: 10px 20px;
-  border-radius: 12px;
-  font-size: 13px;
-  font-weight: 500;
-  animation: live-toast-in 0.3s ease-out;
-}
-
 /* ── Marker styles ── */
 
 .live-marker {
@@ -378,17 +363,6 @@
   }
   to {
     transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes live-toast-in {
-  from {
-    transform: translateX(-50%) translateY(8px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(-50%) translateY(0);
     opacity: 1;
   }
 }

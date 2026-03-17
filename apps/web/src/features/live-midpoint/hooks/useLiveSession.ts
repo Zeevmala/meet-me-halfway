@@ -96,8 +96,7 @@ export function useLiveSession(): LiveSessionState {
           }
         },
         (err) => {
-          console.warn("[LiveSession] Firebase listener error:", err.message);
-          setError("Connection error. Please try again.");
+          setError(`Connection error: ${err.message}`);
           setPhase("error");
         },
       );
@@ -206,8 +205,8 @@ export function useLiveSession(): LiveSessionState {
         lng: pos.lng,
         accuracy,
         ts: Date.now(),
-      }).catch((err) => {
-        console.warn("[LiveSession] Failed to write location:", err.message);
+      }).catch(() => {
+        /* best-effort write — transient failures are expected */
       });
     },
     [db],
