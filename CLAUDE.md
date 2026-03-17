@@ -2,83 +2,99 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Status
+## Project Overview
 
-Pre-development. Only `spec.md` and `plan.md` exist. No code has been written yet.
-
-## What This Is
-
-**Meet Me Halfway** is a geospatial app that computes a fair meeting point (geodesic centroid) between 2–5 participants and recommends ranked POIs at that midpoint. Distribution is via WhatsApp Business API bot + PWA share links.
+**Meet Me Halfway** — a client-side PWA that computes a live midpoint between two people and shows driving routes to the meeting point. Zero backend. Fully static, deployable to Firebase Hosting / Vercel / Netlify.
 
 ## Architecture
 
-**Monorepo** with these planned components:
+- **PWA:** React 18 + Vite + Mapbox GL JS 3.x + Tailwind CSS
+- **Real-time:** Firebase Realtime Database (peer-to-peer location sync)
+- **Routing:** Mapbox Directions API (client-side, 3s debounced)
+- **Midpoint:** Spherical great-circle formula (client-side, no server)
+- **i18n:** i18next with en/he/ar and full RTL support
 
-- **Backend:** Python 3.12 + FastAPI on GCP Cloud Run
-- **PWA:** React 18 + Vite + Mapbox GL JS 3.x
-- **Mobile:** React Native + Expo (dev builds) + @rnmapbox/maps
-- **Real-time:** Firebase Realtime Database (location sync, session state)
-- **Spatial DB:** Cloud SQL PostgreSQL 15 + PostGIS 3.4
-- **Bot:** WhatsApp Business Cloud API webhook
-- **POI:** Google Places API (New)
+No backend, no database server, no Docker, no Python.
 
-## Core Spatial Logic
-
-The midpoint algorithm lives in `midpoint.py` (Sprint 0 deliverable):
-
-1. Convert participant `(lat, lng)` to ECEF Cartesian
-2. Arithmetic mean of ECEF vectors → convert back to geodetic
-3. For N=2: direct geodesic midpoint via `Geodesic.WGS84.Inverse()` + `.Direct()` at half-distance
-4. Library: `geographiclib` (Karney algorithm, sub-meter accuracy)
-
-**CRS: WGS84 (EPSG:4326) everywhere** — no projections, no transformations. GeoJSON uses `[lng, lat]` order.
-
-POI search radius: `max(500, min(5000, max_pairwise_distance / 4))` meters.
-
-POI ranking: `0.40×rating_norm + 0.30×distance_penalty + 0.20×popularity_norm + 0.10×open_now_bonus`
-
-## Key API Endpoints
+## Project Structure
 
 ```
-POST   /api/v1/sessions
-GET    /api/v1/sessions/{id}
-POST   /api/v1/sessions/{id}/join
-PUT    /api/v1/sessions/{id}/location
-GET    /api/v1/sessions/{id}/midpoint   ← main endpoint: returns centroid + ranked venues
-POST   /api/v1/sessions/{id}/vote
-DELETE /api/v1/sessions/{id}
+meet-me-halfway/
+├── apps/web/                  # The entire app
+│   ├── src/
+│   │   ├── features/live-midpoint/    # Core feature
+│   │   │   ├── LiveMidpointPage.tsx   # Page orchestrator
+│   │   │   ├── components/            # LiveMap, markers, cards, badge
+│   │   │   ├── hooks/                 # useLiveGeolocation, useLiveSession, useDirections
+│   │   │   ├── lib/                   # geo-math, session-code, nav-links
+│   │   │   └── styles/               # live-midpoint.css (dark theme)
+│   │   ├── components/                # ErrorBoundary, LanguageSwitcher
+│   │   ├── hooks/                     # useFirebase, useNetworkStatus
+│   │   ├── lib/                       # env.ts, i18n.ts
+│   │   ├── i18n/                      # en.json, he.json, ar.json
+│   │   ├── main.tsx                   # Entry point
+│   │   └── index.css
+│   ├── public/                        # PWA manifest, service worker, icons
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── tailwind.config.ts
+├── infra/
+│   ├── database.rules.json            # Firebase RTDB security rules
+│   └── firebase.json                  # Firebase Hosting config
+├── .github/workflows/web.yml          # CI: lint + typecheck + build
+├── .env.example                       # 5 VITE_* env vars
+└── README.md
 ```
 
-## Database
+## Core Flow
 
-**PostGIS tables:** `sessions`, `participants`, `selected_venues` — see `spec.md §4.1` for full schema.
+1. **Creator** opens `/` → geolocation prompt → 6-char session code generated → URL becomes `/?code=XXXXX`
+2. **Joiner** opens `/?code=XXXXX` → geolocation prompt → joins as participant B
+3. Both locations stream to Firebase RTDB at `/live-sessions/{code}/{a|b}`
+4. Client computes spherical midpoint + fetches Mapbox driving routes
+5. Dark map shows colored polylines (green A → midpoint, blue B → midpoint)
+6. Cards show distances, drive times, Waze/Google Maps navigation links
 
-**Firebase RTDB structure:** `/sessions/{session_id}/participants/{participant_id}` with `lat`, `lng`, `updated_at`. Centroid is server-written only (enforced by security rules).
+## Environment Variables
 
-## Testing
+```
+VITE_MAPBOX_TOKEN        # Mapbox public token (pk.*)
+VITE_FIREBASE_API_KEY    # Firebase Web API key
+VITE_FIREBASE_AUTH_DOMAIN
+VITE_FIREBASE_DATABASE_URL
+VITE_FIREBASE_PROJECT_ID
+```
 
-- Backend: pytest
-- PWA E2E: Playwright
-- Mobile E2E: Detox
-- Load testing: k6 or Locust
-- Coverage targets: ≥80% backend, ≥70% frontend
+## Dev Commands
 
-Spatial algorithm accuracy requirement: <1m error vs known geodesic midpoints.
+```bash
+cd apps/web
+npm install
+npm run dev        # Vite dev server at localhost:5173
+npm run tsc        # TypeScript check (tsc --noEmit)
+npm run build      # Production build
+```
+
+## Firebase RTDB Schema
+
+```
+/live-sessions/{6charCode}/
+  created: number (timestamp)
+  a: { lat, lng, accuracy, ts }
+  b: { lat, lng, accuracy, ts }
+```
+
+Security rules: `/infra/database.rules.json` — validates numeric ranges, rejects unknown keys.
 
 ## i18n
 
-Day-1 locales: `he` (Hebrew), `en` (English), `ar` (Arabic). Full RTL support required. Use CSS logical properties for RTL-safe layout.
-
-## Sprint Order (Critical Path)
-
-Sprint 0 (spatial algo + FastAPI scaffold) → Sprint 1 (session API) → Sprint 2 (Google Places + POI ranking) → Sprint 3 (PWA) → Sprint 7 (hardening/launch). WhatsApp bot (Sprint 4) and mobile (Sprint 5) are parallel tracks.
+Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical properties. Namespaces: `app`, `live`, `common`.
 
 ## Code Style
 
-- Output only technical solution/code, no filler
-- Use type hints, docstrings, modular functions
-- Never explain basic Python
-- Never use deprecated functions — Shapely 2.0 vectorized ops, current PySAL submodules
-- Prefer vectorized operations over `.apply()` or `iterrows()`
-- Comments only for CRS warnings or spatial edge cases
-- Verify CRS and check for invalid geometries before any spatial operation
+- TypeScript strict mode, ES modules
+- Functional components + hooks (no class components)
+- Tailwind + custom CSS for dark glass-morphism theme
+- `const` over `let`, never `var`
+- CRS: WGS84 (EPSG:4326) everywhere, GeoJSON `[lng, lat]` order
