@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
@@ -24,7 +24,6 @@ export default function LiveMidpointPage() {
   const { t } = useTranslation();
   const geo = useLiveGeolocation();
   const session = useLiveSession();
-  const [, setInitialized] = useState(false);
 
   // Determine positions for A and B based on role
   const posA =
@@ -51,11 +50,9 @@ export default function LiveMidpointPage() {
 
     const urlCode = getCodeFromURL();
     if (urlCode) {
-      // Joining an existing session
-      session.joinSession(urlCode).then(() => setInitialized(true));
+      session.joinSession(urlCode);
     } else {
-      // Creating a new session
-      session.createSession().then(() => setInitialized(true));
+      session.createSession();
     }
     // Intentionally run once on mount
   }, []);
@@ -65,7 +62,7 @@ export default function LiveMidpointPage() {
     if (geo.position && geo.accuracy !== null) {
       session.updateOwnLocation(geo.position, geo.accuracy);
     }
-  }, [geo.position, geo.accuracy]);
+  }, [geo.position, geo.accuracy, session.updateOwnLocation]);
 
   // ── beforeunload cleanup ──
   const cleanupRef = useRef(session.cleanup);
