@@ -19,7 +19,7 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 |-------|------|
 | UI | React 18 + Vite + Tailwind CSS |
 | Maps | Mapbox GL JS 3.x (dark-v11 basemap) |
-| Real-time | Firebase Realtime Database |
+| Real-time | Firebase 11 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
 | Midpoint | Spherical great-circle formula |
 | i18n | i18next — English, Hebrew, Arabic (full RTL) |
