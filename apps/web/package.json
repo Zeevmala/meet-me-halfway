@@ -10,7 +10,7 @@
     "tsc": "tsc --noEmit"
   },
   "dependencies": {
-    "firebase": "^10.12.2",
+    "firebase": "^11.10.0",
     "i18next": "^23.11.5",
     "mapbox-gl": "^3.4.0",
     "react": "^18.3.1",

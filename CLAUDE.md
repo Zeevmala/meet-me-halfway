@@ -29,7 +29,7 @@ meet-me-halfway/
 │   │   │   ├── lib/                   # geo-math, session-code, nav-links
 │   │   │   └── styles/               # live-midpoint.css (dark theme)
 │   │   ├── components/                # ErrorBoundary, LanguageSwitcher
-│   │   ├── hooks/                     # useFirebase, useNetworkStatus
+│   │   ├── hooks/                     # useFirebase
 │   │   ├── lib/                       # env.ts, i18n.ts
 │   │   ├── i18n/                      # en.json, he.json, ar.json
 │   │   ├── main.tsx                   # Entry point
