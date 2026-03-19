@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **PWA:** React 18 + Vite + Mapbox GL JS 3.x + Tailwind CSS
 - **Auth:** Firebase Anonymous Auth — `signInAnonymously()` on app init, UID as participant key
+- **App Check:** Firebase App Check with reCAPTCHA Enterprise — client attestation for RTDB
 - **Real-time:** Firebase Realtime Database (peer-to-peer location sync, auth-enforced rules)
 - **Routing:** Mapbox Directions API (client-side, 3s debounced)
 - **Midpoint:** Spherical great-circle formula (client-side, no server)
@@ -44,7 +45,7 @@ meet-me-halfway/
 │   ├── database.rules.json            # Firebase RTDB security rules
 │   └── firebase.json                  # Firebase Hosting config
 ├── .github/workflows/web.yml          # CI: lint + typecheck + build
-├── .env.example                       # 5 VITE_* env vars
+├── .env.example                       # 6 VITE_* env vars
 └── README.md
 ```
 
@@ -66,6 +67,7 @@ VITE_FIREBASE_API_KEY    # Firebase Web API key
 VITE_FIREBASE_AUTH_DOMAIN
 VITE_FIREBASE_DATABASE_URL
 VITE_FIREBASE_PROJECT_ID
+VITE_RECAPTCHA_SITE_KEY  # reCAPTCHA Enterprise site key for App Check
 ```
 
 ## Dev Commands

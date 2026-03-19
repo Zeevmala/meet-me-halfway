@@ -20,6 +20,7 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 | UI | React 18 + Vite + Tailwind CSS |
 | Maps | Mapbox GL JS 3.x (dark-v11 basemap) |
 | Auth | Firebase Anonymous Auth (silent sign-in) |
+| Security | Firebase App Check (reCAPTCHA Enterprise) |
 | Real-time | Firebase 11 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
 | Midpoint | Spherical great-circle formula |
@@ -51,6 +52,7 @@ VITE_FIREBASE_API_KEY=your_firebase_api_key
 VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 VITE_FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com
 VITE_FIREBASE_PROJECT_ID=your-firebase-project-id
+VITE_RECAPTCHA_SITE_KEY=6Ldn0I8sAAAAAFCQvCYfp6gzRdPyJLo2TDIvpR3i
 ```
 
 ## Build & Deploy
@@ -72,6 +74,10 @@ npm run dev       # Vite dev server with HMR
 npm run tsc       # TypeScript check
 npm run build     # Production build
 ```
+
+## App Check Debug Token
+
+In development, App Check uses a debug token. On first run, a debug token is printed to the browser console. Register it in the Firebase Console under **App Check → Apps → Manage debug tokens**.
 
 ## i18n
 

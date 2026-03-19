@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - Manifest/index.html theme-color mismatched with dark UI (`#1a73e8` → `#0a0a0f`)
 
 ### Security
+- **Firebase App Check** with reCAPTCHA Enterprise — client attestation for all RTDB operations
 - **Firebase Anonymous Auth** — all RTDB operations gated behind `signInAnonymously()`
 - Auth-enforced RTDB rules: reads require auth, participant writes scoped to own UID (`$uid === auth.uid`)
 - Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
