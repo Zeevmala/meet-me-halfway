@@ -13,6 +13,7 @@ export default function LanguageSwitcher() {
     <div className="flex gap-1">
       {LANGS.map(({ code, label }) => (
         <button
+          type="button"
           key={code}
           onClick={() => i18n.changeLanguage(code)}
           aria-pressed={i18n.language === code}

@@ -1,24 +1,31 @@
 {
   "rules": {
-    "live-sessions": {
+    "sessions": {
       "$code": {
-        ".read": true,
-        ".write": true,
-        "a": {
-          ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
-          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
-          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
-          "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
-          "ts": { ".validate": "newData.isNumber()" }
+        ".read": "auth != null",
+        "created": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.isNumber()"
         },
-        "b": {
-          ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
-          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
-          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
-          "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
-          "ts": { ".validate": "newData.isNumber()" }
+        "creatorUid": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.isString() && newData.val() === auth.uid"
         },
-        "created": { ".validate": "newData.isNumber()" },
+        "joinerUid": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.isString() && newData.val() === auth.uid && data.parent().child('creatorUid').exists()"
+        },
+        "participants": {
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid",
+            ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
+            "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+            "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+            "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+            "ts": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
         "$other": { ".validate": false }
       }
     }

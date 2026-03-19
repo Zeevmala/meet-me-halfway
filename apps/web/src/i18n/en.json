@@ -32,7 +32,9 @@
     "sessionFull": "Session already has two participants",
     "liveIndicator": "Live",
     "accuracy": "{{meters}}m accuracy",
-    "shareMessage": "Let's meet halfway! Track live: {{url}}"
+    "shareMessage": "Let's meet halfway! Track live: {{url}}",
+    "connecting": "Connecting...",
+    "authError": "Connection failed"
   },
   "common": {
     "back": "Back",

@@ -1,9 +1,12 @@
-import { StrictMode } from "react";
+import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import { validateEnv } from "./lib/env";
 import ErrorBoundary from "./components/ErrorBoundary";
-import LiveMidpointPage from "./features/live-midpoint/LiveMidpointPage";
+
+const LiveMidpointPage = lazy(
+  () => import("./features/live-midpoint/LiveMidpointPage"),
+);
 
 // Validate env vars before anything renders
 validateEnv();
@@ -14,7 +17,15 @@ if (!root) throw new Error("Root element not found");
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary>
-      <LiveMidpointPage />
+      <Suspense
+        fallback={
+          <div className="live-page">
+            <div className="live-status">Loading...</div>
+          </div>
+        }
+      >
+        <LiveMidpointPage />
+      </Suspense>
     </ErrorBoundary>
   </StrictMode>,
 );

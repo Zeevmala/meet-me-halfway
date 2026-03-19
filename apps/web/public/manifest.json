@@ -1,17 +1,17 @@
 {
   "name": "Meet Me Halfway",
   "short_name": "MeetHalf",
-  "description": "Find the perfect meeting point between friends",
+  "description": "Share a link, stream locations live, and meet in the middle",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#ffffff",
-  "theme_color": "#1a73e8",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
   "categories": ["navigation", "social"],
   "icons": [
     {
-      "src": "/icons/centroid-pin.svg",
+      "src": "/icons/midpoint-pin.svg",
       "sizes": "any",
       "type": "image/svg+xml"
     },

@@ -5,7 +5,9 @@ import { useFirebase } from "../../../hooks/useFirebase";
 import { generateCode } from "../lib/session-code";
 import type { LatLng } from "../lib/geo-math";
 
+/** Display role used for CSS classes and position mapping. */
 export type Role = "a" | "b";
+
 export type SessionPhase =
   | "idle"
   | "creating"
@@ -14,7 +16,7 @@ export type SessionPhase =
   | "partner_stale"
   | "error";
 
-interface PartnerData {
+interface ParticipantData {
   lat: number;
   lng: number;
   accuracy: number;
@@ -39,7 +41,18 @@ export interface LiveSessionState {
 const STALE_THRESHOLD_MS = 60_000;
 const STALE_CHECK_INTERVAL_MS = 10_000;
 
-export function useLiveSession(): LiveSessionState {
+/**
+ * Manages a live session backed by Firebase RTDB.
+ *
+ * RTDB schema:
+ *   sessions/{code}/created       — timestamp
+ *   sessions/{code}/creatorUid    — uid of session creator
+ *   sessions/{code}/joinerUid     — uid of session joiner
+ *   sessions/{code}/participants/{uid} — { lat, lng, accuracy, ts }
+ *
+ * @param uid  Firebase Anonymous Auth uid (from useAuth)
+ */
+export function useLiveSession(uid: string): LiveSessionState {
   const { db } = useFirebase();
 
   const [phase, setPhase] = useState<SessionPhase>("idle");
@@ -54,36 +67,45 @@ export function useLiveSession(): LiveSessionState {
   const unsubRef = useRef<Unsubscribe | null>(null);
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeRef = useRef<string | null>(null);
-  const roleRef = useRef<Role | null>(null);
 
-  // Keep refs in sync with state for cleanup
+  // Keep code ref in sync with state for cleanup
   useEffect(() => {
     codeRef.current = code;
   }, [code]);
-  useEffect(() => {
-    roleRef.current = role;
-  }, [role]);
 
-  const partnerRole = (r: Role): Role => (r === "a" ? "b" : "a");
-
-  /** Listen for partner updates via Firebase RTDB. */
+  /** Listen for partner updates by watching the entire participants node. */
   const listenForPartner = useCallback(
-    (sessionCode: string, myRole: Role) => {
-      const partnerRef = ref(
-        db,
-        `live-sessions/${sessionCode}/${partnerRole(myRole)}`,
-      );
+    (sessionCode: string) => {
+      const participantsRef = ref(db, `sessions/${sessionCode}/participants`);
 
       unsubRef.current = onValue(
-        partnerRef,
+        participantsRef,
         (snap) => {
-          const data = snap.val() as PartnerData | null;
-          if (data) {
-            setPartnerPosition({ lat: data.lat, lng: data.lng });
-            setPartnerAccuracy(data.accuracy);
-            setPartnerLastSeen(data.ts);
-            setPhase("connected");
-          } else {
+          const data = snap.val() as Record<string, ParticipantData> | null;
+          if (!data) {
+            setPartnerPosition(null);
+            setPartnerAccuracy(null);
+            setPartnerLastSeen(null);
+            return;
+          }
+
+          // Find partner: the participant whose key !== our uid
+          let found = false;
+          for (const [participantUid, participant] of Object.entries(data)) {
+            if (participantUid !== uid) {
+              setPartnerPosition({
+                lat: participant.lat,
+                lng: participant.lng,
+              });
+              setPartnerAccuracy(participant.accuracy);
+              setPartnerLastSeen(participant.ts);
+              setPhase("connected");
+              found = true;
+              break;
+            }
+          }
+
+          if (!found) {
             setPartnerPosition(null);
             setPartnerAccuracy(null);
             setPartnerLastSeen(null);
@@ -96,13 +118,12 @@ export function useLiveSession(): LiveSessionState {
           }
         },
         (err) => {
-          console.warn("[LiveSession] Firebase listener error:", err.message);
-          setError("Connection error. Please try again.");
+          setError(`Connection error: ${err.message}`);
           setPhase("error");
         },
       );
     },
-    [db],
+    [db, uid],
   );
 
   /** Start stale-partner detection interval. */
@@ -119,7 +140,7 @@ export function useLiveSession(): LiveSessionState {
     }, STALE_CHECK_INTERVAL_MS);
   }, []);
 
-  /** Create a new live session as role A. */
+  /** Create a new live session as the creator (display role "a"). */
   const createSession = useCallback(async (): Promise<string> => {
     setPhase("creating");
     setError(null);
@@ -127,8 +148,9 @@ export function useLiveSession(): LiveSessionState {
     const sessionCode = generateCode();
 
     try {
-      // Write a created timestamp to claim the session
-      await set(ref(db, `live-sessions/${sessionCode}/created`), Date.now());
+      // Write session metadata
+      await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
+      await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
 
       setCode(sessionCode);
       setRole("a");
@@ -139,7 +161,7 @@ export function useLiveSession(): LiveSessionState {
       url.searchParams.set("code", sessionCode);
       history.replaceState(null, "", url.toString());
 
-      listenForPartner(sessionCode, "a");
+      listenForPartner(sessionCode);
       startStaleDetection();
 
       return sessionCode;
@@ -148,38 +170,50 @@ export function useLiveSession(): LiveSessionState {
       setError("Failed to create session.");
       throw err;
     }
-  }, [db, listenForPartner, startStaleDetection]);
+  }, [db, uid, listenForPartner, startStaleDetection]);
 
-  /** Join an existing session as role B. */
+  /** Join an existing session as the joiner (display role "b"). */
   const joinSession = useCallback(
     async (sessionCode: string): Promise<void> => {
       setPhase("creating");
       setError(null);
 
-      const sessionRef = ref(db, `live-sessions/${sessionCode}`);
-
       try {
+        const sessionRef = ref(db, `sessions/${sessionCode}`);
         const snap = await get(sessionRef);
-        const data = snap.val();
+        const data = snap.val() as {
+          created?: number;
+          creatorUid?: string;
+          joinerUid?: string;
+          participants?: Record<string, ParticipantData>;
+        } | null;
 
-        if (!data) {
+        if (!data || !data.creatorUid) {
           setPhase("error");
           setError("Session not found.");
           return;
         }
 
-        // Check if slot b is taken
-        if (data.b) {
+        // Check if joiner slot is taken
+        if (data.joinerUid) {
           setPhase("error");
           setError("Session already has two participants.");
           return;
         }
 
+        // Claim the joiner slot
+        await set(ref(db, `sessions/${sessionCode}/joinerUid`), uid);
+
         setCode(sessionCode);
         setRole("b");
-        setPhase(data.a ? "connected" : "waiting");
 
-        listenForPartner(sessionCode, "b");
+        // If creator already has a participant entry, we're connected
+        const hasCreatorData =
+          data.participants &&
+          Object.keys(data.participants).some((k) => k === data.creatorUid);
+        setPhase(hasCreatorData ? "connected" : "waiting");
+
+        listenForPartner(sessionCode);
         startStaleDetection();
       } catch (err) {
         setPhase("error");
@@ -187,30 +221,27 @@ export function useLiveSession(): LiveSessionState {
         throw err;
       }
     },
-    [db, listenForPartner, startStaleDetection],
+    [db, uid, listenForPartner, startStaleDetection],
   );
 
-  /** Write own location to Firebase. */
+  /** Write own location to Firebase under participants/{uid}. */
   const updateOwnLocation = useCallback(
     (pos: LatLng, accuracy: number) => {
       setOwnPosition(pos);
 
-      if (!codeRef.current || !roleRef.current) return;
+      if (!codeRef.current) return;
 
-      const ownRef = ref(
-        db,
-        `live-sessions/${codeRef.current}/${roleRef.current}`,
-      );
+      const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
       set(ownRef, {
         lat: pos.lat,
         lng: pos.lng,
         accuracy,
         ts: Date.now(),
-      }).catch((err) => {
-        console.warn("[LiveSession] Failed to write location:", err.message);
+      }).catch(() => {
+        /* best-effort write — transient failures are expected */
       });
     },
-    [db],
+    [db, uid],
   );
 
   /** Remove own data from RTDB. Called on beforeunload + unmount. */
@@ -224,18 +255,15 @@ export function useLiveSession(): LiveSessionState {
       staleTimerRef.current = null;
     }
 
-    if (codeRef.current && roleRef.current) {
-      const ownRef = ref(
-        db,
-        `live-sessions/${codeRef.current}/${roleRef.current}`,
-      );
+    if (codeRef.current) {
+      const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
       // Firebase RTDB sends the remove over WebSocket immediately;
       // it completes even if the page is unloading.
       remove(ownRef).catch(() => {
         /* best effort on unload */
       });
     }
-  }, [db]);
+  }, [db, uid]);
 
   // Cleanup on unmount
   useEffect(() => {
