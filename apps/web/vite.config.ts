@@ -4,6 +4,18 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          firebase: ["firebase/app", "firebase/auth", "firebase/database"],
+          mapbox: ["mapbox-gl"],
+          i18n: ["i18next", "react-i18next"],
+        },
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     globals: true,
