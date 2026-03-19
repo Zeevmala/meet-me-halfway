@@ -40,6 +40,9 @@ All notable changes to this project will be documented in this file.
 - Manifest/index.html theme-color mismatched with dark UI (`#1a73e8` → `#0a0a0f`)
 
 ### Security
+- **Firebase Anonymous Auth** — all RTDB operations gated behind `signInAnonymously()`
+- Auth-enforced RTDB rules: reads require auth, participant writes scoped to own UID (`$uid === auth.uid`)
+- Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
+- RTDB schema migration: `live-sessions/{code}/{a|b}` → `sessions/{code}/participants/{uid}`
 - Resolved 10 npm vulnerabilities by upgrading firebase to v11 (dropped `undici` transitive dep)
 - 2 remaining: `esbuild ≤0.24.2` (moderate, dev-only via vite — no production impact)
-- Firebase RTDB rules: open read/write by design (zero-backend PWA); validated field shapes + numeric ranges

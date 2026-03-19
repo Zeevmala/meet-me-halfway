@@ -6,9 +6,9 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 
 ## How It Works
 
-1. Open the app → geolocation prompt → 6-character session code generated
-2. Share the link (WhatsApp / copy) → partner opens it
-3. Both locations stream to Firebase RTDB in real-time
+1. Open the app → Firebase Anonymous Auth signs in silently → geolocation prompt
+2. 6-character session code generated → share the link (WhatsApp / copy) → partner opens it
+3. Both locations stream to Firebase RTDB in real-time (uid-scoped writes, auth-enforced rules)
 4. Client computes spherical great-circle midpoint
 5. Mapbox Directions API fetches driving routes for both participants
 6. Dark map shows colored routes, distances, drive times, and navigation links (Waze / Google Maps)
@@ -19,6 +19,7 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 |-------|------|
 | UI | React 18 + Vite + Tailwind CSS |
 | Maps | Mapbox GL JS 3.x (dark-v11 basemap) |
+| Auth | Firebase Anonymous Auth (silent sign-in) |
 | Real-time | Firebase 11 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
 | Midpoint | Spherical great-circle formula |

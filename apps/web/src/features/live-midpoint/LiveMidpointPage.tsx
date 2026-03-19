@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "../../hooks/useAuth";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
@@ -20,10 +21,39 @@ function getCodeFromURL(): string | null {
   return isValidCode(code) ? code : null;
 }
 
+/** Auth gate — waits for Firebase Anonymous Auth before rendering inner page. */
 export default function LiveMidpointPage() {
   const { t } = useTranslation();
+  const auth = useAuth();
+
+  if (auth.status === "loading") {
+    return (
+      <div className="live-page">
+        <div className="live-status">{t("live.connecting")}</div>
+      </div>
+    );
+  }
+
+  if (auth.status === "error") {
+    return (
+      <div className="live-page">
+        <div className="live-error">
+          <div className="live-error-icon">&#9888;</div>
+          <div className="live-error-title">{t("live.authError")}</div>
+          <div className="live-error-message">{auth.error}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return <LiveMidpointInner uid={auth.uid} />;
+}
+
+/** Inner page — only renders after auth is resolved. */
+function LiveMidpointInner({ uid }: { uid: string }) {
+  const { t } = useTranslation();
   const geo = useLiveGeolocation();
-  const session = useLiveSession();
+  const session = useLiveSession(uid);
 
   // Determine positions for A and B based on role
   const posA =

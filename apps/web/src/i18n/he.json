@@ -32,7 +32,9 @@
     "sessionFull": "הסשן כבר מכיל שני משתתפים",
     "liveIndicator": "חי",
     "accuracy": "דיוק {{meters}} מ׳",
-    "shareMessage": "בואו ניפגש באמצע! מעקב חי: {{url}}"
+    "shareMessage": "בואו ניפגש באמצע! מעקב חי: {{url}}",
+    "connecting": "מתחבר...",
+    "authError": "ההתחברות נכשלה"
   },
   "common": {
     "back": "חזרה",

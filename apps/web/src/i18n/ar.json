@@ -32,7 +32,9 @@
     "sessionFull": "الجلسة تحتوي على مشاركين بالفعل",
     "liveIndicator": "مباشر",
     "accuracy": "دقة {{meters}} م",
-    "shareMessage": "لنلتقِ في المنتصف! تتبع مباشر: {{url}}"
+    "shareMessage": "لنلتقِ في المنتصف! تتبع مباشر: {{url}}",
+    "connecting": "جارٍ الاتصال...",
+    "authError": "فشل الاتصال"
   },
   "common": {
     "back": "رجوع",
