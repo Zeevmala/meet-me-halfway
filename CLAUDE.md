@@ -9,7 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Architecture
 
 - **PWA:** React 18 + Vite + Mapbox GL JS 3.x + Tailwind CSS
-- **Real-time:** Firebase Realtime Database (peer-to-peer location sync)
+- **Auth:** Firebase Anonymous Auth — `signInAnonymously()` on app init, UID as participant key
+- **Real-time:** Firebase Realtime Database (peer-to-peer location sync, auth-enforced rules)
 - **Routing:** Mapbox Directions API (client-side, 3s debounced)
 - **Midpoint:** Spherical great-circle formula (client-side, no server)
 - **i18n:** i18next with en/he/ar and full RTL support
@@ -29,7 +30,7 @@ meet-me-halfway/
 │   │   │   ├── lib/                   # geo-math, session-code, nav-links
 │   │   │   └── styles/               # live-midpoint.css (dark theme)
 │   │   ├── components/                # ErrorBoundary, LanguageSwitcher
-│   │   ├── hooks/                     # useFirebase
+│   │   ├── hooks/                     # useFirebase, useAuth
 │   │   ├── lib/                       # env.ts, i18n.ts
 │   │   ├── i18n/                      # en.json, he.json, ar.json
 │   │   ├── main.tsx                   # Entry point
@@ -49,12 +50,13 @@ meet-me-halfway/
 
 ## Core Flow
 
-1. **Creator** opens `/` → geolocation prompt → 6-char session code generated → URL becomes `/?code=XXXXX`
-2. **Joiner** opens `/?code=XXXXX` → geolocation prompt → joins as participant B
-3. Both locations stream to Firebase RTDB at `/live-sessions/{code}/{a|b}`
-4. Client computes spherical midpoint + fetches Mapbox driving routes
-5. Dark map shows colored polylines (green A → midpoint, blue B → midpoint)
-6. Cards show distances, drive times, Waze/Google Maps navigation links
+1. **Auth:** App init → `signInAnonymously()` → UID assigned (persisted across sessions)
+2. **Creator** opens `/` → geolocation prompt → 6-char session code generated → URL becomes `/?code=XXXXX`
+3. **Joiner** opens `/?code=XXXXX` → geolocation prompt → joins as participant B
+4. Both locations stream to Firebase RTDB at `/sessions/{code}/participants/{uid}`
+5. Client computes spherical midpoint + fetches Mapbox driving routes
+6. Dark map shows colored polylines (green A → midpoint, blue B → midpoint)
+7. Cards show distances, drive times, Waze/Google Maps navigation links
 
 ## Environment Variables
 
@@ -79,13 +81,14 @@ npm run build      # Production build
 ## Firebase RTDB Schema
 
 ```
-/live-sessions/{6charCode}/
+/sessions/{6charCode}/
   created: number (timestamp)
-  a: { lat, lng, accuracy, ts }
-  b: { lat, lng, accuracy, ts }
+  creatorUid: string (Firebase auth uid)
+  joinerUid: string (Firebase auth uid)
+  participants/{uid}: { lat, lng, accuracy, ts }
 ```
 
-Security rules: `/infra/database.rules.json` — validates numeric ranges, rejects unknown keys.
+Security rules: `/infra/database.rules.json` — auth required for all reads, uid-scoped writes, write-once session metadata, numeric range validation.
 
 ## i18n
 
