@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useLiveSession } from "./useLiveSession";
 
@@ -407,6 +407,196 @@ describe("useLiveSession", () => {
 
       // set should not be called for RTDB write (only local state update)
       expect(mockSet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("RTDB write throttle", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("writes to RTDB immediately on the first call (leading edge)", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      mockSet.mockClear();
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ lat: 32.08, lng: 34.78, accuracy: 10 }),
+      );
+    });
+
+    it("does not write a second call to RTDB within the 3s window", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      mockSet.mockClear();
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      expect(mockSet).toHaveBeenCalledTimes(1);
+      mockSet.mockClear();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
+      });
+
+      expect(mockSet).not.toHaveBeenCalled();
+    });
+
+    it("updates local state immediately even when RTDB write is throttled", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
+      });
+
+      expect(result.current.ownPosition).toEqual({ lat: 32.09, lng: 34.79 });
+    });
+
+    it("flushes the most recent buffered position after 3s (trailing edge)", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      mockSet.mockClear();
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      mockSet.mockClear();
+
+      // Buffer two more positions
+      act(() => {
+        vi.advanceTimersByTime(1000);
+        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+        result.current.updateOwnLocation({ lat: 32.1, lng: 34.8 }, 5);
+      });
+
+      expect(mockSet).not.toHaveBeenCalled();
+
+      // Advance past the 3s window from the first write
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+
+      // Should flush the LATEST position
+      expect(mockSet).toHaveBeenCalledTimes(1);
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ lat: 32.1, lng: 34.8, accuracy: 5 }),
+      );
+    });
+
+    it("cancels pending throttle timer on cleanup", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
+      });
+
+      mockSet.mockClear();
+
+      act(() => {
+        result.current.cleanup();
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // Only remove() should have been called, not a throttled set()
+      expect(mockSet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("stale detection", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("marks partner as stale after 30s of no updates", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      const connectTime = Date.now();
+      act(() => {
+        onValueCallback?.({
+          val: () => ({
+            [TEST_UID]: {
+              lat: 32.08,
+              lng: 34.78,
+              accuracy: 10,
+              ts: connectTime,
+            },
+            [PARTNER_UID]: {
+              lat: 31.76,
+              lng: 35.21,
+              accuracy: 15,
+              ts: connectTime,
+            },
+          }),
+        });
+      });
+
+      expect(result.current.phase).toBe("connected");
+
+      // Advance 40s (past 30s threshold + one 10s check interval)
+      act(() => {
+        vi.advanceTimersByTime(40_000);
+      });
+
+      expect(result.current.phase).toBe("partner_stale");
     });
   });
 

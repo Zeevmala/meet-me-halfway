@@ -38,8 +38,9 @@ export interface LiveSessionState {
   cleanup: () => void;
 }
 
-const STALE_THRESHOLD_MS = 60_000;
+const STALE_THRESHOLD_MS = 30_000;
 const STALE_CHECK_INTERVAL_MS = 10_000;
+const WRITE_THROTTLE_MS = 3_000;
 
 /**
  * Manages a live session backed by Firebase RTDB.
@@ -67,6 +68,14 @@ export function useLiveSession(uid: string): LiveSessionState {
   const unsubRef = useRef<Unsubscribe | null>(null);
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeRef = useRef<string | null>(null);
+
+  // Throttle refs for RTDB write limiting
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastWriteRef = useRef<number>(0);
+  const pendingWriteRef = useRef<{
+    pos: LatLng;
+    accuracy: number;
+  } | null>(null);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -224,13 +233,10 @@ export function useLiveSession(uid: string): LiveSessionState {
     [db, uid, listenForPartner, startStaleDetection],
   );
 
-  /** Write own location to Firebase under participants/{uid}. */
-  const updateOwnLocation = useCallback(
+  /** Flush a buffered position write to RTDB. */
+  const flushWrite = useCallback(
     (pos: LatLng, accuracy: number) => {
-      setOwnPosition(pos);
-
       if (!codeRef.current) return;
-
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
       set(ownRef, {
         lat: pos.lat,
@@ -238,10 +244,48 @@ export function useLiveSession(uid: string): LiveSessionState {
         accuracy,
         ts: Date.now(),
       }).catch(() => {
-        /* best-effort write — transient failures are expected */
+        /* best-effort write */
       });
+      lastWriteRef.current = Date.now();
+      pendingWriteRef.current = null;
     },
     [db, uid],
+  );
+
+  /**
+   * Write own location to Firebase under participants/{uid}.
+   * Throttled: max 1 RTDB write per 3s (leading + trailing edge).
+   * Local state always updates immediately for UI responsiveness.
+   */
+  const updateOwnLocation = useCallback(
+    (pos: LatLng, accuracy: number) => {
+      setOwnPosition(pos);
+
+      if (!codeRef.current) return;
+
+      const elapsed = Date.now() - lastWriteRef.current;
+
+      if (elapsed >= WRITE_THROTTLE_MS) {
+        // Leading edge: write immediately
+        flushWrite(pos, accuracy);
+      } else {
+        // Buffer the latest position for trailing edge
+        pendingWriteRef.current = { pos, accuracy };
+
+        if (!throttleTimerRef.current) {
+          throttleTimerRef.current = setTimeout(() => {
+            throttleTimerRef.current = null;
+            if (pendingWriteRef.current) {
+              flushWrite(
+                pendingWriteRef.current.pos,
+                pendingWriteRef.current.accuracy,
+              );
+            }
+          }, WRITE_THROTTLE_MS - elapsed);
+        }
+      }
+    },
+    [flushWrite],
   );
 
   /** Remove own data from RTDB. Called on beforeunload + unmount. */
@@ -254,6 +298,11 @@ export function useLiveSession(uid: string): LiveSessionState {
       clearInterval(staleTimerRef.current);
       staleTimerRef.current = null;
     }
+    if (throttleTimerRef.current) {
+      clearTimeout(throttleTimerRef.current);
+      throttleTimerRef.current = null;
+    }
+    pendingWriteRef.current = null;
 
     if (codeRef.current) {
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
