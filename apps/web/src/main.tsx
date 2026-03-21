@@ -1,3 +1,4 @@
+import "./lib/appcheck-debug"; // Must be first — sets debug flag before firebase/app-check loads
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";

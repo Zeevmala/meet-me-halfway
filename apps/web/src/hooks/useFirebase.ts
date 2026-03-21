@@ -15,12 +15,6 @@ const firebaseConfig = {
 
 function getFirebaseApp(): FirebaseApp {
   if (getApps().length === 0) {
-    // Enable App Check debug token in development
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-    }
-
     const app = initializeApp(firebaseConfig);
 
     // App Check must initialize before auth/RTDB operations
