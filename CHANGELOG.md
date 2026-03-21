@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Live midpoint feature** — real-time 2-person location tracking with spherical great-circle midpoint computation
+- **RTDB write throttle** — max 1 write per 3s with leading+trailing edge pattern, preserves UI responsiveness
+- **GPS accuracy circles** — GeoJSON fill+outline layers using spherical direct formula (green A, blue B)
+- **Stale partner detection** — 30s threshold triggers dimmed marker (grayscale + opacity) + warning banner
+- **Smooth map transitions** — 50m movement threshold suppresses GPS jitter, easeTo/fitBounds with maxZoom 16
 - Firebase RTDB peer-to-peer session sync with 6-character codes
 - Mapbox Directions API dual routing (A→midpoint, B→midpoint) with 3s debounce
 - Dark glass-morphism UI: LiveMap, SessionBadge, WaitingCard, MidpointCard
@@ -46,7 +50,7 @@ All notable changes to this project will be documented in this file.
 - Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
 - RTDB schema migration: `live-sessions/{code}/{a|b}` → `sessions/{code}/participants/{uid}`
 - App Check debug token moved to side-effect module for correct ES module load order
-- 76 unit tests: geo-math, session-code, useAuth (7), useLiveSession (23)
+- 89 unit tests: geo-math (including accuracy circles), session-code, useAuth (7), useLiveSession (23 + throttle/stale)
 - Resolved 10 npm vulnerabilities by upgrading firebase to v11 (dropped `undici` transitive dep)
 - Fixed Vite HMR WebSocket (`server.hmr.host`), mapbox-gl optimizeDeps, Mapbox CSS CDN version mismatch
 - Firebase deployment config (`firebase.json`, `.firebaserc`)

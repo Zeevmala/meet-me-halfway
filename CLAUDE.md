@@ -98,9 +98,14 @@ Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical pr
 
 ## v1 MVP Remaining Tasks
 
-### P0 — Core Real-time Flow
-- [ ] Live location streaming via RTDB — both participants push coords via `watchPosition`
-- [ ] Real-time geodesic midpoint calculation and map display (update on every location change)
+### P0 — Core Real-time Flow (Complete)
+- [x] Live location streaming via RTDB — both participants push coords via `watchPosition`
+- [x] Real-time geodesic midpoint calculation and map display (update on every location change)
+- [x] RTDB write throttle (max 1 per 3s, leading+trailing edge)
+- [x] GPS accuracy circles (GeoJSON fill layers, spherical direct formula)
+- [x] Stale partner detection (30s threshold, dimmed marker + warning)
+- [x] Smooth map transitions (50m jitter suppression, easeTo/fitBounds)
+- [x] 89 unit tests (geo-math, session-code, useAuth, useLiveSession throttle/stale, accuracy circles)
 
 ### P1 — Destination Features
 - [ ] Venue/POI search around midpoint (Google Places API)
