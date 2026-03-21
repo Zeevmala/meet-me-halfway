@@ -34,7 +34,12 @@
     "accuracy": "{{meters}}m accuracy",
     "shareMessage": "Let's meet halfway! Track live: {{url}}",
     "connecting": "Connecting...",
-    "authError": "Connection failed"
+    "authError": "Connection failed",
+    "searchingVenues": "Searching nearby...",
+    "nearbyVenues": "Nearby venues",
+    "clearVenue": "Clear",
+    "openNow": "Open now",
+    "noVenues": "No venues found"
   },
   "common": {
     "back": "Back",

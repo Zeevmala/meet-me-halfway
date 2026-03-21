@@ -13,6 +13,7 @@ import LiveMap from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
+import VenueListCard from "./components/VenueListCard";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
 
@@ -74,8 +75,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
   const [travelProfile, setTravelProfile] = useState<TravelProfile>("driving");
   const venueSearch = useVenueSearch(midpoint);
-  // setTravelProfile and venueSearch are wired to UI in next commit
-  void setTravelProfile;
+  void setTravelProfile; // wired to profile toggle in next commit
 
   // Destination: selected venue or midpoint
   const destination = selectedVenue ? selectedVenue.location : midpoint;
@@ -199,6 +199,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         accuracyA={accuracyA}
         accuracyB={accuracyB}
         partnerStale={partnerStale}
+        venues={venueSearch.venues}
+        selectedVenue={selectedVenue}
       />
 
       {/* Language switcher in top-right corner */}
@@ -227,14 +229,22 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       )}
 
       {isConnected && midpoint && posA && posB && (
-        <MidpointCard
-          midpoint={midpoint}
-          posA={posA}
-          posB={posB}
-          routeA={routeA}
-          routeB={routeB}
-          partnerStale={session.phase === "partner_stale"}
-        />
+        <div className="live-bottom-panel">
+          <VenueListCard
+            venues={venueSearch.venues}
+            loading={venueSearch.loading}
+            selectedVenue={selectedVenue}
+            onSelectVenue={setSelectedVenue}
+          />
+          <MidpointCard
+            midpoint={midpoint}
+            posA={posA}
+            posB={posB}
+            routeA={routeA}
+            routeB={routeB}
+            partnerStale={session.phase === "partner_stale"}
+          />
+        </div>
       )}
     </div>
   );

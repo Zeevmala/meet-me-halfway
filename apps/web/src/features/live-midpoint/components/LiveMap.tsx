@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
 import type { Role } from "../hooks/useLiveSession";
+import type { RankedVenue } from "../lib/venue-ranking";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
+import VenueMarker from "./VenueMarker";
 import "../styles/live-midpoint.css";
 
 const DEFAULT_CENTER: [number, number] = [35.2137, 31.7683]; // Israel
@@ -35,6 +37,8 @@ interface LiveMapProps {
   accuracyA: number | null;
   accuracyB: number | null;
   partnerStale: boolean;
+  venues: RankedVenue[];
+  selectedVenue: RankedVenue | null;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = {
@@ -123,6 +127,8 @@ export default function LiveMap({
   accuracyA,
   accuracyB,
   partnerStale,
+  venues,
+  selectedVenue,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -227,6 +233,7 @@ export default function LiveMap({
     if (posA) current.push(posA);
     if (posB) current.push(posB);
     if (midpoint) current.push(midpoint);
+    if (selectedVenue) current.push(selectedVenue.location);
 
     if (current.length === 0) return;
 
@@ -261,12 +268,12 @@ export default function LiveMap({
         [Math.max(...lngs), Math.max(...lats)],
       ],
       {
-        padding: { top: 80, left: 40, right: 40, bottom: 240 },
+        padding: { top: 80, left: 40, right: 40, bottom: 350 },
         maxZoom: 16,
         duration: 800,
       },
     );
-  }, [mapInstance, posA, posB, midpoint]);
+  }, [mapInstance, posA, posB, midpoint, selectedVenue]);
 
   // Determine which position belongs to which role
   const ownPos = role === "a" ? posA : posB;
@@ -303,6 +310,17 @@ export default function LiveMap({
           lng={midpoint.lng}
         />
       )}
+      {mapInstance &&
+        venues.map((v) => (
+          <VenueMarker
+            key={v.id}
+            map={mapInstance}
+            lat={v.location.lat}
+            lng={v.location.lng}
+            name={v.displayName}
+            selected={selectedVenue?.id === v.id}
+          />
+        ))}
     </>
   );
 }
