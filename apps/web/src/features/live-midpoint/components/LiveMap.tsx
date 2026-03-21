@@ -1,6 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "../lib/geo-math";
+import { accuracyCircleGeoJSON } from "../lib/geo-math";
 import type { Role } from "../hooks/useLiveSession";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
@@ -30,9 +31,12 @@ interface LiveMapProps {
   routeA: GeoJSON.LineString | null;
   routeB: GeoJSON.LineString | null;
   role: Role | null;
+  accuracyA: number | null;
+  accuracyB: number | null;
+  partnerStale: boolean;
 }
 
-const EMPTY_LINE: GeoJSON.FeatureCollection = {
+const EMPTY_FC: GeoJSON.FeatureCollection = {
   type: "FeatureCollection",
   features: [],
 };
@@ -44,9 +48,45 @@ function lineFeature(geom: GeoJSON.LineString): GeoJSON.FeatureCollection {
   };
 }
 
+function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: [{ type: "Feature", geometry: geom, properties: {} }],
+  };
+}
+
 function addSourcesAndLayers(map: mapboxgl.Map): void {
-  // Route A → midpoint (green)
-  map.addSource("route-a", { type: "geojson", data: EMPTY_LINE });
+  // Accuracy circles (rendered below routes)
+  map.addSource("accuracy-a", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "accuracy-a-fill",
+    type: "fill",
+    source: "accuracy-a",
+    paint: { "fill-color": "#00d4aa", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "accuracy-a-outline",
+    type: "line",
+    source: "accuracy-a",
+    paint: { "line-color": "#00d4aa", "line-width": 1, "line-opacity": 0.3 },
+  });
+
+  map.addSource("accuracy-b", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "accuracy-b-fill",
+    type: "fill",
+    source: "accuracy-b",
+    paint: { "fill-color": "#6c8cff", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "accuracy-b-outline",
+    type: "line",
+    source: "accuracy-b",
+    paint: { "line-color": "#6c8cff", "line-width": 1, "line-opacity": 0.3 },
+  });
+
+  // Route A → midpoint (green, on top of accuracy circles)
+  map.addSource("route-a", { type: "geojson", data: EMPTY_FC });
   map.addLayer({
     id: "route-a-layer",
     type: "line",
@@ -59,7 +99,7 @@ function addSourcesAndLayers(map: mapboxgl.Map): void {
   });
 
   // Route B → midpoint (blue)
-  map.addSource("route-b", { type: "geojson", data: EMPTY_LINE });
+  map.addSource("route-b", { type: "geojson", data: EMPTY_FC });
   map.addLayer({
     id: "route-b-layer",
     type: "line",
@@ -79,6 +119,9 @@ export default function LiveMap({
   routeA,
   routeB,
   role,
+  accuracyA,
+  accuracyB,
+  partnerStale,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -133,7 +176,7 @@ export default function LiveMap({
       | mapboxgl.GeoJSONSource
       | undefined;
     if (!src) return;
-    src.setData(routeA ? lineFeature(routeA) : EMPTY_LINE);
+    src.setData(routeA ? lineFeature(routeA) : EMPTY_FC);
   }, [mapInstance, routeA]);
 
   // ── Update route B polyline ──
@@ -143,8 +186,36 @@ export default function LiveMap({
       | mapboxgl.GeoJSONSource
       | undefined;
     if (!src) return;
-    src.setData(routeB ? lineFeature(routeB) : EMPTY_LINE);
+    src.setData(routeB ? lineFeature(routeB) : EMPTY_FC);
   }, [mapInstance, routeB]);
+
+  // ── Update accuracy circle A ──
+  useEffect(() => {
+    if (!mapInstance) return;
+    const src = mapInstance.getSource("accuracy-a") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData(
+      posA && accuracyA
+        ? polygonFeature(accuracyCircleGeoJSON(posA, accuracyA))
+        : EMPTY_FC,
+    );
+  }, [mapInstance, posA, accuracyA]);
+
+  // ── Update accuracy circle B ──
+  useEffect(() => {
+    if (!mapInstance) return;
+    const src = mapInstance.getSource("accuracy-b") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData(
+      posB && accuracyB
+        ? polygonFeature(accuracyCircleGeoJSON(posB, accuracyB))
+        : EMPTY_FC,
+    );
+  }, [mapInstance, posB, accuracyB]);
 
   // ── Fit bounds to all points ──
   useEffect(() => {
@@ -208,6 +279,7 @@ export default function LiveMap({
           lat={partnerPos.lat}
           lng={partnerPos.lng}
           role={role === "a" ? "b" : "a"}
+          stale={partnerStale}
         />
       )}
       {mapInstance && midpoint && (

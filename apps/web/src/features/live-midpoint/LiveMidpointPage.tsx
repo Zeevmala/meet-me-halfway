@@ -145,6 +145,17 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
+  // Derive accuracy values for A and B based on role
+  const accuracyA =
+    session.role === "a"
+      ? (geo.accuracy ?? null)
+      : (session.partnerAccuracy ?? null);
+  const accuracyB =
+    session.role === "b"
+      ? (geo.accuracy ?? null)
+      : (session.partnerAccuracy ?? null);
+  const partnerStale = session.phase === "partner_stale";
+
   const isConnected =
     session.phase === "connected" || session.phase === "partner_stale";
 
@@ -157,6 +168,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         routeA={routeA?.geometry ?? null}
         routeB={routeB?.geometry ?? null}
         role={session.role}
+        accuracyA={accuracyA}
+        accuracyB={accuracyB}
+        partnerStale={partnerStale}
       />
 
       {/* Language switcher in top-right corner */}

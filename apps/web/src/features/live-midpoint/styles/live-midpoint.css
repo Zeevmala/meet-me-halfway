@@ -333,6 +333,21 @@
   animation: live-pulse-ring 2s ease-out infinite 1s;
 }
 
+/* ── Stale marker dimming ── */
+
+.live-marker--stale {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+  transition:
+    opacity 0.5s ease,
+    filter 0.5s ease;
+}
+
+.live-marker--stale .live-marker-ring {
+  animation: none;
+  opacity: 0;
+}
+
 /* ── Animations ── */
 
 @keyframes live-pulse-ring {

@@ -49,3 +49,48 @@ export function formatDistance(meters: number): string {
   }
   return `${Math.round(meters)} m`;
 }
+
+/**
+ * Generate a GeoJSON Polygon circle centered on a WGS84 point.
+ * Uses the spherical direct formula for geodesically accurate radii.
+ *
+ * @param center - Circle center in WGS84 (EPSG:4326)
+ * @param radiusMeters - Circle radius in meters
+ * @param steps - Number of polygon vertices (default 64)
+ * @returns GeoJSON Polygon in [lng, lat] coordinate order
+ */
+export function accuracyCircleGeoJSON(
+  center: LatLng,
+  radiusMeters: number,
+  steps: number = 64,
+): GeoJSON.Polygon {
+  const coords: [number, number][] = [];
+  const lat1 = toRad(center.lat);
+  const lng1 = toRad(center.lng);
+  const angularDist = radiusMeters / R;
+
+  for (let i = 0; i < steps; i++) {
+    const bearing = toRad((360 / steps) * i);
+
+    const lat2 = Math.asin(
+      Math.sin(lat1) * Math.cos(angularDist) +
+        Math.cos(lat1) * Math.sin(angularDist) * Math.cos(bearing),
+    );
+    const lng2 =
+      lng1 +
+      Math.atan2(
+        Math.sin(bearing) * Math.sin(angularDist) * Math.cos(lat1),
+        Math.cos(angularDist) - Math.sin(lat1) * Math.sin(lat2),
+      );
+
+    coords.push([toDeg(lng2), toDeg(lat2)]);
+  }
+
+  // Close the ring
+  coords.push(coords[0]);
+
+  return {
+    type: "Polygon",
+    coordinates: [coords],
+  };
+}
