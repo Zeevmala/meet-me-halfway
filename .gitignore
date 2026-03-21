@@ -45,6 +45,10 @@ apps/mobile/.expo/
 *.tfstate.backup
 *.tfvars
 
+# Firebase
+**/serviceAccountKey*.json
+.firebaserc
+
 # Claude Code (keep commands/ tracked for team-shared skills)
 .claude/*
 !.claude/commands/

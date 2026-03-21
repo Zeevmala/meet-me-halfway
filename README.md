@@ -77,7 +77,7 @@ VITE_FIREBASE_API_KEY=your_firebase_api_key
 VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 VITE_FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com
 VITE_FIREBASE_PROJECT_ID=your-firebase-project-id
-VITE_RECAPTCHA_SITE_KEY=6Ldn0I8sAAAAAFCQvCYfp6gzRdPyJLo2TDIvpR3i
+VITE_RECAPTCHA_SITE_KEY=your_recaptcha_enterprise_site_key
 ```
 
 ## Build & Deploy
