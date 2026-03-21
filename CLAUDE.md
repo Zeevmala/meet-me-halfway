@@ -107,9 +107,17 @@ Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical pr
 - [x] Smooth map transitions (50m jitter suppression, easeTo/fitBounds)
 - [x] 89 unit tests (geo-math, session-code, useAuth, useLiveSession throttle/stale, accuracy circles)
 
-### P1 — Destination Features
-- [ ] Venue/POI search around midpoint (Google Places API)
-- [ ] Directions to midpoint for both participants (Mapbox Directions API, dual routing)
+### P1 — Destination Features (Complete)
+- [x] Venue/POI search around midpoint (Google Places API New, optional key, 5s stability, 100m cache)
+- [x] Venue ranking formula: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now (14 tests)
+- [x] VenueListCard with loading shimmer, ranked list, tap-to-select
+- [x] VenueMarker on map (gray dot / green selected) with truncated labels
+- [x] Directions to venue or midpoint (Mapbox Directions API, dual routing, 200m movement threshold)
+- [x] Driving/walking profile toggle in MidpointCard
+- [x] Nav links (Waze/Google Maps) point to selected venue or midpoint
+- [x] Bottom panel layout: VenueListCard stacked above MidpointCard
+- [x] i18n: all venue/profile strings in en/he/ar
+- [x] 103 unit tests (89 existing + 14 venue ranking)
 
 ### P2 — Robustness
 - [ ] Error handling: GPS denied, offline/reconnect, session expiry, stale location timeout

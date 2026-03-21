@@ -13,21 +13,21 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 - **Real-time Midpoint** — Spherical great-circle midpoint updates live as either participant moves
 - **Map** — Mapbox GL JS 3.x dark basemap with participant markers, accuracy circles, colored route polylines, smooth transitions
 - **Stale Detection** — Partner offline > 30s triggers dimmed marker + warning banner
-- **Directions** — Mapbox Directions API dual routing (A→midpoint, B→midpoint) with 3s debounce
-- **Navigation** — Waze / Google Maps deep links for turn-by-turn directions
+- **Venue Search** — Google Places API (New) nearby search with composite ranking (rating, proximity, popularity, open status)
+- **Venue Selection** — Tap a venue to pin as meeting point; VenueListCard with shimmer loading, VenueMarker on map
+- **Directions** — Mapbox Directions API dual routing to venue or midpoint, driving/walking toggle, 200m movement threshold
+- **Navigation** — Waze / Google Maps deep links to selected venue or midpoint
 - **i18n** — English, Hebrew, Arabic with full RTL support
 - **PWA** — Manifest, service worker, offline fallback, installable
-- **Tests** — 89 unit tests (geo-math, session-code, useAuth, useLiveSession throttle/stale, accuracy circles)
+- **Tests** — 103 unit tests (geo-math, session-code, useAuth, useLiveSession, venue ranking)
 - **CI** — ESLint + TypeScript check + Vite build (.github/workflows/web.yml)
 - **Dev Tooling** — Vite HMR, App Check debug tokens, pre-commit hooks
 
 ### v1 MVP — Remaining
-- Venue/POI search around midpoint (Google Places API)
 - E2E tests for full session lifecycle
 
 ### v2 — Future
 - WhatsApp bot for session creation and invites
-- E2E tests for full session lifecycle
 
 ## How It Works
 
@@ -36,7 +36,9 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 3. Both locations stream to Firebase RTDB in real-time (uid-scoped writes, auth-enforced rules)
 4. Client computes spherical great-circle midpoint
 5. Mapbox Directions API fetches driving routes for both participants
-6. Dark map shows colored routes, distances, drive times, and navigation links (Waze / Google Maps)
+6. Google Places API searches for nearby venues; ranked by rating, proximity, popularity, open status
+7. Tap a venue to set as meeting point; driving/walking toggle for route profiles
+8. Dark map shows colored routes, distances, ETAs, venue markers, and navigation links (Waze / Google Maps)
 
 ## Tech Stack
 
@@ -78,6 +80,7 @@ VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 VITE_FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com
 VITE_FIREBASE_PROJECT_ID=your-firebase-project-id
 VITE_RECAPTCHA_SITE_KEY=6Ldn0I8sAAAAAFCQvCYfp6gzRdPyJLo2TDIvpR3i
+VITE_GOOGLE_PLACES_API_KEY=your_google_places_api_key  # Optional — venue search disabled if not set
 ```
 
 ## Build & Deploy

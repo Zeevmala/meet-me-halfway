@@ -10,8 +10,14 @@ All notable changes to this project will be documented in this file.
 - **GPS accuracy circles** — GeoJSON fill+outline layers using spherical direct formula (green A, blue B)
 - **Stale partner detection** — 30s threshold triggers dimmed marker (grayscale + opacity) + warning banner
 - **Smooth map transitions** — 50m movement threshold suppresses GPS jitter, easeTo/fitBounds with maxZoom 16
+- **Venue search** — Google Places API (New) nearby search within 1km, 5s stability delay, 100m cache radius
+- **Venue ranking** — composite formula: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now (14 tests)
+- **VenueListCard** — glass-morphism card with loading shimmer, ranked venue list, tap-to-select/deselect
+- **VenueMarker** — map markers for venues (gray dot / green selected) with truncated name labels
+- **Travel profile toggle** — segmented driving/walking switch in MidpointCard, conditional ETA labels
+- **Bottom panel layout** — flex container stacks VenueListCard above MidpointCard with pointer-events passthrough
 - Firebase RTDB peer-to-peer session sync with 6-character codes
-- Mapbox Directions API dual routing (A→midpoint, B→midpoint) with 3s debounce
+- Mapbox Directions API dual routing to venue or midpoint with 200m movement threshold
 - Dark glass-morphism UI: LiveMap, SessionBadge, WaitingCard, MidpointCard
 - Continuous geolocation streaming via `watchPosition`
 - WhatsApp share + copy link for session invites
@@ -50,7 +56,7 @@ All notable changes to this project will be documented in this file.
 - Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
 - RTDB schema migration: `live-sessions/{code}/{a|b}` → `sessions/{code}/participants/{uid}`
 - App Check debug token moved to side-effect module for correct ES module load order
-- 89 unit tests: geo-math (including accuracy circles), session-code, useAuth (7), useLiveSession (23 + throttle/stale)
+- 103 unit tests: geo-math, accuracy circles, session-code, useAuth (7), useLiveSession (23 + throttle/stale), venue ranking (14)
 - Resolved 10 npm vulnerabilities by upgrading firebase to v11 (dropped `undici` transitive dep)
 - Fixed Vite HMR WebSocket (`server.hmr.host`), mapbox-gl optimizeDeps, Mapbox CSS CDN version mismatch
 - Firebase deployment config (`firebase.json`, `.firebaserc`)
