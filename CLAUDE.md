@@ -68,7 +68,12 @@ VITE_FIREBASE_AUTH_DOMAIN
 VITE_FIREBASE_DATABASE_URL
 VITE_FIREBASE_PROJECT_ID
 VITE_RECAPTCHA_SITE_KEY  # reCAPTCHA Enterprise site key for App Check
+VITE_GOOGLE_PLACES_API_KEY  # Optional — venue search disabled if not set
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Dev Commands
 

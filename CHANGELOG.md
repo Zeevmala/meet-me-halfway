@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Publish-Ready
+- **MIT License** added
+- Stripped exposed reCAPTCHA site key from `.env.example` and README
+- Portfolio-grade README with shields.io badges, Mermaid architecture diagram, env var table, project structure
+- Enhanced OG meta tags + Twitter card (`summary_large_image`)
+- Added Firebase service account patterns to `.gitignore`
+
 ### Added
 - **Live midpoint feature** — real-time 2-person location tracking with spherical great-circle midpoint computation
 - **RTDB write throttle** — max 1 write per 3s with leading+trailing edge pattern, preserves UI responsiveness
