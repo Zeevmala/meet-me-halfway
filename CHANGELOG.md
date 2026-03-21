@@ -39,11 +39,15 @@ All notable changes to this project will be documented in this file.
 - `console.warn` calls in production hooks (useDirections, useLiveSession)
 - Manifest/index.html theme-color mismatched with dark UI (`#1a73e8` → `#0a0a0f`)
 
-### Security
+### QA & Security Hardening
+- **Firebase Anonymous Auth** — all RTDB operations gated behind `signInAnonymously()`, UID as participant key
 - **Firebase App Check** with reCAPTCHA Enterprise — client attestation for all RTDB operations
-- **Firebase Anonymous Auth** — all RTDB operations gated behind `signInAnonymously()`
 - Auth-enforced RTDB rules: reads require auth, participant writes scoped to own UID (`$uid === auth.uid`)
 - Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
 - RTDB schema migration: `live-sessions/{code}/{a|b}` → `sessions/{code}/participants/{uid}`
+- App Check debug token moved to side-effect module for correct ES module load order
+- 76 unit tests: geo-math, session-code, useAuth (7), useLiveSession (23)
 - Resolved 10 npm vulnerabilities by upgrading firebase to v11 (dropped `undici` transitive dep)
-- 2 remaining: `esbuild ≤0.24.2` (moderate, dev-only via vite — no production impact)
+- Fixed Vite HMR WebSocket (`server.hmr.host`), mapbox-gl optimizeDeps, Mapbox CSS CDN version mismatch
+- Firebase deployment config (`firebase.json`, `.firebaserc`)
+- 2 remaining vulnerabilities: `esbuild ≤0.24.2` (moderate, dev-only via vite — no production impact)

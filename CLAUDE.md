@@ -96,6 +96,23 @@ Security rules: `/infra/database.rules.json` — auth required for all reads, ui
 
 Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical properties. Namespaces: `app`, `live`, `common`.
 
+## v1 MVP Remaining Tasks
+
+### P0 — Core Real-time Flow
+- [ ] Live location streaming via RTDB — both participants push coords via `watchPosition`
+- [ ] Real-time geodesic midpoint calculation and map display (update on every location change)
+
+### P1 — Destination Features
+- [ ] Venue/POI search around midpoint (Google Places API)
+- [ ] Directions to midpoint for both participants (Mapbox Directions API, dual routing)
+
+### P2 — Robustness
+- [ ] Error handling: GPS denied, offline/reconnect, session expiry, stale location timeout
+- [ ] E2E tests for full session lifecycle (create → join → stream → midpoint → navigate)
+
+### P3 — Future (v2)
+- [ ] WhatsApp bot for session creation and invites
+
 ## Code Style
 
 - TypeScript strict mode, ES modules

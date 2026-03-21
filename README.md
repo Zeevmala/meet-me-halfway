@@ -4,6 +4,30 @@ A live midpoint PWA for two people. Share a link, both locations stream in real-
 
 **Zero backend** — fully client-side, talks directly to Firebase RTDB and Mapbox Directions API. Deployable as a static site to Firebase Hosting, Vercel, or Netlify.
 
+## Current Status
+
+### What's Working
+- **Auth & Security** — Firebase Anonymous Auth + App Check (reCAPTCHA Enterprise), auth-enforced RTDB rules with uid-scoped writes
+- **Session Codes** — 6-character code generation, URL-based sharing (WhatsApp / copy link)
+- **Map** — Mapbox GL JS 3.x dark basemap with participant markers, colored route polylines
+- **Geo Math** — Spherical great-circle midpoint calculation, session-code generation
+- **i18n** — English, Hebrew, Arabic with full RTL support
+- **PWA** — Manifest, service worker, offline fallback, installable
+- **Tests** — 76 unit tests (geo-math, session-code, useAuth, useLiveSession)
+- **CI** — ESLint + TypeScript check + Vite build (.github/workflows/web.yml)
+- **Dev Tooling** — Vite HMR, App Check debug tokens, pre-commit hooks
+
+### v1 MVP — Remaining
+- Live location streaming via RTDB (both participants push coords in real-time)
+- Real-time geodesic midpoint calculation and map display
+- Venue/POI search around midpoint (Google Places API)
+- Directions to midpoint for both participants (Mapbox Directions API)
+- Error handling (GPS denied, offline, session expiry, stale location)
+
+### v2 — Future
+- WhatsApp bot for session creation and invites
+- E2E tests for full session lifecycle
+
 ## How It Works
 
 1. Open the app → Firebase Anonymous Auth signs in silently → geolocation prompt
