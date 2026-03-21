@@ -6,13 +6,15 @@
   --live-glass: rgba(255, 255, 255, 0.06);
   --live-border: rgba(255, 255, 255, 0.08);
   --live-text: #e8e8f0;
-  --live-text-muted: #8888a0;
+  --live-text-muted: #9898b0;
   --live-green: #00d4aa;
   --live-blue: #6c8cff;
   --live-pink: #ff6b9d;
   --live-whatsapp: #25d366;
-  --live-font: "DM Sans", system-ui, sans-serif;
-  --live-mono: "DM Mono", ui-monospace, monospace;
+  --live-font:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Hebrew",
+    "Noto Sans Arabic", sans-serif;
+  --live-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
 }
 
 /* ── Page container ── */

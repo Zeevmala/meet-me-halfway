@@ -277,7 +277,8 @@ export default function LiveMap({
       <div
         ref={containerRef}
         className="live-map-container"
-        aria-label="Live map"
+        role="application"
+        aria-label="Interactive live map showing participant locations and midpoint"
       />
       {mapInstance && ownPos && (
         <LiveParticipantMarker
