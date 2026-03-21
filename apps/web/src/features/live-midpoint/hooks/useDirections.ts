@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "../lib/geo-math";
+import { haversineDistance } from "../lib/geo-math";
+
+export type TravelProfile = "driving" | "walking";
 
 export interface RouteInfo {
   geometry: GeoJSON.LineString;
@@ -14,15 +17,17 @@ export interface DirectionsState {
 }
 
 const DEBOUNCE_MS = 3_000;
+const MOVEMENT_THRESHOLD_M = 200;
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
 async function fetchRoute(
   from: LatLng,
   to: LatLng,
   signal: AbortSignal,
+  profile: TravelProfile = "driving",
 ): Promise<RouteInfo | null> {
   const url =
-    `https://api.mapbox.com/directions/v5/mapbox/driving/` +
+    `https://api.mapbox.com/directions/v5/mapbox/${profile}/` +
     `${from.lng},${from.lat};${to.lng},${to.lat}` +
     `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
 
@@ -41,14 +46,20 @@ async function fetchRoute(
 }
 
 /**
- * Fetch dual Mapbox Directions routes (A→midpoint, B→midpoint)
- * with a 3-second debounce to avoid spamming the API on every
- * watchPosition tick.
+ * Fetch dual Mapbox Directions routes (A→destination, B→destination)
+ * with a 3-second debounce. Skips refetch when all positions moved
+ * less than 200m and profile is unchanged.
+ *
+ * @param posA - Participant A position
+ * @param posB - Participant B position
+ * @param destination - Selected venue or midpoint
+ * @param profile - Travel mode: "driving" (default) or "walking"
  */
 export function useDirections(
   posA: LatLng | null,
   posB: LatLng | null,
-  midpoint: LatLng | null,
+  destination: LatLng | null,
+  profile: TravelProfile = "driving",
 ): DirectionsState {
   const [routeA, setRouteA] = useState<RouteInfo | null>(null);
   const [routeB, setRouteB] = useState<RouteInfo | null>(null);
@@ -56,9 +67,31 @@ export function useDirections(
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lastFetchRef = useRef<{
+    posA: LatLng;
+    posB: LatLng;
+    dest: LatLng;
+    profile: TravelProfile;
+  } | null>(null);
 
   useEffect(() => {
-    if (!posA || !posB || !midpoint) return;
+    if (!posA || !posB || !destination) return;
+
+    // Skip refetch if insufficient movement and same profile
+    if (lastFetchRef.current) {
+      const prev = lastFetchRef.current;
+      const movedA = haversineDistance(posA, prev.posA);
+      const movedB = haversineDistance(posB, prev.posB);
+      const movedDest = haversineDistance(destination, prev.dest);
+      if (
+        movedA < MOVEMENT_THRESHOLD_M &&
+        movedB < MOVEMENT_THRESHOLD_M &&
+        movedDest < MOVEMENT_THRESHOLD_M &&
+        profile === prev.profile
+      ) {
+        return;
+      }
+    }
 
     // Clear previous debounce timer
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -73,17 +106,17 @@ export function useDirections(
 
       try {
         const [rA, rB] = await Promise.all([
-          fetchRoute(posA, midpoint, signal),
-          fetchRoute(posB, midpoint, signal),
+          fetchRoute(posA, destination, signal, profile),
+          fetchRoute(posB, destination, signal, profile),
         ]);
 
         if (!signal.aborted) {
           setRouteA(rA);
           setRouteB(rB);
+          lastFetchRef.current = { posA, posB, dest: destination, profile };
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        // Non-abort fetch failure (network error, etc.) — silently ignore
       } finally {
         if (!signal.aborted) setLoading(false);
       }
@@ -92,7 +125,7 @@ export function useDirections(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [posA, posB, midpoint]);
+  }, [posA, posB, destination, profile]);
 
   // Cleanup on unmount
   useEffect(() => {
