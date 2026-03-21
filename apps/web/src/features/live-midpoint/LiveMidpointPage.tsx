@@ -75,7 +75,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
   const [travelProfile, setTravelProfile] = useState<TravelProfile>("driving");
   const venueSearch = useVenueSearch(midpoint);
-  void setTravelProfile; // wired to profile toggle in next commit
 
   // Destination: selected venue or midpoint
   const destination = selectedVenue ? selectedVenue.location : midpoint;
@@ -243,6 +242,10 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             routeA={routeA}
             routeB={routeB}
             partnerStale={session.phase === "partner_stale"}
+            destination={destination ?? midpoint}
+            travelProfile={travelProfile}
+            onProfileChange={setTravelProfile}
+            selectedVenueName={selectedVenue?.displayName ?? null}
           />
         </div>
       )}

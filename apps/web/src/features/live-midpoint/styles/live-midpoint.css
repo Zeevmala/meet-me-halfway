@@ -212,6 +212,49 @@
 
 /* ── Midpoint Card ── */
 
+.live-destination-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--live-green);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-profile-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--live-border);
+}
+
+.live-profile-btn {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--live-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--live-font);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.live-profile-btn--active {
+  background: var(--live-glass);
+  color: var(--live-text);
+}
+
+.live-profile-btn:hover:not(.live-profile-btn--active) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .live-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;

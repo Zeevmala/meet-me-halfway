@@ -39,7 +39,11 @@
     "nearbyVenues": "أماكن قريبة",
     "clearVenue": "مسح",
     "openNow": "مفتوح الآن",
-    "noVenues": "لم يتم العثور على أماكن"
+    "noVenues": "لم يتم العثور على أماكن",
+    "driving": "بالسيارة",
+    "walking": "مشياً",
+    "walkTime": "~{{minutes}} دقيقة مشياً",
+    "meetAt": "نلتقي في {{name}}"
   },
   "common": {
     "back": "رجوع",

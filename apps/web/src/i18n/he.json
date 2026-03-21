@@ -39,7 +39,11 @@
     "nearbyVenues": "מקומות בסביבה",
     "clearVenue": "נקה",
     "openNow": "פתוח עכשיו",
-    "noVenues": "לא נמצאו מקומות"
+    "noVenues": "לא נמצאו מקומות",
+    "driving": "נהיגה",
+    "walking": "הליכה",
+    "walkTime": "~{{minutes}} דק׳ הליכה",
+    "meetAt": "נפגשים ב{{name}}"
   },
   "common": {
     "back": "חזרה",

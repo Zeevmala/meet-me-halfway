@@ -39,7 +39,11 @@
     "nearbyVenues": "Nearby venues",
     "clearVenue": "Clear",
     "openNow": "Open now",
-    "noVenues": "No venues found"
+    "noVenues": "No venues found",
+    "driving": "Driving",
+    "walking": "Walking",
+    "walkTime": "~{{minutes}} min walk",
+    "meetAt": "Meet at {{name}}"
   },
   "common": {
     "back": "Back",

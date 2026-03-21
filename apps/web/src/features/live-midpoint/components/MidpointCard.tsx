@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
-import type { RouteInfo } from "../hooks/useDirections";
+import type { RouteInfo, TravelProfile } from "../hooks/useDirections";
 import "../styles/live-midpoint.css";
 
 interface MidpointCardProps {
@@ -12,6 +12,10 @@ interface MidpointCardProps {
   routeA: RouteInfo | null;
   routeB: RouteInfo | null;
   partnerStale: boolean;
+  destination: LatLng;
+  travelProfile: TravelProfile;
+  onProfileChange: (profile: TravelProfile) => void;
+  selectedVenueName: string | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -26,10 +30,16 @@ export default function MidpointCard({
   routeA,
   routeB,
   partnerStale,
+  destination,
+  travelProfile,
+  onProfileChange,
+  selectedVenueName,
 }: MidpointCardProps) {
   const { t } = useTranslation();
 
   const totalDistance = haversineDistance(posA, posB);
+  const timeKey =
+    travelProfile === "walking" ? "live.walkTime" : "live.driveTime";
 
   return (
     <div className="live-card live-glass">
@@ -39,6 +49,29 @@ export default function MidpointCard({
           {t("live.partnerStale")}
         </div>
       )}
+
+      {selectedVenueName && (
+        <div className="live-destination-name">
+          {t("live.meetAt", { name: selectedVenueName })}
+        </div>
+      )}
+
+      <div className="live-profile-toggle">
+        <button
+          type="button"
+          className={`live-profile-btn${travelProfile === "driving" ? " live-profile-btn--active" : ""}`}
+          onClick={() => onProfileChange("driving")}
+        >
+          {t("live.driving")}
+        </button>
+        <button
+          type="button"
+          className={`live-profile-btn${travelProfile === "walking" ? " live-profile-btn--active" : ""}`}
+          onClick={() => onProfileChange("walking")}
+        >
+          {t("live.walking")}
+        </button>
+      </div>
 
       <div className="live-stats">
         <div className="live-stat">
@@ -50,9 +83,7 @@ export default function MidpointCard({
           </div>
           {routeA && (
             <div className="live-stat-sub">
-              {t("live.driveTime", {
-                minutes: formatDuration(routeA.duration),
-              })}
+              {t(timeKey, { minutes: formatDuration(routeA.duration) })}
             </div>
           )}
         </div>
@@ -66,9 +97,7 @@ export default function MidpointCard({
           </div>
           {routeB && (
             <div className="live-stat-sub">
-              {t("live.driveTime", {
-                minutes: formatDuration(routeB.duration),
-              })}
+              {t(timeKey, { minutes: formatDuration(routeB.duration) })}
             </div>
           )}
         </div>
@@ -81,7 +110,7 @@ export default function MidpointCard({
 
       <div className="live-nav-buttons">
         <a
-          href={wazeLink(midpoint.lat, midpoint.lng)}
+          href={wazeLink(destination.lat, destination.lng)}
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
@@ -89,7 +118,7 @@ export default function MidpointCard({
           {t("live.navigateWaze")}
         </a>
         <a
-          href={googleMapsLink(midpoint.lat, midpoint.lng)}
+          href={googleMapsLink(destination.lat, destination.lng)}
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
