@@ -8,6 +8,7 @@ interface LiveParticipantMarkerProps {
   lat: number;
   lng: number;
   role: Role;
+  stale?: boolean;
 }
 
 /** Pulsing colored marker for a live participant (green A / blue B). */
@@ -16,12 +17,13 @@ export default function LiveParticipantMarker({
   lat,
   lng,
   role,
+  stale = false,
 }: LiveParticipantMarkerProps) {
   const markerRef = useRef<mapboxgl.Marker | null>(null);
 
   useEffect(() => {
     const el = document.createElement("div");
-    el.className = `live-marker live-marker--${role}`;
+    el.className = `live-marker live-marker--${role}${stale ? " live-marker--stale" : ""}`;
 
     const ring = document.createElement("div");
     ring.className = "live-marker-ring";
@@ -36,7 +38,7 @@ export default function LiveParticipantMarker({
       markerRef.current?.remove();
       markerRef.current = null;
     };
-  }, [map, lat, lng, role]);
+  }, [map, lat, lng, role, stale]);
 
   return null;
 }

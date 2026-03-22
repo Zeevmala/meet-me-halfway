@@ -6,13 +6,15 @@
   --live-glass: rgba(255, 255, 255, 0.06);
   --live-border: rgba(255, 255, 255, 0.08);
   --live-text: #e8e8f0;
-  --live-text-muted: #8888a0;
+  --live-text-muted: #9898b0;
   --live-green: #00d4aa;
   --live-blue: #6c8cff;
   --live-pink: #ff6b9d;
   --live-whatsapp: #25d366;
-  --live-font: "DM Sans", system-ui, sans-serif;
-  --live-mono: "DM Mono", ui-monospace, monospace;
+  --live-font:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Hebrew",
+    "Noto Sans Arabic", sans-serif;
+  --live-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
 }
 
 /* ── Page container ── */
@@ -109,7 +111,33 @@
   background: #555;
 }
 
-/* ── Bottom cards ── */
+/* ── Bottom panel container ── */
+
+.live-bottom-panel {
+  position: absolute;
+  bottom: max(16px, env(safe-area-inset-bottom, 16px));
+  inset-inline-start: 12px;
+  inset-inline-end: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.live-bottom-panel > * {
+  pointer-events: auto;
+}
+
+/* Override .live-card positioning when inside bottom panel */
+.live-bottom-panel .live-card {
+  position: relative;
+  bottom: auto;
+  inset-inline-start: auto;
+  inset-inline-end: auto;
+}
+
+/* ── Bottom cards (standalone, e.g. WaitingCard) ── */
 
 .live-card {
   position: absolute;
@@ -185,6 +213,49 @@
 }
 
 /* ── Midpoint Card ── */
+
+.live-destination-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--live-green);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-profile-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--live-border);
+}
+
+.live-profile-btn {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--live-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--live-font);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.live-profile-btn--active {
+  background: var(--live-glass);
+  color: var(--live-text);
+}
+
+.live-profile-btn:hover:not(.live-profile-btn--active) {
+  background: rgba(255, 255, 255, 0.03);
+}
 
 .live-stats {
   display: grid;
@@ -331,6 +402,173 @@
 .live-marker--mid .live-marker-ring {
   border-color: var(--live-pink);
   animation: live-pulse-ring 2s ease-out infinite 1s;
+}
+
+/* ── Venue markers ── */
+
+.live-marker--venue {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #888;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  position: relative;
+  transition:
+    background 0.2s,
+    transform 0.2s;
+}
+
+.live-marker--venue-selected {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--live-green);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(0, 212, 170, 0.5);
+  cursor: pointer;
+  position: relative;
+  transition:
+    background 0.2s,
+    transform 0.2s;
+}
+
+.live-marker-label {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 10px;
+  font-family: var(--live-font);
+  color: var(--live-text);
+  background: rgba(10, 10, 15, 0.7);
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* ── Venue list card ── */
+
+.live-venues {
+  padding: 14px;
+  animation: live-card-slide-up 0.4s ease-out;
+}
+
+.live-venues-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.live-venues-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--live-text-muted);
+}
+
+.live-venues-clear {
+  background: none;
+  border: none;
+  color: var(--live-green);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--live-font);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.live-venues-clear:hover {
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.live-venues-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.live-venues-shimmer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-venue-skeleton {
+  height: 44px;
+  border-radius: 10px;
+  background: var(--live-glass);
+}
+
+.live-venue-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--live-border);
+  background: var(--live-glass);
+  cursor: pointer;
+  text-align: start;
+  font-family: var(--live-font);
+  color: var(--live-text);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.live-venue-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.live-venue-item--selected {
+  border-color: var(--live-green);
+  background: rgba(0, 212, 170, 0.08);
+}
+
+.live-venue-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.live-venue-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--live-text-muted);
+}
+
+.live-venue-rating {
+  color: #ffb800;
+}
+
+.live-venue-open {
+  color: var(--live-green);
+  font-weight: 500;
+}
+
+/* ── Stale marker dimming ── */
+
+.live-marker--stale {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+  transition:
+    opacity 0.5s ease,
+    filter 0.5s ease;
+}
+
+.live-marker--stale .live-marker-ring {
+  animation: none;
+  opacity: 0;
 }
 
 /* ── Animations ── */

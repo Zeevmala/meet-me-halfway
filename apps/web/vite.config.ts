@@ -4,6 +4,14 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    hmr: {
+      host: "localhost",
+    },
+  },
+  optimizeDeps: {
+    exclude: ["mapbox-gl"],
+  },
   build: {
     rollupOptions: {
       output: {

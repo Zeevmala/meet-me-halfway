@@ -3,6 +3,7 @@ import {
   sphericalMidpoint,
   haversineDistance,
   formatDistance,
+  accuracyCircleGeoJSON,
   type LatLng,
 } from "./geo-math";
 
@@ -172,5 +173,65 @@ describe("formatDistance", () => {
   it("rounds km to one decimal place", () => {
     expect(formatDistance(1550)).toBe("1.6 km");
     expect(formatDistance(1549)).toBe("1.5 km");
+  });
+});
+
+describe("accuracyCircleGeoJSON", () => {
+  it("returns a valid GeoJSON Polygon", () => {
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, 100);
+    expect(circle.type).toBe("Polygon");
+    expect(circle.coordinates).toHaveLength(1);
+    expect(Array.isArray(circle.coordinates[0])).toBe(true);
+  });
+
+  it("has the correct number of vertices (default 64 + closing point)", () => {
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, 100);
+    expect(circle.coordinates[0]).toHaveLength(65);
+  });
+
+  it("has the correct number of vertices with custom steps", () => {
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, 100, 32);
+    expect(circle.coordinates[0]).toHaveLength(33);
+  });
+
+  it("closes the ring (first === last coordinate)", () => {
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, 100);
+    const ring = circle.coordinates[0];
+    expect(ring[0][0]).toBe(ring[ring.length - 1][0]);
+    expect(ring[0][1]).toBe(ring[ring.length - 1][1]);
+  });
+
+  it("all vertices are approximately the specified radius from center", () => {
+    const radius = 500;
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, radius);
+    const ring = circle.coordinates[0];
+
+    for (let i = 0; i < ring.length - 1; i += 8) {
+      const [lng, lat] = ring[i];
+      const d = haversineDistance(TEL_AVIV, { lat, lng });
+      expect(d).toBeGreaterThan(radius * 0.99);
+      expect(d).toBeLessThan(radius * 1.01);
+    }
+  });
+
+  it("produces valid coordinates for a point on the equator", () => {
+    const equator: LatLng = { lat: 0, lng: 0 };
+    const circle = accuracyCircleGeoJSON(equator, 1000);
+    const ring = circle.coordinates[0];
+    for (const [lng, lat] of ring) {
+      expect(Number.isFinite(lng)).toBe(true);
+      expect(Number.isFinite(lat)).toBe(true);
+      expect(lat).toBeGreaterThanOrEqual(-90);
+      expect(lat).toBeLessThanOrEqual(90);
+    }
+  });
+
+  it("handles very small radius (GPS high accuracy)", () => {
+    const circle = accuracyCircleGeoJSON(TEL_AVIV, 5);
+    const ring = circle.coordinates[0];
+    const [lng, lat] = ring[0];
+    const d = haversineDistance(TEL_AVIV, { lat, lng });
+    expect(d).toBeGreaterThan(4);
+    expect(d).toBeLessThan(6);
   });
 });

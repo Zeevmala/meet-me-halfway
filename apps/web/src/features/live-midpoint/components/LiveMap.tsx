@@ -1,14 +1,18 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "../lib/geo-math";
+import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
 import type { Role } from "../hooks/useLiveSession";
+import type { RankedVenue } from "../lib/venue-ranking";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
+import VenueMarker from "./VenueMarker";
 import "../styles/live-midpoint.css";
 
 const DEFAULT_CENTER: [number, number] = [35.2137, 31.7683]; // Israel
 const DEFAULT_ZOOM = 8;
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
+const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
@@ -30,9 +34,14 @@ interface LiveMapProps {
   routeA: GeoJSON.LineString | null;
   routeB: GeoJSON.LineString | null;
   role: Role | null;
+  accuracyA: number | null;
+  accuracyB: number | null;
+  partnerStale: boolean;
+  venues: RankedVenue[];
+  selectedVenue: RankedVenue | null;
 }
 
-const EMPTY_LINE: GeoJSON.FeatureCollection = {
+const EMPTY_FC: GeoJSON.FeatureCollection = {
   type: "FeatureCollection",
   features: [],
 };
@@ -44,9 +53,45 @@ function lineFeature(geom: GeoJSON.LineString): GeoJSON.FeatureCollection {
   };
 }
 
+function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: [{ type: "Feature", geometry: geom, properties: {} }],
+  };
+}
+
 function addSourcesAndLayers(map: mapboxgl.Map): void {
-  // Route A → midpoint (green)
-  map.addSource("route-a", { type: "geojson", data: EMPTY_LINE });
+  // Accuracy circles (rendered below routes)
+  map.addSource("accuracy-a", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "accuracy-a-fill",
+    type: "fill",
+    source: "accuracy-a",
+    paint: { "fill-color": "#00d4aa", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "accuracy-a-outline",
+    type: "line",
+    source: "accuracy-a",
+    paint: { "line-color": "#00d4aa", "line-width": 1, "line-opacity": 0.3 },
+  });
+
+  map.addSource("accuracy-b", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "accuracy-b-fill",
+    type: "fill",
+    source: "accuracy-b",
+    paint: { "fill-color": "#6c8cff", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "accuracy-b-outline",
+    type: "line",
+    source: "accuracy-b",
+    paint: { "line-color": "#6c8cff", "line-width": 1, "line-opacity": 0.3 },
+  });
+
+  // Route A → midpoint (green, on top of accuracy circles)
+  map.addSource("route-a", { type: "geojson", data: EMPTY_FC });
   map.addLayer({
     id: "route-a-layer",
     type: "line",
@@ -59,7 +104,7 @@ function addSourcesAndLayers(map: mapboxgl.Map): void {
   });
 
   // Route B → midpoint (blue)
-  map.addSource("route-b", { type: "geojson", data: EMPTY_LINE });
+  map.addSource("route-b", { type: "geojson", data: EMPTY_FC });
   map.addLayer({
     id: "route-b-layer",
     type: "line",
@@ -79,10 +124,16 @@ export default function LiveMap({
   routeA,
   routeB,
   role,
+  accuracyA,
+  accuracyB,
+  partnerStale,
+  venues,
+  selectedVenue,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
+  const lastFitRef = useRef<LatLng[]>([]);
 
   // ── Map initialization ──
   useEffect(() => {
@@ -133,7 +184,7 @@ export default function LiveMap({
       | mapboxgl.GeoJSONSource
       | undefined;
     if (!src) return;
-    src.setData(routeA ? lineFeature(routeA) : EMPTY_LINE);
+    src.setData(routeA ? lineFeature(routeA) : EMPTY_FC);
   }, [mapInstance, routeA]);
 
   // ── Update route B polyline ──
@@ -143,32 +194,73 @@ export default function LiveMap({
       | mapboxgl.GeoJSONSource
       | undefined;
     if (!src) return;
-    src.setData(routeB ? lineFeature(routeB) : EMPTY_LINE);
+    src.setData(routeB ? lineFeature(routeB) : EMPTY_FC);
   }, [mapInstance, routeB]);
 
-  // ── Fit bounds to all points ──
+  // ── Update accuracy circle A ──
+  useEffect(() => {
+    if (!mapInstance) return;
+    const src = mapInstance.getSource("accuracy-a") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData(
+      posA && accuracyA
+        ? polygonFeature(accuracyCircleGeoJSON(posA, accuracyA))
+        : EMPTY_FC,
+    );
+  }, [mapInstance, posA, accuracyA]);
+
+  // ── Update accuracy circle B ──
+  useEffect(() => {
+    if (!mapInstance) return;
+    const src = mapInstance.getSource("accuracy-b") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData(
+      posB && accuracyB
+        ? polygonFeature(accuracyCircleGeoJSON(posB, accuracyB))
+        : EMPTY_FC,
+    );
+  }, [mapInstance, posB, accuracyB]);
+
+  // ── Fit bounds to all points (with jitter suppression) ──
   useEffect(() => {
     if (!mapInstance) return;
 
-    const points: [number, number][] = [];
-    if (posA) points.push([posA.lng, posA.lat]);
-    if (posB) points.push([posB.lng, posB.lat]);
-    if (midpoint) points.push([midpoint.lng, midpoint.lat]);
-    if (points.length < 2) {
-      // Single point: just fly to it
-      if (points.length === 1) {
-        mapInstance.flyTo({
-          center: points[0],
-          zoom: 14,
-          duration: 800,
-          essential: true,
-        });
-      }
+    const current: LatLng[] = [];
+    if (posA) current.push(posA);
+    if (posB) current.push(posB);
+    if (midpoint) current.push(midpoint);
+    if (selectedVenue) current.push(selectedVenue.location);
+
+    if (current.length === 0) return;
+
+    // Skip refit when point count unchanged and all moved < threshold
+    const prev = lastFitRef.current;
+    if (
+      prev.length === current.length &&
+      prev.length > 0 &&
+      prev.every(
+        (p, i) => haversineDistance(p, current[i]) < FIT_MOVEMENT_THRESHOLD_M,
+      )
+    ) {
+      return;
+    }
+    lastFitRef.current = current;
+
+    if (current.length === 1) {
+      mapInstance.easeTo({
+        center: [current[0].lng, current[0].lat],
+        zoom: 14,
+        duration: 800,
+      });
       return;
     }
 
-    const lngs = points.map(([lng]) => lng);
-    const lats = points.map(([, lat]) => lat);
+    const lngs = current.map((p) => p.lng);
+    const lats = current.map((p) => p.lat);
 
     mapInstance.fitBounds(
       [
@@ -176,12 +268,12 @@ export default function LiveMap({
         [Math.max(...lngs), Math.max(...lats)],
       ],
       {
-        padding: { top: 80, left: 40, right: 40, bottom: 240 },
-        maxZoom: 15,
+        padding: { top: 80, left: 40, right: 40, bottom: 350 },
+        maxZoom: 16,
         duration: 800,
       },
     );
-  }, [mapInstance, posA, posB, midpoint]);
+  }, [mapInstance, posA, posB, midpoint, selectedVenue]);
 
   // Determine which position belongs to which role
   const ownPos = role === "a" ? posA : posB;
@@ -192,7 +284,8 @@ export default function LiveMap({
       <div
         ref={containerRef}
         className="live-map-container"
-        aria-label="Live map"
+        role="application"
+        aria-label="Interactive live map showing participant locations and midpoint"
       />
       {mapInstance && ownPos && (
         <LiveParticipantMarker
@@ -208,6 +301,7 @@ export default function LiveMap({
           lat={partnerPos.lat}
           lng={partnerPos.lng}
           role={role === "a" ? "b" : "a"}
+          stale={partnerStale}
         />
       )}
       {mapInstance && midpoint && (
@@ -217,6 +311,17 @@ export default function LiveMap({
           lng={midpoint.lng}
         />
       )}
+      {mapInstance &&
+        venues.map((v) => (
+          <VenueMarker
+            key={v.id}
+            map={mapInstance}
+            lat={v.location.lat}
+            lng={v.location.lng}
+            name={v.displayName}
+            selected={selectedVenue?.id === v.id}
+          />
+        ))}
     </>
   );
 }

@@ -34,7 +34,16 @@
     "accuracy": "دقة {{meters}} م",
     "shareMessage": "لنلتقِ في المنتصف! تتبع مباشر: {{url}}",
     "connecting": "جارٍ الاتصال...",
-    "authError": "فشل الاتصال"
+    "authError": "فشل الاتصال",
+    "searchingVenues": "جارٍ البحث في المنطقة...",
+    "nearbyVenues": "أماكن قريبة",
+    "clearVenue": "مسح",
+    "openNow": "مفتوح الآن",
+    "noVenues": "لم يتم العثور على أماكن",
+    "driving": "بالسيارة",
+    "walking": "مشياً",
+    "walkTime": "~{{minutes}} دقيقة مشياً",
+    "meetAt": "نلتقي في {{name}}"
   },
   "common": {
     "back": "رجوع",

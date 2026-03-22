@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **PWA:** React 18 + Vite + Mapbox GL JS 3.x + Tailwind CSS
 - **Auth:** Firebase Anonymous Auth — `signInAnonymously()` on app init, UID as participant key
+- **App Check:** Firebase App Check with reCAPTCHA Enterprise — client attestation for RTDB
 - **Real-time:** Firebase Realtime Database (peer-to-peer location sync, auth-enforced rules)
 - **Routing:** Mapbox Directions API (client-side, 3s debounced)
 - **Midpoint:** Spherical great-circle formula (client-side, no server)
@@ -44,7 +45,7 @@ meet-me-halfway/
 │   ├── database.rules.json            # Firebase RTDB security rules
 │   └── firebase.json                  # Firebase Hosting config
 ├── .github/workflows/web.yml          # CI: lint + typecheck + build
-├── .env.example                       # 5 VITE_* env vars
+├── .env.example                       # 6 VITE_* env vars
 └── README.md
 ```
 
@@ -66,7 +67,13 @@ VITE_FIREBASE_API_KEY    # Firebase Web API key
 VITE_FIREBASE_AUTH_DOMAIN
 VITE_FIREBASE_DATABASE_URL
 VITE_FIREBASE_PROJECT_ID
+VITE_RECAPTCHA_SITE_KEY  # reCAPTCHA Enterprise site key for App Check
+VITE_GOOGLE_PLACES_API_KEY  # Optional — venue search disabled if not set
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Dev Commands
 
@@ -93,6 +100,36 @@ Security rules: `/infra/database.rules.json` — auth required for all reads, ui
 ## i18n
 
 Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical properties. Namespaces: `app`, `live`, `common`.
+
+## v1 MVP Remaining Tasks
+
+### P0 — Core Real-time Flow (Complete)
+- [x] Live location streaming via RTDB — both participants push coords via `watchPosition`
+- [x] Real-time geodesic midpoint calculation and map display (update on every location change)
+- [x] RTDB write throttle (max 1 per 3s, leading+trailing edge)
+- [x] GPS accuracy circles (GeoJSON fill layers, spherical direct formula)
+- [x] Stale partner detection (30s threshold, dimmed marker + warning)
+- [x] Smooth map transitions (50m jitter suppression, easeTo/fitBounds)
+- [x] 89 unit tests (geo-math, session-code, useAuth, useLiveSession throttle/stale, accuracy circles)
+
+### P1 — Destination Features (Complete)
+- [x] Venue/POI search around midpoint (Google Places API New, optional key, 5s stability, 100m cache)
+- [x] Venue ranking formula: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now (14 tests)
+- [x] VenueListCard with loading shimmer, ranked list, tap-to-select
+- [x] VenueMarker on map (gray dot / green selected) with truncated labels
+- [x] Directions to venue or midpoint (Mapbox Directions API, dual routing, 200m movement threshold)
+- [x] Driving/walking profile toggle in MidpointCard
+- [x] Nav links (Waze/Google Maps) point to selected venue or midpoint
+- [x] Bottom panel layout: VenueListCard stacked above MidpointCard
+- [x] i18n: all venue/profile strings in en/he/ar
+- [x] 103 unit tests (89 existing + 14 venue ranking)
+
+### P2 — Robustness
+- [ ] Error handling: GPS denied, offline/reconnect, session expiry, stale location timeout
+- [ ] E2E tests for full session lifecycle (create → join → stream → midpoint → navigate)
+
+### P3 — Future (v2)
+- [ ] WhatsApp bot for session creation and invites
 
 ## Code Style
 

@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
+import type { TravelProfile } from "./hooks/useDirections";
+import { useVenueSearch } from "./hooks/useVenueSearch";
+import type { RankedVenue } from "./lib/venue-ranking";
 import { sphericalMidpoint } from "./lib/geo-math";
 import { normalizeCode, isValidCode } from "./lib/session-code";
 import LiveMap from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
+import VenueListCard from "./components/VenueListCard";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
 
@@ -67,8 +71,31 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return sphericalMidpoint(posA, posB);
   }, [posA, posB]);
 
-  // Fetch dual routes with 3s debounce
-  const { routeA, routeB } = useDirections(posA, posB, midpoint);
+  // Venue search + selection state
+  const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
+  const [travelProfile, setTravelProfile] = useState<TravelProfile>("driving");
+  const venueSearch = useVenueSearch(midpoint);
+
+  // Destination: selected venue or midpoint
+  const destination = selectedVenue ? selectedVenue.location : midpoint;
+
+  // Fetch dual routes with 3s debounce + 200m movement threshold
+  const { routeA, routeB } = useDirections(
+    posA,
+    posB,
+    destination,
+    travelProfile,
+  );
+
+  // ── Clear venue selection if venue disappears from refreshed list ──
+  useEffect(() => {
+    if (selectedVenue && venueSearch.venues.length > 0) {
+      const stillPresent = venueSearch.venues.some(
+        (v) => v.id === selectedVenue.id,
+      );
+      if (!stillPresent) setSelectedVenue(null);
+    }
+  }, [venueSearch.venues, selectedVenue]);
 
   // ── Initialize: start geolocation, then create or join session ──
   const initRef = useRef(false);
@@ -145,6 +172,17 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
+  // Derive accuracy values for A and B based on role
+  const accuracyA =
+    session.role === "a"
+      ? (geo.accuracy ?? null)
+      : (session.partnerAccuracy ?? null);
+  const accuracyB =
+    session.role === "b"
+      ? (geo.accuracy ?? null)
+      : (session.partnerAccuracy ?? null);
+  const partnerStale = session.phase === "partner_stale";
+
   const isConnected =
     session.phase === "connected" || session.phase === "partner_stale";
 
@@ -157,6 +195,11 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         routeA={routeA?.geometry ?? null}
         routeB={routeB?.geometry ?? null}
         role={session.role}
+        accuracyA={accuracyA}
+        accuracyB={accuracyB}
+        partnerStale={partnerStale}
+        venues={venueSearch.venues}
+        selectedVenue={selectedVenue}
       />
 
       {/* Language switcher in top-right corner */}
@@ -185,14 +228,26 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       )}
 
       {isConnected && midpoint && posA && posB && (
-        <MidpointCard
-          midpoint={midpoint}
-          posA={posA}
-          posB={posB}
-          routeA={routeA}
-          routeB={routeB}
-          partnerStale={session.phase === "partner_stale"}
-        />
+        <div className="live-bottom-panel">
+          <VenueListCard
+            venues={venueSearch.venues}
+            loading={venueSearch.loading}
+            selectedVenue={selectedVenue}
+            onSelectVenue={setSelectedVenue}
+          />
+          <MidpointCard
+            midpoint={midpoint}
+            posA={posA}
+            posB={posB}
+            routeA={routeA}
+            routeB={routeB}
+            partnerStale={session.phase === "partner_stale"}
+            destination={destination ?? midpoint}
+            travelProfile={travelProfile}
+            onProfileChange={setTravelProfile}
+            selectedVenueName={selectedVenue?.displayName ?? null}
+          />
+        </div>
       )}
     </div>
   );

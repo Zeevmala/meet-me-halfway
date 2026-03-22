@@ -1,4 +1,8 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+} from "firebase/app-check";
 import { getDatabase, type Database } from "firebase/database";
 import { useMemo } from "react";
 
@@ -11,7 +15,17 @@ const firebaseConfig = {
 
 function getFirebaseApp(): FirebaseApp {
   if (getApps().length === 0) {
-    return initializeApp(firebaseConfig);
+    const app = initializeApp(firebaseConfig);
+
+    // App Check must initialize before auth/RTDB operations
+    initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(
+        import.meta.env.VITE_RECAPTCHA_SITE_KEY,
+      ),
+      isTokenAutoRefreshEnabled: true,
+    });
+
+    return app;
   }
   return getApps()[0];
 }
