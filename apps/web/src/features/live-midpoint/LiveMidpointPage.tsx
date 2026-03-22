@@ -154,6 +154,42 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
+  if (geo.status === "unavailable") {
+    return (
+      <div className="live-page">
+        <div className="live-error">
+          <div className="live-error-icon">&#128205;</div>
+          <div className="live-error-title">{t("live.geoUnavailable")}</div>
+          <div className="live-error-message">
+            {t("live.geoUnavailableInstructions")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (geo.status === "error") {
+    return (
+      <div className="live-page">
+        <div className="live-error">
+          <div className="live-error-icon">&#9202;</div>
+          <div className="live-error-title">{t("live.geoTimeout")}</div>
+          <div className="live-error-message">
+            {t("live.geoTimeoutInstructions")}
+          </div>
+          <button
+            type="button"
+            className="live-btn"
+            onClick={() => geo.start()}
+            style={{ marginTop: 16 }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (session.phase === "error") {
     return (
       <div className="live-page">
