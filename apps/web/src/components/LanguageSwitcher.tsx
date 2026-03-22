@@ -1,26 +1,27 @@
 import { useTranslation } from "react-i18next";
 
-const LANGS: { code: string; label: string }[] = [
-  { code: "en", label: "EN" },
-  { code: "he", label: "עב" },
-  { code: "ar", label: "ع" },
+const LANGS: { code: string; label: string; name: string }[] = [
+  { code: "en", label: "EN", name: "English" },
+  { code: "he", label: "עב", name: "עברית" },
+  { code: "ar", label: "ع", name: "العربية" },
 ];
 
 export default function LanguageSwitcher() {
   const { i18n } = useTranslation();
 
   return (
-    <div className="flex gap-1">
-      {LANGS.map(({ code, label }) => (
+    <div className="flex gap-1" role="group" aria-label="Language">
+      {LANGS.map(({ code, label, name }) => (
         <button
           type="button"
           key={code}
           onClick={() => i18n.changeLanguage(code)}
           aria-pressed={i18n.language === code}
+          aria-label={name}
           className={
             i18n.language === code
-              ? "px-2 py-1 text-xs font-semibold rounded bg-blue-600 text-white"
-              : "px-2 py-1 text-xs font-semibold rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+              ? "min-w-[44px] min-h-[44px] px-3 py-2 text-sm font-semibold rounded bg-blue-600 text-white"
+              : "min-w-[44px] min-h-[44px] px-3 py-2 text-sm font-semibold rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
           }
         >
           {label}
