@@ -41,6 +41,7 @@ export interface LiveSessionState {
 const STALE_THRESHOLD_MS = 30_000;
 const STALE_CHECK_INTERVAL_MS = 10_000;
 const WRITE_THROTTLE_MS = 3_000;
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Manages a live session backed by Firebase RTDB.
@@ -200,6 +201,13 @@ export function useLiveSession(uid: string): LiveSessionState {
         if (!data || !data.creatorUid) {
           setPhase("error");
           setError("Session not found.");
+          return;
+        }
+
+        // Check if session has expired (24h TTL)
+        if (data.created && Date.now() - data.created > SESSION_TTL_MS) {
+          setPhase("error");
+          setError("Session expired.");
           return;
         }
 

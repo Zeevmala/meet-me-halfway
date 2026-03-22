@@ -30,11 +30,16 @@
     "geoError": "تعذر الحصول على موقعك",
     "sessionNotFound": "الجلسة غير موجودة",
     "sessionFull": "الجلسة تحتوي على مشاركين بالفعل",
+    "sessionExpired": "انتهت صلاحية الجلسة",
     "liveIndicator": "مباشر",
     "accuracy": "دقة {{meters}} م",
     "shareMessage": "لنلتقِ في المنتصف! تتبع مباشر: {{url}}",
     "connecting": "جارٍ الاتصال...",
     "authError": "فشل الاتصال",
+    "geoUnavailable": "خدمات الموقع غير متاحة",
+    "geoUnavailableInstructions": "لا يمكن لجهازك تحديد موقعك. يرجى التحقق من تفعيل نظام تحديد المواقع.",
+    "geoTimeout": "انتهت مهلة طلب الموقع",
+    "geoTimeoutInstructions": "لم نتمكن من الحصول على موقعك في الوقت المحدد. يرجى التحقق من إشارة GPS والمحاولة مرة أخرى.",
     "searchingVenues": "جارٍ البحث في المنطقة...",
     "nearbyVenues": "أماكن قريبة",
     "clearVenue": "مسح",
@@ -43,7 +48,8 @@
     "driving": "بالسيارة",
     "walking": "مشياً",
     "walkTime": "~{{minutes}} دقيقة مشياً",
-    "meetAt": "نلتقي في {{name}}"
+    "meetAt": "نلتقي في {{name}}",
+    "partnerStaleHint": "في انتظار تحديث موقعهم..."
   },
   "common": {
     "back": "رجوع",

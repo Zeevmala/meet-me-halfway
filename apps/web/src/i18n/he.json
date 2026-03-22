@@ -30,11 +30,16 @@
     "geoError": "לא ניתן לקבל את מיקומך",
     "sessionNotFound": "הסשן לא נמצא",
     "sessionFull": "הסשן כבר מכיל שני משתתפים",
+    "sessionExpired": "הסשן פג תוקף",
     "liveIndicator": "חי",
     "accuracy": "דיוק {{meters}} מ׳",
     "shareMessage": "בואו ניפגש באמצע! מעקב חי: {{url}}",
     "connecting": "מתחבר...",
     "authError": "ההתחברות נכשלה",
+    "geoUnavailable": "שירותי מיקום לא זמינים",
+    "geoUnavailableInstructions": "המכשיר שלך לא מצליח לקבוע את מיקומך. אנא ודא/י שה-GPS מופעל.",
+    "geoTimeout": "בקשת המיקום חרגה מהזמן",
+    "geoTimeoutInstructions": "לא הצלחנו לקבל את מיקומך בזמן. אנא בדוק/י את אות ה-GPS ונסה/י שוב.",
     "searchingVenues": "מחפש בסביבה...",
     "nearbyVenues": "מקומות בסביבה",
     "clearVenue": "נקה",
@@ -43,7 +48,8 @@
     "driving": "נהיגה",
     "walking": "הליכה",
     "walkTime": "~{{minutes}} דק׳ הליכה",
-    "meetAt": "נפגשים ב{{name}}"
+    "meetAt": "נפגשים ב{{name}}",
+    "partnerStaleHint": "ממתין לעדכון מיקומם..."
   },
   "common": {
     "back": "חזרה",

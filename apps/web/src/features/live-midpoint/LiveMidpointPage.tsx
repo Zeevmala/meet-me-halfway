@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
@@ -58,6 +59,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const { t } = useTranslation();
   const geo = useLiveGeolocation();
   const session = useLiveSession(uid);
+  const networkStatus = useNetworkStatus();
 
   // Determine positions for A and B based on role
   const posA =
@@ -154,6 +156,42 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
+  if (geo.status === "unavailable") {
+    return (
+      <div className="live-page">
+        <div className="live-error">
+          <div className="live-error-icon">&#128205;</div>
+          <div className="live-error-title">{t("live.geoUnavailable")}</div>
+          <div className="live-error-message">
+            {t("live.geoUnavailableInstructions")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (geo.status === "error") {
+    return (
+      <div className="live-page">
+        <div className="live-error">
+          <div className="live-error-icon">&#9202;</div>
+          <div className="live-error-title">{t("live.geoTimeout")}</div>
+          <div className="live-error-message">
+            {t("live.geoTimeoutInstructions")}
+          </div>
+          <button
+            type="button"
+            className="live-btn"
+            onClick={() => geo.start()}
+            style={{ marginTop: 16 }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (session.phase === "error") {
     return (
       <div className="live-page">
@@ -164,7 +202,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               ? t("live.sessionNotFound")
               : session.error === "Session already has two participants."
                 ? t("live.sessionFull")
-                : t("live.geoError")}
+                : session.error === "Session expired."
+                  ? t("live.sessionExpired")
+                  : t("live.geoError")}
           </div>
           <div className="live-error-message">{session.error}</div>
         </div>
@@ -221,6 +261,13 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           ownConnected={geo.status === "watching"}
           partnerConnected={session.partnerPosition !== null}
         />
+      )}
+
+      {!networkStatus.isOnline && (
+        <div className="live-offline-banner">
+          <span>&#9888;</span>
+          {t("app.offline")}
+        </div>
       )}
 
       {session.phase === "waiting" && session.code && (
