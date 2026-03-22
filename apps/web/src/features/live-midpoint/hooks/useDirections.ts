@@ -14,6 +14,7 @@ export interface DirectionsState {
   routeA: RouteInfo | null;
   routeB: RouteInfo | null;
   loading: boolean;
+  error: string | null;
 }
 
 const DEBOUNCE_MS = 3_000;
@@ -64,6 +65,7 @@ export function useDirections(
   const [routeA, setRouteA] = useState<RouteInfo | null>(null);
   const [routeB, setRouteB] = useState<RouteInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -113,11 +115,14 @@ export function useDirections(
         if (!signal.aborted) {
           setRouteA(rA);
           setRouteB(rB);
+          setError(null);
           lastFetchRef.current = { posA, posB, dest: destination, profile };
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        // Non-abort fetch failure (network error, etc.) — silently ignore
+        if (!signal.aborted) {
+          setError("Failed to fetch directions.");
+        }
       } finally {
         if (!signal.aborted) setLoading(false);
       }
@@ -136,5 +141,5 @@ export function useDirections(
     };
   }, []);
 
-  return { routeA, routeB, loading };
+  return { routeA, routeB, loading, error };
 }

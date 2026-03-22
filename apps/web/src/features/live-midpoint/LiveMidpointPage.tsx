@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
@@ -58,6 +59,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const { t } = useTranslation();
   const geo = useLiveGeolocation();
   const session = useLiveSession(uid);
+  const networkStatus = useNetworkStatus();
 
   // Determine positions for A and B based on role
   const posA =
@@ -257,6 +259,13 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           ownConnected={geo.status === "watching"}
           partnerConnected={session.partnerPosition !== null}
         />
+      )}
+
+      {!networkStatus.isOnline && (
+        <div className="live-offline-banner">
+          <span>&#9888;</span>
+          {t("app.offline")}
+        </div>
       )}
 
       {session.phase === "waiting" && session.code && (
