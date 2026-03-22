@@ -4,7 +4,6 @@ const REQUIRED_VARS = [
   "VITE_FIREBASE_AUTH_DOMAIN",
   "VITE_FIREBASE_DATABASE_URL",
   "VITE_FIREBASE_PROJECT_ID",
-  "VITE_RECAPTCHA_SITE_KEY",
 ] as const;
 
 /** Validate all required VITE_* env vars exist before React renders. */
