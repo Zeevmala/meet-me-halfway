@@ -34,7 +34,7 @@
 
 ## Live Demo
 
-> Deploy to Firebase Hosting, Vercel, or Netlify — see [Build & Deploy](#build--deploy) below.
+**[meet-me-halfway-4ae79.web.app](https://meet-me-halfway-4ae79.web.app)**
 
 ---
 
