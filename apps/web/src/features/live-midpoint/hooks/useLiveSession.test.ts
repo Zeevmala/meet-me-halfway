@@ -245,6 +245,80 @@ describe("useLiveSession", () => {
       expect(result.current.phase).toBe("connected");
     });
 
+    it("sets phase to error if session is expired (>24h)", async () => {
+      const expiredTime = Date.now() - 25 * 60 * 60 * 1000; // 25 hours ago
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: expiredTime,
+          creatorUid: "creator-uid",
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(result.current.phase).toBe("error");
+      expect(result.current.error).toBe("Session expired.");
+    });
+
+    it("joins successfully if session is less than 24h old", async () => {
+      const recentTime = Date.now() - 23 * 60 * 60 * 1000; // 23 hours ago
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: recentTime,
+          creatorUid: "creator-uid",
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(result.current.phase).toBe("waiting");
+      expect(result.current.role).toBe("b");
+    });
+
+    it("joins successfully if session has no created field (graceful)", async () => {
+      mockGet.mockResolvedValue({
+        val: () => ({
+          creatorUid: "creator-uid",
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(result.current.phase).toBe("waiting");
+      expect(result.current.role).toBe("b");
+    });
+
+    it("rejects session at exact 24h boundary", async () => {
+      const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1; // just over 24h
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: exactBoundary,
+          creatorUid: "creator-uid",
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(result.current.phase).toBe("error");
+      expect(result.current.error).toBe("Session expired.");
+    });
+
     it("sets phase to 'waiting' if creator has no participant data", async () => {
       mockGet.mockResolvedValue({
         val: () => ({
