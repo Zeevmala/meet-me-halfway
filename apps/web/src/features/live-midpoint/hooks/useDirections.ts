@@ -117,6 +117,7 @@ export function useDirections(
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        // Non-abort fetch failure (network error, etc.) — silently ignore
       } finally {
         if (!signal.aborted) setLoading(false);
       }

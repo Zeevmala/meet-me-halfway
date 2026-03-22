@@ -12,6 +12,18 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["mapbox-gl"],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          firebase: ["firebase/app", "firebase/auth", "firebase/database"],
+          mapbox: ["mapbox-gl"],
+          i18n: ["i18next", "react-i18next"],
+        },
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     globals: true,
