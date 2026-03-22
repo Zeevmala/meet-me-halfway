@@ -30,6 +30,7 @@
     "geoError": "Could not get your location",
     "sessionNotFound": "Session not found",
     "sessionFull": "Session already has two participants",
+    "sessionExpired": "This session has expired",
     "liveIndicator": "Live",
     "accuracy": "{{meters}}m accuracy",
     "shareMessage": "Let's meet halfway! Track live: {{url}}",

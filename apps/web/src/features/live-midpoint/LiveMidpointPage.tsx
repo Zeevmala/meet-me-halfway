@@ -202,7 +202,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               ? t("live.sessionNotFound")
               : session.error === "Session already has two participants."
                 ? t("live.sessionFull")
-                : t("live.geoError")}
+                : session.error === "Session expired."
+                  ? t("live.sessionExpired")
+                  : t("live.geoError")}
           </div>
           <div className="live-error-message">{session.error}</div>
         </div>

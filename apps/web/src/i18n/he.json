@@ -30,6 +30,7 @@
     "geoError": "לא ניתן לקבל את מיקומך",
     "sessionNotFound": "הסשן לא נמצא",
     "sessionFull": "הסשן כבר מכיל שני משתתפים",
+    "sessionExpired": "הסשן פג תוקף",
     "liveIndicator": "חי",
     "accuracy": "דיוק {{meters}} מ׳",
     "shareMessage": "בואו ניפגש באמצע! מעקב חי: {{url}}",
