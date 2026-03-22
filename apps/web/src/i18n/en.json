@@ -48,7 +48,8 @@
     "driving": "Driving",
     "walking": "Walking",
     "walkTime": "~{{minutes}} min walk",
-    "meetAt": "Meet at {{name}}"
+    "meetAt": "Meet at {{name}}",
+    "partnerStaleHint": "Waiting for their location to update..."
   },
   "common": {
     "back": "Back",

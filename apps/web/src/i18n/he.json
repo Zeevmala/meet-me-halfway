@@ -48,7 +48,8 @@
     "driving": "נהיגה",
     "walking": "הליכה",
     "walkTime": "~{{minutes}} דק׳ הליכה",
-    "meetAt": "נפגשים ב{{name}}"
+    "meetAt": "נפגשים ב{{name}}",
+    "partnerStaleHint": "ממתין לעדכון מיקומם..."
   },
   "common": {
     "back": "חזרה",

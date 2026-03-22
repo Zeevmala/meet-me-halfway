@@ -46,7 +46,10 @@ export default function MidpointCard({
       {partnerStale && (
         <div className="live-stale-warning">
           <span>&#9888;</span>
-          {t("live.partnerStale")}
+          <div>
+            <div>{t("live.partnerStale")}</div>
+            <div className="live-stale-hint">{t("live.partnerStaleHint")}</div>
+          </div>
         </div>
       )}
 

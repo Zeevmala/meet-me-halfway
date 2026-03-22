@@ -48,7 +48,8 @@
     "driving": "بالسيارة",
     "walking": "مشياً",
     "walkTime": "~{{minutes}} دقيقة مشياً",
-    "meetAt": "نلتقي في {{name}}"
+    "meetAt": "نلتقي في {{name}}",
+    "partnerStaleHint": "في انتظار تحديث موقعهم..."
   },
   "common": {
     "back": "رجوع",
