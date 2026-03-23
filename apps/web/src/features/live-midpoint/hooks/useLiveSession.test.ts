@@ -145,7 +145,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe("Failed to create session.");
+      expect(result.current.error).toBe("CREATE_FAILED");
     });
   });
 
@@ -160,7 +160,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe("Session not found.");
+      expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
     it("sets phase to error if session has no creatorUid", async () => {
@@ -173,7 +173,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe("Session not found.");
+      expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
     it("sets phase to error if joinerUid is already set", async () => {
@@ -192,9 +192,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe(
-        "Session already has two participants.",
-      );
+      expect(result.current.error).toBe("SESSION_FULL");
     });
 
     it("writes joinerUid and sets role to 'b' on successful join", async () => {
@@ -261,7 +259,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe("Session expired.");
+      expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
     it("joins successfully if session is less than 24h old", async () => {
@@ -316,7 +314,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toBe("Session expired.");
+      expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
     it("sets phase to 'waiting' if creator has no participant data", async () => {
@@ -404,7 +402,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("error");
-      expect(result.current.error).toContain("Permission denied");
+      expect(result.current.error).toBe("CONNECTION_ERROR");
     });
 
     it("only own uid in participants means no partner found", async () => {

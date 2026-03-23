@@ -22,6 +22,8 @@ export function useNetworkStatus(): NetworkStatus {
   const [browserOnline, setBrowserOnline] = useState(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
+  // Optimistic: assume connected until Firebase `.info/connected` fires.
+  // Avoids flash of offline banner on fast connections.
   const [firebaseConnected, setFirebaseConnected] = useState(true);
   const unsubRef = useRef<Unsubscribe | null>(null);
 

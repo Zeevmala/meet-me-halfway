@@ -17,13 +17,15 @@ function getFirebaseApp(): FirebaseApp {
   if (getApps().length === 0) {
     const app = initializeApp(firebaseConfig);
 
-    // App Check must initialize before auth/RTDB operations
-    initializeAppCheck(app, {
-      provider: new ReCaptchaEnterpriseProvider(
-        import.meta.env.VITE_RECAPTCHA_SITE_KEY,
-      ),
-      isTokenAutoRefreshEnabled: true,
-    });
+    // App Check — optional; skip if reCAPTCHA site key not configured
+    if (import.meta.env.VITE_RECAPTCHA_SITE_KEY) {
+      initializeAppCheck(app, {
+        provider: new ReCaptchaEnterpriseProvider(
+          import.meta.env.VITE_RECAPTCHA_SITE_KEY,
+        ),
+        isTokenAutoRefreshEnabled: true,
+      });
+    }
 
     return app;
   }

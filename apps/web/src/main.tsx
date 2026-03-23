@@ -2,6 +2,7 @@ import "./lib/appcheck-debug"; // Must be first — sets debug flag before fireb
 import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
+import "./lib/i18n"; // Initialize i18next before React renders
 import { validateEnv } from "./lib/env";
 import ErrorBoundary from "./components/ErrorBoundary";
 

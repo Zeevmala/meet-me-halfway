@@ -190,7 +190,7 @@ describe("useDirections", () => {
       vi.advanceTimersByTime(3000);
     });
 
-    expect(result.current.error).toBe("Failed to fetch directions.");
+    expect(result.current.error).toBe("DIRECTIONS_FAILED");
   });
 
   it("cleans up abort controller and timer on unmount", async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import LiveMidpointPage from "./LiveMidpointPage";
 
 // ── Mock i18next ──
@@ -191,13 +191,16 @@ describe("LiveMidpointPage", () => {
 
     const retryBtn = screen.getByText("common.retry");
     expect(retryBtn).toBeTruthy();
+
+    fireEvent.click(retryBtn);
+    expect(startFn).toHaveBeenCalled();
   });
 
   it("shows session not found error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       phase: "error",
-      error: "Session not found.",
+      error: "SESSION_NOT_FOUND",
     });
 
     render(<LiveMidpointPage />);
@@ -209,7 +212,7 @@ describe("LiveMidpointPage", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       phase: "error",
-      error: "Session already has two participants.",
+      error: "SESSION_FULL",
     });
 
     render(<LiveMidpointPage />);
@@ -221,7 +224,7 @@ describe("LiveMidpointPage", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       phase: "error",
-      error: "Session expired.",
+      error: "SESSION_EXPIRED",
     });
 
     render(<LiveMidpointPage />);
