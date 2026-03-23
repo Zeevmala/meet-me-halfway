@@ -4,6 +4,7 @@ import { useAuth } from "../../hooks/useAuth";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
+import type { SessionErrorCode } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
 import type { TravelProfile } from "./hooks/useDirections";
 import { useVenueSearch } from "./hooks/useVenueSearch";
@@ -17,6 +18,16 @@ import MidpointCard from "./components/MidpointCard";
 import VenueListCard from "./components/VenueListCard";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
+
+/** Map session error codes to i18n keys. */
+const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
+  SESSION_NOT_FOUND: "live.sessionNotFound",
+  SESSION_FULL: "live.sessionFull",
+  SESSION_EXPIRED: "live.sessionExpired",
+  CREATE_FAILED: "live.geoError",
+  JOIN_FAILED: "live.geoError",
+  CONNECTION_ERROR: "live.geoError",
+};
 
 /** Read ?code= from URL query string. */
 function getCodeFromURL(): string | null {
@@ -181,9 +192,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           </div>
           <button
             type="button"
-            className="live-btn"
+            className="live-btn live-retry-btn"
             onClick={() => geo.start()}
-            style={{ marginTop: 16 }}
           >
             {t("common.retry")}
           </button>
@@ -198,15 +208,12 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         <div className="live-error">
           <div className="live-error-icon">&#9888;</div>
           <div className="live-error-title">
-            {session.error === "Session not found."
-              ? t("live.sessionNotFound")
-              : session.error === "Session already has two participants."
-                ? t("live.sessionFull")
-                : session.error === "Session expired."
-                  ? t("live.sessionExpired")
-                  : t("live.geoError")}
+            {t(
+              session.error
+                ? SESSION_ERROR_I18N[session.error]
+                : "live.geoError",
+            )}
           </div>
-          <div className="live-error-message">{session.error}</div>
         </div>
       </div>
     );

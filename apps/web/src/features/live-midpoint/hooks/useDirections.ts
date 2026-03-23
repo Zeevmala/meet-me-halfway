@@ -121,7 +121,7 @@ export function useDirections(
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         if (!signal.aborted) {
-          setError("Failed to fetch directions.");
+          setError("DIRECTIONS_FAILED");
         }
       } finally {
         if (!signal.aborted) setLoading(false);

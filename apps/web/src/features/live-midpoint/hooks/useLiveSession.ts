@@ -8,6 +8,15 @@ import type { LatLng } from "../lib/geo-math";
 /** Display role used for CSS classes and position mapping. */
 export type Role = "a" | "b";
 
+/** Typed error codes — avoids fragile string matching in the UI layer. */
+export type SessionErrorCode =
+  | "SESSION_NOT_FOUND"
+  | "SESSION_FULL"
+  | "SESSION_EXPIRED"
+  | "CREATE_FAILED"
+  | "JOIN_FAILED"
+  | "CONNECTION_ERROR";
+
 export type SessionPhase =
   | "idle"
   | "creating"
@@ -31,7 +40,7 @@ export interface LiveSessionState {
   partnerPosition: LatLng | null;
   partnerAccuracy: number | null;
   partnerLastSeen: number | null;
-  error: string | null;
+  error: SessionErrorCode | null;
   createSession: () => Promise<string>;
   joinSession: (code: string) => Promise<void>;
   updateOwnLocation: (pos: LatLng, accuracy: number) => void;
@@ -41,6 +50,9 @@ export interface LiveSessionState {
 const STALE_THRESHOLD_MS = 30_000;
 const STALE_CHECK_INTERVAL_MS = 10_000;
 const WRITE_THROTTLE_MS = 3_000;
+// Note: TTL is only enforced on join. A creator with the page open
+// beyond 24h will continue operating — acceptable for MVP since RTDB
+// security rules can enforce server-side TTL in a future iteration.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
@@ -64,7 +76,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   const [partnerPosition, setPartnerPosition] = useState<LatLng | null>(null);
   const [partnerAccuracy, setPartnerAccuracy] = useState<number | null>(null);
   const [partnerLastSeen, setPartnerLastSeen] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SessionErrorCode | null>(null);
 
   const unsubRef = useRef<Unsubscribe | null>(null);
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -127,8 +139,8 @@ export function useLiveSession(uid: string): LiveSessionState {
             );
           }
         },
-        (err) => {
-          setError(`Connection error: ${err.message}`);
+        () => {
+          setError("CONNECTION_ERROR");
           setPhase("error");
         },
       );
@@ -177,7 +189,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       return sessionCode;
     } catch (err) {
       setPhase("error");
-      setError("Failed to create session.");
+      setError("CREATE_FAILED");
       throw err;
     }
   }, [db, uid, listenForPartner, startStaleDetection]);
@@ -200,21 +212,21 @@ export function useLiveSession(uid: string): LiveSessionState {
 
         if (!data || !data.creatorUid) {
           setPhase("error");
-          setError("Session not found.");
+          setError("SESSION_NOT_FOUND");
           return;
         }
 
         // Check if session has expired (24h TTL)
         if (data.created && Date.now() - data.created > SESSION_TTL_MS) {
           setPhase("error");
-          setError("Session expired.");
+          setError("SESSION_EXPIRED");
           return;
         }
 
         // Check if joiner slot is taken
         if (data.joinerUid) {
           setPhase("error");
-          setError("Session already has two participants.");
+          setError("SESSION_FULL");
           return;
         }
 
@@ -234,7 +246,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         startStaleDetection();
       } catch (err) {
         setPhase("error");
-        setError("Failed to join session.");
+        setError("JOIN_FAILED");
         throw err;
       }
     },

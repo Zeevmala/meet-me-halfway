@@ -191,6 +191,10 @@
   transform: scale(0.97);
 }
 
+.live-retry-btn {
+  margin-top: 16px;
+}
+
 .live-btn--whatsapp {
   background: var(--live-whatsapp);
   color: #fff;
