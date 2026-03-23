@@ -55,7 +55,7 @@
   position: absolute;
   top: max(12px, env(safe-area-inset-top, 12px));
   inset-inline-start: 12px;
-  inset-inline-end: 12px;
+  inset-inline-end: 110px;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -202,6 +202,7 @@
 .live-btn--whatsapp {
   background: var(--live-whatsapp);
   color: #fff;
+  text-decoration: none;
 }
 
 .live-btn--copy {
@@ -662,10 +663,8 @@
 
 @media (max-width: 360px) {
   .live-badge {
-    inset-inline-end: 100px;
     gap: 6px;
     padding: 8px 10px;
-    overflow: hidden;
   }
 
   .live-badge-code {
