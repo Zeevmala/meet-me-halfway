@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { useAuth } from "./useAuth";
 
 // ── Mock firebase/auth ──
@@ -60,18 +60,25 @@ describe("useAuth", () => {
     expect(mockSignInAnonymously).toHaveBeenCalledTimes(1);
   });
 
-  it("transitions to error when signInAnonymously rejects", async () => {
+  it("transitions to error after all retries are exhausted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     mockSignInAnonymously.mockRejectedValue(new Error("Auth disabled"));
 
     const { result } = renderHook(() => useAuth());
 
-    await waitFor(() => {
-      expect(result.current.status).toBe("error");
+    // Flush all microtasks + timers for 3 retry attempts
+    await act(async () => {
+      await vi.runAllTimersAsync();
     });
 
+    expect(result.current.status).toBe("error");
     if (result.current.status === "error") {
       expect(result.current.error).toBe("Auth disabled");
     }
+    // Initial call + retries
+    expect(mockSignInAnonymously.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    vi.useRealTimers();
   });
 
   it("transitions to error when onAuthStateChanged error callback fires", async () => {

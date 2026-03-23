@@ -121,6 +121,7 @@ export function useDirections(
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         if (!signal.aborted) {
+          console.warn("[useDirections] fetch failed:", err);
           setError("DIRECTIONS_FAILED");
         }
       } finally {

@@ -100,7 +100,10 @@ export async function searchNearbyVenues(
       signal,
     });
 
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.warn(`[places-api] HTTP ${res.status}: ${res.statusText}`);
+      return [];
+    }
 
     const data: PlacesNearbyResponse = await res.json();
     if (!data.places) return [];
@@ -110,6 +113,7 @@ export async function searchNearbyVenues(
       .filter((p): p is PlaceResult => p !== null);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
+    console.warn("[places-api] search failed:", err);
     return [];
   }
 }

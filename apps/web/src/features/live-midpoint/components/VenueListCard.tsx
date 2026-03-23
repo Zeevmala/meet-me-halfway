@@ -50,11 +50,13 @@ export default function VenueListCard({
           </button>
         )}
       </div>
-      <div className="live-venues-list">
+      <div className="live-venues-list" role="listbox">
         {venues.map((v) => (
           <button
             key={v.id}
             type="button"
+            role="option"
+            aria-selected={selectedVenue?.id === v.id}
             className={`live-venue-item${selectedVenue?.id === v.id ? " live-venue-item--selected" : ""}`}
             onClick={() => onSelectVenue(selectedVenue?.id === v.id ? null : v)}
           >
