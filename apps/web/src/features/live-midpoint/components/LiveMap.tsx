@@ -16,12 +16,10 @@ const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
-// RTL text plugin for Hebrew/Arabic map labels
+// RTL text plugin for Hebrew map labels
 try {
   mapboxgl.setRTLTextPlugin(
     "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js",
-    // @ts-expect-error mapbox-gl types expect callback but boolean works at runtime
-    true,
   );
 } catch {
   /* already loaded */
