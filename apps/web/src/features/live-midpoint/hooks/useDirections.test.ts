@@ -193,6 +193,44 @@ describe("useDirections", () => {
     expect(result.current.error).toBe("DIRECTIONS_FAILED");
   });
 
+  it("returns null routes on HTTP 500 response", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+
+    const { result } = renderHook(() =>
+      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(result.current.routeA).toBeNull();
+    expect(result.current.routeB).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("sets error on HTTP 429 rate limit", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+    });
+
+    const { result } = renderHook(() =>
+      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(result.current.error).toBe("DIRECTIONS_FAILED");
+  });
+
   it("cleans up abort controller and timer on unmount", async () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
 

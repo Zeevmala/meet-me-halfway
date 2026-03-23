@@ -26,9 +26,11 @@
 - **Navigation Links** — One-tap Waze / Google Maps deep links to the selected venue or midpoint
 - **Session Codes** — 6-character codes with WhatsApp share and copy-link for instant invites
 - **Stale Detection** — Partner offline > 30s triggers dimmed marker + warning banner
+- **Error Handling** — GPS denied/unavailable/timeout with retry, offline/reconnect banner, 24h session expiry
+- **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
 - **i18n + RTL** — English, Hebrew, Arabic with full RTL support via CSS logical properties
 - **PWA** — Installable, offline fallback, service worker caching
-- **103 Unit Tests** — geo-math, session codes, auth, live session, venue ranking
+- **147 Unit + Integration Tests** — geo-math, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, directions, page lifecycle
 
 ---
 
@@ -86,7 +88,7 @@ Both browsers compute the midpoint client-side using a spherical great-circle fo
 | Venues | Google Places API (New) — optional |
 | Midpoint | Spherical great-circle formula |
 | i18n | i18next — English, Hebrew, Arabic (full RTL) |
-| Tests | Vitest + React Testing Library (103 tests) |
+| Tests | Vitest + React Testing Library (147 tests) |
 
 ---
 
@@ -140,7 +142,7 @@ meet-me-halfway/
 │   │   │   ├── hooks/                 # useGeolocation, useSession, useDirections, useVenueSearch
 │   │   │   ├── lib/                   # geo-math, venue-ranking, places-api, nav-links
 │   │   │   └── styles/               # Dark glass-morphism theme
-│   │   ├── hooks/                     # useFirebase, useAuth
+│   │   ├── hooks/                     # useFirebase, useAuth, useNetworkStatus
 │   │   ├── i18n/                      # en.json, he.json, ar.json
 │   │   └── main.tsx
 │   ├── public/                        # PWA manifest, service worker, icons
@@ -148,7 +150,7 @@ meet-me-halfway/
 ├── infra/
 │   ├── database.rules.json            # Firebase RTDB security rules
 │   └── firebase.json                  # Firebase Hosting config
-├── .github/workflows/web.yml          # CI: lint + typecheck + build
+├── .github/workflows/web.yml          # CI: lint + typecheck + test + build
 ├── .env.example
 └── LICENSE
 ```
@@ -172,7 +174,7 @@ meet-me-halfway/
 
 ```bash
 cd apps/web
-npx vitest run     # 103 unit tests
+npx vitest run     # 147 unit + integration tests
 npm run tsc        # TypeScript strict mode check
 ```
 
