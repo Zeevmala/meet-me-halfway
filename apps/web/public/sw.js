@@ -1,4 +1,4 @@
-const CACHE_VERSION = "mmh-v2";
+const CACHE_VERSION = "mmh-v3";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const TILE_CACHE = `${CACHE_VERSION}-tiles`;
 
@@ -30,6 +30,9 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
+
+  // Only cache GET requests — Cache API does not support POST
+  if (request.method !== "GET") return;
 
   // Mapbox tiles — stale-while-revalidate
   if (
