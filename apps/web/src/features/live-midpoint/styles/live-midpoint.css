@@ -12,6 +12,9 @@
   --live-pink: #ff6b9d;
   --live-red: #ff8a8a;
   --live-whatsapp: #25d366;
+  --live-amber: #ffb300;
+  --live-gold: #ffb800;
+  --live-gray: #555;
   --live-font:
     system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Hebrew",
     "Noto Sans Arabic", sans-serif;
@@ -109,7 +112,7 @@
 }
 
 .live-pill-dot--gray {
-  background: #555;
+  background: var(--live-gray);
 }
 
 /* ── Bottom panel container ── */
@@ -348,7 +351,7 @@
   background: rgba(255, 179, 0, 0.15);
   border: 1px solid rgba(255, 179, 0, 0.3);
   font-size: 13px;
-  color: #ffb300;
+  color: var(--live-amber);
   pointer-events: auto;
 }
 
@@ -441,7 +444,7 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #888;
+  background: var(--live-gray);
   border: 2px solid rgba(255, 255, 255, 0.3);
   cursor: pointer;
   position: relative;
@@ -579,7 +582,7 @@
 }
 
 .live-venue-rating {
-  color: #ffb800;
+  color: var(--live-gold);
 }
 
 .live-venue-open {
@@ -642,6 +645,36 @@
   }
   100% {
     background-position: 200% 0;
+  }
+}
+
+/* ── Focus indicators (keyboard accessibility) ── */
+
+.live-btn:focus-visible,
+.live-profile-btn:focus-visible,
+.live-venue-item:focus-visible,
+.live-venues-clear:focus-visible {
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+}
+
+/* ── Badge overflow fix for narrow viewports ── */
+
+@media (max-width: 360px) {
+  .live-badge {
+    inset-inline-end: 100px;
+    gap: 6px;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+
+  .live-badge-code {
+    font-size: 14px;
+  }
+
+  .live-pill {
+    padding: 3px 6px;
+    font-size: 11px;
   }
 }
 
