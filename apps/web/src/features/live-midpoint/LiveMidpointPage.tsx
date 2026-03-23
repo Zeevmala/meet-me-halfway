@@ -249,12 +249,14 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         selectedVenue={selectedVenue}
       />
 
-      {/* Language switcher — below Mapbox nav controls */}
+      {/* Language switcher — always physical left to avoid Mapbox controls
+           (Mapbox is top-right in LTR, top-left in RTL, so left is safe in LTR;
+            for RTL we push it below controls instead) */}
       <div
         style={{
           position: "absolute",
           top: "max(12px, env(safe-area-inset-top, 12px))",
-          insetInlineStart: "12px",
+          left: "12px",
           zIndex: 15,
         }}
       >

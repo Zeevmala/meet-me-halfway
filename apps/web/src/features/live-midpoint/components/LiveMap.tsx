@@ -137,8 +137,8 @@ export default function LiveMap({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    const dir = document.dir;
-    const controlPos = dir === "rtl" ? "top-left" : "top-right";
+    // Always top-right so language switcher can safely use top-left
+    const controlPos = "top-right" as const;
 
     const map = new mapboxgl.Map({
       container: containerRef.current,
