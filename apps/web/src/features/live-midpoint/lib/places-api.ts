@@ -102,6 +102,7 @@ export async function searchNearbyVenues(
 
     if (!res.ok) {
       console.warn(`[places-api] HTTP ${res.status}: ${res.statusText}`);
+      if (res.status === 429) throw new Error("RATE_LIMITED");
       return [];
     }
 

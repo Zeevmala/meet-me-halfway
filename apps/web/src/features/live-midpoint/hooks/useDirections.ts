@@ -33,7 +33,11 @@ async function fetchRoute(
     `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
 
   const res = await fetch(url, { signal });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.warn(`[useDirections] HTTP ${res.status}: ${res.statusText}`);
+    if (res.status === 429) throw new Error("RATE_LIMITED");
+    return null;
+  }
 
   const data = await res.json();
   const route = data.routes?.[0];

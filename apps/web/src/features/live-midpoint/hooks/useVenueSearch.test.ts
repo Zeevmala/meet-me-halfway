@@ -157,6 +157,19 @@ describe("useVenueSearch", () => {
     expect(result.current.venues).toEqual([]);
   });
 
+  it("handles rate limit (RATE_LIMITED) error gracefully", async () => {
+    mockSearchNearbyVenues.mockRejectedValueOnce(new Error("RATE_LIMITED"));
+
+    const { result } = renderHook(() => useVenueSearch(MIDPOINT));
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(result.current.error).toBe("Failed to search for venues");
+    expect(result.current.venues).toEqual([]);
+  });
+
   it("aborts previous request on rapid midpoint changes", async () => {
     const { rerender } = renderHook(({ mid }) => useVenueSearch(mid), {
       initialProps: { mid: MIDPOINT },
