@@ -12,11 +12,7 @@ export default function WaitingCard({ code }: WaitingCardProps) {
   const [copied, setCopied] = useState(false);
 
   const shareUrl = `${window.location.origin}?code=${code}`;
-
-  const handleWhatsApp = useCallback(() => {
-    const text = encodeURIComponent(t("live.shareMessage", { url: shareUrl }));
-    window.open(`https://wa.me/?text=${text}`, "_blank");
-  }, [shareUrl, t]);
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(t("live.shareMessage", { url: shareUrl }))}`;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -35,13 +31,14 @@ export default function WaitingCard({ code }: WaitingCardProps) {
         <div className="live-waiting-title">{t("live.waitingTitle")}</div>
         <div className="live-waiting-subtitle">{t("live.waitingSubtitle")}</div>
         <div className="live-waiting-actions">
-          <button
-            type="button"
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="live-btn live-btn--whatsapp"
-            onClick={handleWhatsApp}
           >
             {t("live.shareWhatsApp")}
-          </button>
+          </a>
           <button
             type="button"
             className="live-btn live-btn--copy"

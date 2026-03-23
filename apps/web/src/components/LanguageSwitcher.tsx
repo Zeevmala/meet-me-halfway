@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 const LANGS: { code: string; label: string; name: string }[] = [
   { code: "en", label: "EN", name: "English" },
   { code: "he", label: "עב", name: "עברית" },
-  { code: "ar", label: "ع", name: "العربية" },
 ];
 
 export default function LanguageSwitcher() {
