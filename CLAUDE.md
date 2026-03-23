@@ -31,7 +31,7 @@ meet-me-halfway/
 │   │   │   ├── lib/                   # geo-math, session-code, nav-links
 │   │   │   └── styles/               # live-midpoint.css (dark theme)
 │   │   ├── components/                # ErrorBoundary, LanguageSwitcher
-│   │   ├── hooks/                     # useFirebase, useAuth
+│   │   ├── hooks/                     # useFirebase, useAuth, useNetworkStatus
 │   │   ├── lib/                       # env.ts, i18n.ts
 │   │   ├── i18n/                      # en.json, he.json, ar.json
 │   │   ├── main.tsx                   # Entry point
@@ -44,14 +44,14 @@ meet-me-halfway/
 ├── infra/
 │   ├── database.rules.json            # Firebase RTDB security rules
 │   └── firebase.json                  # Firebase Hosting config
-├── .github/workflows/web.yml          # CI: lint + typecheck + build
+├── .github/workflows/web.yml          # CI: lint + typecheck + test + build
 ├── .env.example                       # 6 VITE_* env vars
 └── README.md
 ```
 
 ## Core Flow
 
-1. **Auth:** App init → `signInAnonymously()` → UID assigned (persisted across sessions)
+1. **Auth:** App init → `signInAnonymously()` with retry (3 attempts, exponential backoff) → UID assigned (persisted across sessions)
 2. **Creator** opens `/` → geolocation prompt → 6-char session code generated → URL becomes `/?code=XXXXX`
 3. **Joiner** opens `/?code=XXXXX` → geolocation prompt → joins as participant B
 4. Both locations stream to Firebase RTDB at `/sessions/{code}/participants/{uid}`
@@ -80,9 +80,11 @@ MIT — see [LICENSE](LICENSE).
 ```bash
 cd apps/web
 npm install
-npm run dev        # Vite dev server at localhost:5173
-npm run tsc        # TypeScript check (tsc --noEmit)
-npm run build      # Production build
+npm run dev          # Vite dev server at localhost:5173
+npm run tsc          # TypeScript check (tsc --noEmit)
+npm run build        # Production build
+npx vitest run       # Run all 147 tests
+npx vitest --coverage # Coverage report
 ```
 
 ## Firebase RTDB Schema
@@ -124,11 +126,18 @@ Locales: `en`, `he` (Hebrew), `ar` (Arabic). Full RTL support via CSS logical pr
 - [x] i18n: all venue/profile strings in en/he/ar
 - [x] 103 unit tests (89 existing + 14 venue ranking)
 
-### P2 — Robustness
-- [ ] Error handling: GPS denied, offline/reconnect, session expiry, stale location timeout
-- [ ] E2E tests for full session lifecycle (create → join → stream → midpoint → navigate)
+### P2 — Robustness (Complete)
+- [x] Error handling: GPS denied/unavailable/timeout with retry UI, offline/reconnect banner, 24h session expiry, stale location timeout
+- [x] `useNetworkStatus` hook — Firebase RTDB `.info/connected` tracking
+- [x] `SessionErrorCode` typed union — replaces fragile error string matching
+- [x] Auth retry with exponential backoff (1s, 2s, 4s) on `signInAnonymously()` failure
+- [x] App Check made optional — graceful degradation when reCAPTCHA unavailable
+- [x] Mapbox GL pre-bundling fix for Vite dev server compatibility
+- [x] CI test job added to GitHub Actions workflow
+- [x] 147 unit + integration tests (GPS, directions, venue search, page lifecycle, session expiry, auth retry)
 
 ### P3 — Future (v2)
+- [ ] E2E tests (Playwright) for full session lifecycle
 - [ ] WhatsApp bot for session creation and invites
 
 ## Code Style
