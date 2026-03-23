@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### P2 — Robustness
+- **GPS error handling** — dedicated UI for denied, unavailable, and timeout states with retry button
+- **Offline/reconnect banner** — `useNetworkStatus` hook tracks Firebase RTDB `.info/connected`
+- **24h session expiry** — joiner rejected with `SESSION_EXPIRED` error if session older than 24h
+- **Auth retry** — `signInAnonymously()` retries 3 times with exponential backoff (1s, 2s, 4s)
+- **SessionErrorCode** — typed union replaces fragile error string matching in `useLiveSession`
+- **App Check optional** — graceful degradation when reCAPTCHA Enterprise unavailable
+- **Vite pre-bundling fix** — `optimizeDeps.include: ["mapbox-gl"]` resolves CJS/ESM interop crash
+- **CI test job** — `npx vitest run` added to GitHub Actions workflow
+- **147 tests** — 44 new tests covering GPS errors, directions, venue search, page lifecycle, session expiry, auth retry
+- **Code review fixes** — `console.warn` for silent errors, `--live-red` CSS variable, `aria-pressed`/`aria-selected` accessibility
+
 ### Publish-Ready
 - **MIT License** added
 - Stripped exposed reCAPTCHA site key from `.env.example` and README
@@ -63,7 +75,7 @@ All notable changes to this project will be documented in this file.
 - Session metadata (`creatorUid`, `joinerUid`) is write-once and must match `auth.uid`
 - RTDB schema migration: `live-sessions/{code}/{a|b}` → `sessions/{code}/participants/{uid}`
 - App Check debug token moved to side-effect module for correct ES module load order
-- 103 unit tests: geo-math, accuracy circles, session-code, useAuth (7), useLiveSession (23 + throttle/stale), venue ranking (14)
+- 147 unit + integration tests: geo-math, accuracy circles, session-code, useAuth (7 + retry), useLiveSession (23 + throttle/stale/expiry), venue ranking (14), GPS errors, directions, page lifecycle
 - Resolved 10 npm vulnerabilities by upgrading firebase to v11 (dropped `undici` transitive dep)
 - Fixed Vite HMR WebSocket (`server.hmr.host`), mapbox-gl optimizeDeps, Mapbox CSS CDN version mismatch
 - Firebase deployment config (`firebase.json`, `.firebaserc`)

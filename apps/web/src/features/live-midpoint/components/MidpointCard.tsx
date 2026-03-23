@@ -62,6 +62,7 @@ export default function MidpointCard({
       <div className="live-profile-toggle">
         <button
           type="button"
+          aria-pressed={travelProfile === "driving"}
           className={`live-profile-btn${travelProfile === "driving" ? " live-profile-btn--active" : ""}`}
           onClick={() => onProfileChange("driving")}
         >
@@ -69,6 +70,7 @@ export default function MidpointCard({
         </button>
         <button
           type="button"
+          aria-pressed={travelProfile === "walking"}
           className={`live-profile-btn${travelProfile === "walking" ? " live-profile-btn--active" : ""}`}
           onClick={() => onProfileChange("walking")}
         >
