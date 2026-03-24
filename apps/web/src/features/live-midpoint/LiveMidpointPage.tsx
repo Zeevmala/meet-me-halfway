@@ -16,7 +16,6 @@ import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
 import VenueListCard from "./components/VenueListCard";
-import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
 
 /** Map session error codes to i18n keys. */
@@ -248,20 +247,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         venues={venueSearch.venues}
         selectedVenue={selectedVenue}
       />
-
-      {/* Language switcher — always physical left to avoid Mapbox controls
-           (Mapbox is top-right in LTR, top-left in RTL, so left is safe in LTR;
-            for RTL we push it below controls instead) */}
-      <div
-        style={{
-          position: "absolute",
-          top: "max(12px, env(safe-area-inset-top, 12px))",
-          left: "12px",
-          zIndex: 15,
-        }}
-      >
-        <LanguageSwitcher />
-      </div>
 
       {session.code && (
         <SessionBadge

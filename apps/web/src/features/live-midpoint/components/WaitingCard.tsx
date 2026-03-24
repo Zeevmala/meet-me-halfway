@@ -29,7 +29,6 @@ export default function WaitingCard({ code }: WaitingCardProps) {
     <>
       <div className="live-card live-glass live-waiting-shimmer">
         <div className="live-waiting-title">{t("live.waitingTitle")}</div>
-        <div className="live-waiting-subtitle">{t("live.waitingSubtitle")}</div>
         <div className="live-waiting-actions">
           <a
             href={whatsappUrl}
