@@ -1,4 +1,4 @@
-const CACHE_VERSION = "mmh-v3";
+const CACHE_VERSION = "mmh-v4";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const TILE_CACHE = `${CACHE_VERSION}-tiles`;
 
@@ -51,11 +51,31 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // App shell + static assets — cache-first
+  // Navigation requests (index.html) — network-first so deploys take effect
+  if (request.mode === "navigate") {
+    event.respondWith(networkFirst(request, SHELL_CACHE));
+    return;
+  }
+
+  // Hashed static assets (JS/CSS) — cache-first (hash in filename = immutable)
   event.respondWith(cacheFirst(request, SHELL_CACHE));
 });
 
 // ── Strategies ──
+
+async function networkFirst(request, cacheName) {
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      const cache = await caches.open(cacheName);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    return cached || caches.match("/index.html");
+  }
+}
 
 async function cacheFirst(request, cacheName) {
   const cached = await caches.match(request);
@@ -69,7 +89,6 @@ async function cacheFirst(request, cacheName) {
     }
     return response;
   } catch {
-    // Offline fallback for navigation requests
     if (request.mode === "navigate") {
       return caches.match("/index.html");
     }
