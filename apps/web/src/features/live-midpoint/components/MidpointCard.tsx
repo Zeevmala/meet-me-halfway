@@ -37,7 +37,6 @@ export default function MidpointCard({
 }: MidpointCardProps) {
   const { t } = useTranslation();
 
-  const totalDistance = haversineDistance(posA, posB);
   const timeKey =
     travelProfile === "walking" ? "live.walkTime" : "live.driveTime";
 
@@ -105,11 +104,6 @@ export default function MidpointCard({
               {t(timeKey, { minutes: formatDuration(routeB.duration) })}
             </div>
           )}
-        </div>
-
-        <div className="live-stat live-stat--full">
-          <div className="live-stat-label">{t("live.totalDistance")}</div>
-          <div className="live-stat-value">{formatDistance(totalDistance)}</div>
         </div>
       </div>
 
