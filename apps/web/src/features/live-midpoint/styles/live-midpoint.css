@@ -53,9 +53,9 @@
 
 .live-badge {
   position: absolute;
-  top: max(12px, env(safe-area-inset-top, 12px));
+  top: max(46px, calc(env(safe-area-inset-top, 12px) + 34px));
   inset-inline-start: 12px;
-  inset-inline-end: 110px;
+  inset-inline-end: 12px;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -145,47 +145,47 @@
 
 .live-card {
   position: absolute;
-  bottom: max(16px, env(safe-area-inset-bottom, 16px));
+  bottom: max(12px, env(safe-area-inset-bottom, 12px));
   inset-inline-start: 12px;
   inset-inline-end: 12px;
   z-index: 10;
-  padding: 20px;
+  padding: 16px;
   animation: live-card-slide-up 0.4s ease-out;
 }
 
 /* ── Waiting Card ── */
 
 .live-waiting-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .live-waiting-subtitle {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--live-text-muted);
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .live-waiting-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .live-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   flex: 1;
-  padding: 12px 16px;
-  border-radius: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
   border: none;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   font-family: var(--live-font);
   cursor: pointer;
-  min-height: 44px;
+  min-height: 40px;
   transition:
     opacity 0.2s,
     transform 0.15s;
