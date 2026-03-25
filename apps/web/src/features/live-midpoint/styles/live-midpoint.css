@@ -2,9 +2,9 @@
 
 :root {
   --live-bg: #0a0a0f;
-  --live-surface: rgba(20, 20, 30, 0.85);
-  --live-glass: rgba(255, 255, 255, 0.06);
-  --live-border: rgba(255, 255, 255, 0.08);
+  --live-surface: rgba(18, 18, 26, 0.92);
+  --live-glass: rgba(255, 255, 255, 0.04);
+  --live-border: rgba(255, 255, 255, 0.06);
   --live-text: #e8e8f0;
   --live-text-muted: #9898b0;
   --live-green: #00d4aa;
@@ -43,10 +43,10 @@
 
 .live-glass {
   background: var(--live-surface);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--live-border);
-  border-radius: 14px;
+  border-radius: 16px;
 }
 
 /* ── Session Badge (top bar) ── */
@@ -58,15 +58,15 @@
   z-index: 10;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: 8px;
+  padding: 6px 12px;
 }
 
 .live-badge-code {
   font-family: var(--live-mono);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--live-text);
 }
 
@@ -88,12 +88,11 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border-radius: 10px;
   font-size: 11px;
   font-weight: 500;
   background: var(--live-glass);
-  border: 1px solid var(--live-border);
 }
 
 .live-pill-dot {
@@ -118,13 +117,13 @@
 
 .live-bottom-panel {
   position: absolute;
-  bottom: max(10px, env(safe-area-inset-bottom, 10px));
-  inset-inline-start: 10px;
-  inset-inline-end: 10px;
+  bottom: max(14px, env(safe-area-inset-bottom, 14px));
+  inset-inline-start: 14px;
+  inset-inline-end: 14px;
   z-index: 10;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   pointer-events: none;
 }
 
@@ -144,20 +143,20 @@
 
 .live-card {
   position: absolute;
-  bottom: max(10px, env(safe-area-inset-bottom, 10px));
-  inset-inline-start: 10px;
-  inset-inline-end: 10px;
+  bottom: max(14px, env(safe-area-inset-bottom, 14px));
+  inset-inline-start: 14px;
+  inset-inline-end: 14px;
   z-index: 10;
-  padding: 12px;
-  animation: live-card-slide-up 0.4s ease-out;
+  padding: 16px 18px;
+  animation: live-card-slide-up 0.3s ease-out;
 }
 
 /* ── Waiting Card ── */
 
 .live-waiting-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .live-waiting-subtitle {
@@ -168,7 +167,7 @@
 
 .live-waiting-actions {
   display: flex;
-  gap: 6px;
+  gap: 10px;
 }
 
 .live-btn {
@@ -177,14 +176,14 @@
   justify-content: center;
   gap: 5px;
   flex: 1;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
   border: none;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   font-family: var(--live-font);
   cursor: pointer;
-  min-height: 36px;
+  min-height: 40px;
   transition:
     opacity 0.2s,
     transform 0.15s;
@@ -207,16 +206,14 @@
 .live-btn--copy {
   background: var(--live-glass);
   color: var(--live-text);
-  border: 1px solid var(--live-border);
 }
 
 .live-btn--nav {
   background: var(--live-glass);
   color: var(--live-text);
-  border: 1px solid var(--live-border);
-  padding: 8px 12px;
-  font-size: 12px;
-  min-height: 36px;
+  padding: 10px 14px;
+  font-size: 13px;
+  min-height: 40px;
 }
 
 .live-btn--nav:hover {
@@ -229,7 +226,7 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--live-green);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -238,20 +235,22 @@
 .live-profile-toggle {
   display: flex;
   gap: 0;
-  margin-bottom: 10px;
-  border-radius: 8px;
+  margin-bottom: 14px;
+  border-radius: 10px;
   overflow: hidden;
-  border: 1px solid var(--live-border);
+  padding: 3px;
+  background: var(--live-glass);
 }
 
 .live-profile-btn {
   flex: 1;
-  padding: 6px 10px;
+  padding: 8px 14px;
   background: transparent;
   border: none;
+  border-radius: 8px;
   color: var(--live-text-muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   font-family: var(--live-font);
   cursor: pointer;
   transition:
@@ -260,26 +259,21 @@
 }
 
 .live-profile-btn--active {
-  background: var(--live-glass);
+  background: rgba(255, 255, 255, 0.1);
   color: var(--live-text);
-}
-
-.live-profile-btn:hover:not(.live-profile-btn--active) {
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .live-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .live-stat {
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
   background: var(--live-glass);
-  border: 1px solid var(--live-border);
 }
 
 .live-stat--full {
@@ -287,15 +281,13 @@
 }
 
 .live-stat-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--live-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .live-stat-value {
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 600;
   font-family: var(--live-mono);
 }
@@ -309,22 +301,22 @@
 }
 
 .live-stat-sub {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--live-text-muted);
-  margin-top: 1px;
+  margin-top: 3px;
 }
 
 .live-nav-buttons {
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
 
 .live-stale-warning {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  margin-bottom: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
   border-radius: 8px;
   background: rgba(255, 107, 107, 0.15);
   border: 1px solid rgba(255, 107, 107, 0.3);
@@ -488,22 +480,20 @@
 /* ── Venue list card ── */
 
 .live-venues {
-  padding: 14px;
-  animation: live-card-slide-up 0.4s ease-out;
+  padding: 16px 18px;
+  animation: live-card-slide-up 0.3s ease-out;
 }
 
 .live-venues-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .live-venues-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: var(--live-text-muted);
 }
 
@@ -527,20 +517,20 @@
 .live-venues-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 160px;
+  gap: 8px;
+  max-height: 180px;
   overflow-y: auto;
 }
 
 .live-venues-shimmer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .live-venue-skeleton {
-  height: 44px;
-  border-radius: 10px;
+  height: 48px;
+  border-radius: 12px;
   background: var(--live-glass);
 }
 
@@ -549,9 +539,10 @@
   flex-direction: column;
   gap: 2px;
   min-height: 44px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--live-border);
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: none;
+  border-inline-start: 3px solid transparent;
   background: var(--live-glass);
   cursor: pointer;
   text-align: start;
@@ -567,7 +558,7 @@
 }
 
 .live-venue-item--selected {
-  border-color: var(--live-green);
+  border-inline-start-color: var(--live-green);
   background: rgba(0, 212, 170, 0.08);
 }
 
@@ -616,7 +607,7 @@
     opacity: 0.6;
   }
   100% {
-    transform: scale(2.2);
+    transform: scale(1.8);
     opacity: 0;
   }
 }
@@ -633,7 +624,7 @@
 
 @keyframes live-card-slide-up {
   from {
-    transform: translateY(24px);
+    transform: translateY(16px);
     opacity: 0;
   }
   to {
@@ -683,7 +674,7 @@
   background: linear-gradient(
     90deg,
     transparent 25%,
-    rgba(255, 255, 255, 0.04) 50%,
+    rgba(255, 255, 255, 0.03) 50%,
     transparent 75%
   );
   background-size: 200% 100%;
