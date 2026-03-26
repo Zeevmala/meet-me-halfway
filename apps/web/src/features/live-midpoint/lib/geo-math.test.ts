@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   sphericalMidpoint,
+  geographicCentroid,
   haversineDistance,
   formatDistance,
   accuracyCircleGeoJSON,
@@ -93,6 +94,58 @@ describe("sphericalMidpoint", () => {
     const mid = sphericalMidpoint(a, b);
     // Midpoint should be near ±180, not near 0
     expect(Math.abs(mid.lng)).toBeGreaterThan(170);
+  });
+});
+
+describe("geographicCentroid", () => {
+  it("returns the point itself for a single-point input", () => {
+    const c = geographicCentroid([TEL_AVIV]);
+    expect(c.lat).toBeCloseTo(TEL_AVIV.lat, 6);
+    expect(c.lng).toBeCloseTo(TEL_AVIV.lng, 6);
+  });
+
+  it("matches sphericalMidpoint for two points", () => {
+    const mid = sphericalMidpoint(TEL_AVIV, JERUSALEM);
+    const centroid = geographicCentroid([TEL_AVIV, JERUSALEM]);
+    expect(centroid.lat).toBeCloseTo(mid.lat, 4);
+    expect(centroid.lng).toBeCloseTo(mid.lng, 4);
+  });
+
+  it("computes centroid of 3 equatorial points near (0,0)", () => {
+    const a: LatLng = { lat: 0, lng: 0 };
+    const b: LatLng = { lat: 0, lng: 120 };
+    const c: LatLng = { lat: 0, lng: -120 };
+    const centroid = geographicCentroid([a, b, c]);
+    // Symmetric around equator → centroid near (0, 0)
+    expect(Math.abs(centroid.lat)).toBeLessThan(1);
+  });
+
+  it("computes centroid of 5 Israeli cities roughly in the center", () => {
+    const BEER_SHEVA: LatLng = { lat: 31.2518, lng: 34.7913 };
+    const EILAT: LatLng = { lat: 29.5577, lng: 34.9519 };
+    const centroid = geographicCentroid([
+      TEL_AVIV,
+      JERUSALEM,
+      HAIFA,
+      BEER_SHEVA,
+      EILAT,
+    ]);
+    // Centroid should be roughly in Israel's center
+    expect(centroid.lat).toBeGreaterThan(29);
+    expect(centroid.lat).toBeLessThan(33);
+    expect(centroid.lng).toBeGreaterThan(34);
+    expect(centroid.lng).toBeLessThan(36);
+  });
+
+  it("is order-independent", () => {
+    const points = [TEL_AVIV, JERUSALEM, HAIFA];
+    const c1 = geographicCentroid(points);
+    const c2 = geographicCentroid([HAIFA, TEL_AVIV, JERUSALEM]);
+    expect(distKm(c1, c2)).toBeLessThan(0.001);
+  });
+
+  it("throws for empty array", () => {
+    expect(() => geographicCentroid([])).toThrow();
   });
 });
 

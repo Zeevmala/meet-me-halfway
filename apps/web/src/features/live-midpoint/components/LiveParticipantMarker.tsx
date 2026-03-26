@@ -1,29 +1,29 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef } from "react";
-import type { Role } from "../hooks/useLiveSession";
+import type { ParticipantIndex } from "../lib/participant-config";
 import "../styles/live-midpoint.css";
 
 interface LiveParticipantMarkerProps {
   map: mapboxgl.Map;
   lat: number;
   lng: number;
-  role: Role;
+  participantIndex: ParticipantIndex;
   stale?: boolean;
 }
 
-/** Pulsing colored marker for a live participant (green A / blue B). */
+/** Pulsing colored marker for a live participant. */
 export default function LiveParticipantMarker({
   map,
   lat,
   lng,
-  role,
+  participantIndex,
   stale = false,
 }: LiveParticipantMarkerProps) {
   const markerRef = useRef<mapboxgl.Marker | null>(null);
 
   useEffect(() => {
     const el = document.createElement("div");
-    el.className = `live-marker live-marker--${role}${stale ? " live-marker--stale" : ""}`;
+    el.className = `live-marker live-marker--p${participantIndex}${stale ? " live-marker--stale" : ""}`;
 
     const ring = document.createElement("div");
     ring.className = "live-marker-ring";
@@ -38,7 +38,7 @@ export default function LiveParticipantMarker({
       markerRef.current?.remove();
       markerRef.current = null;
     };
-  }, [map, lat, lng, role, stale]);
+  }, [map, lat, lng, participantIndex, stale]);
 
   return null;
 }

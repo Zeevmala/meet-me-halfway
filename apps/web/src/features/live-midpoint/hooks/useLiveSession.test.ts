@@ -40,6 +40,9 @@ vi.mock("../lib/session-code", () => ({
 
 const TEST_UID = "user-abc-123";
 const PARTNER_UID = "user-xyz-789";
+const PARTNER_UID_2 = "user-def-456";
+const PARTNER_UID_3 = "user-ghi-012";
+const PARTNER_UID_4 = "user-jkl-345";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -54,26 +57,25 @@ beforeEach(() => {
 });
 
 describe("useLiveSession", () => {
-  it("starts in idle phase with no code or role", () => {
+  it("starts in idle phase with no code or index", () => {
     const { result } = renderHook(() => useLiveSession(TEST_UID));
 
     expect(result.current.phase).toBe("idle");
     expect(result.current.code).toBeNull();
-    expect(result.current.role).toBeNull();
+    expect(result.current.ownIndex).toBeNull();
     expect(result.current.ownPosition).toBeNull();
-    expect(result.current.partnerPosition).toBeNull();
+    expect(result.current.participants).toEqual([]);
     expect(result.current.error).toBeNull();
   });
 
   describe("createSession", () => {
-    it("writes created timestamp and creatorUid to RTDB", async () => {
+    it("writes created, creatorUid, and participantUids to RTDB", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession();
       });
 
-      // Should have written `sessions/ABC234/created` and `sessions/ABC234/creatorUid`
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/ABC234/created" }),
         expect.any(Number),
@@ -82,16 +84,22 @@ describe("useLiveSession", () => {
         expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
         TEST_UID,
       );
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: `sessions/ABC234/participantUids/${TEST_UID}`,
+        }),
+        true,
+      );
     });
 
-    it("sets role to 'a' and phase to 'waiting'", async () => {
+    it("sets ownIndex to 0 and phase to 'waiting'", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession();
       });
 
-      expect(result.current.role).toBe("a");
+      expect(result.current.ownIndex).toBe(0);
       expect(result.current.phase).toBe("waiting");
       expect(result.current.code).toBe("ABC234");
     });
@@ -117,14 +125,13 @@ describe("useLiveSession", () => {
       expect(history.replaceState).toHaveBeenCalled();
     });
 
-    it("starts listening for partner after create", async () => {
+    it("starts listening for participants after create", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession();
       });
 
-      // The ref for participants should have been created
       expect(mockRef).toHaveBeenCalledWith(
         mockDb,
         "sessions/ABC234/participants",
@@ -176,12 +183,18 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
-    it("sets phase to error if joinerUid is already set", async () => {
+    it("sets phase to error if session has 5 participants", async () => {
       mockGet.mockResolvedValue({
         val: () => ({
           created: Date.now(),
           creatorUid: "creator-uid",
-          joinerUid: "another-uid",
+          participantUids: {
+            "creator-uid": true,
+            [PARTNER_UID]: true,
+            [PARTNER_UID_2]: true,
+            [PARTNER_UID_3]: true,
+            [PARTNER_UID_4]: true,
+          },
         }),
       });
 
@@ -195,11 +208,12 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_FULL");
     });
 
-    it("writes joinerUid and sets role to 'b' on successful join", async () => {
+    it("writes participantUids and sets ownIndex on successful join", async () => {
       mockGet.mockResolvedValue({
         val: () => ({
           created: Date.now(),
           creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
         }),
       });
 
@@ -210,19 +224,22 @@ describe("useLiveSession", () => {
       });
 
       expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({ path: "sessions/XYZ789/joinerUid" }),
-        TEST_UID,
+        expect.objectContaining({
+          path: `sessions/XYZ789/participantUids/${TEST_UID}`,
+        }),
+        true,
       );
-      expect(result.current.role).toBe("b");
+      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
       expect(result.current.code).toBe("XYZ789");
     });
 
-    it("sets phase to 'connected' if creator has participant data", async () => {
+    it("sets phase to 'connected' if another participant has data", async () => {
       const creatorUid = "creator-uid";
       mockGet.mockResolvedValue({
         val: () => ({
           created: Date.now(),
           creatorUid,
+          participantUids: { [creatorUid]: true },
           participants: {
             [creatorUid]: {
               lat: 32.08,
@@ -244,7 +261,7 @@ describe("useLiveSession", () => {
     });
 
     it("sets phase to error if session is expired (>24h)", async () => {
-      const expiredTime = Date.now() - 25 * 60 * 60 * 1000; // 25 hours ago
+      const expiredTime = Date.now() - 25 * 60 * 60 * 1000;
       mockGet.mockResolvedValue({
         val: () => ({
           created: expiredTime,
@@ -263,11 +280,12 @@ describe("useLiveSession", () => {
     });
 
     it("joins successfully if session is less than 24h old", async () => {
-      const recentTime = Date.now() - 23 * 60 * 60 * 1000; // 23 hours ago
+      const recentTime = Date.now() - 23 * 60 * 60 * 1000;
       mockGet.mockResolvedValue({
         val: () => ({
           created: recentTime,
           creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
         }),
       });
 
@@ -278,13 +296,14 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("waiting");
-      expect(result.current.role).toBe("b");
+      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
     });
 
     it("joins successfully if session has no created field (graceful)", async () => {
       mockGet.mockResolvedValue({
         val: () => ({
           creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
         }),
       });
 
@@ -295,11 +314,11 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("waiting");
-      expect(result.current.role).toBe("b");
+      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
     });
 
     it("rejects session at exact 24h boundary", async () => {
-      const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1; // just over 24h
+      const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1;
       mockGet.mockResolvedValue({
         val: () => ({
           created: exactBoundary,
@@ -317,11 +336,30 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
-    it("sets phase to 'waiting' if creator has no participant data", async () => {
+    it("sets phase to 'waiting' if no other participant has data", async () => {
       mockGet.mockResolvedValue({
         val: () => ({
           created: Date.now(),
           creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(result.current.phase).toBe("waiting");
+    });
+
+    it("allows rejoining when already a participant", async () => {
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: Date.now(),
+          creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true, [TEST_UID]: true },
         }),
       });
 
@@ -335,34 +373,61 @@ describe("useLiveSession", () => {
     });
   });
 
-  describe("listenForPartner", () => {
-    it("sets partner position when partner data appears", async () => {
+  describe("listenForParticipants", () => {
+    it("sets participants when other users appear", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession();
       });
 
-      // Simulate partner writing their location
       act(() => {
         onValueCallback?.({
           val: () => ({
             [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: 1000 },
-            [PARTNER_UID]: { lat: 31.76, lng: 35.21, accuracy: 15, ts: 2000 },
+            [PARTNER_UID]: {
+              lat: 31.76,
+              lng: 35.21,
+              accuracy: 15,
+              ts: Date.now(),
+            },
           }),
         });
       });
 
-      expect(result.current.partnerPosition).toEqual({
+      expect(result.current.participants).toHaveLength(1);
+      expect(result.current.participants[0].position).toEqual({
         lat: 31.76,
         lng: 35.21,
       });
-      expect(result.current.partnerAccuracy).toBe(15);
-      expect(result.current.partnerLastSeen).toBe(2000);
+      expect(result.current.participants[0].accuracy).toBe(15);
       expect(result.current.phase).toBe("connected");
     });
 
-    it("clears partner when participants is null", async () => {
+    it("handles multiple participants", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      const now = Date.now();
+      act(() => {
+        onValueCallback?.({
+          val: () => ({
+            [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: now },
+            [PARTNER_UID]: { lat: 31.76, lng: 35.21, accuracy: 15, ts: now },
+            [PARTNER_UID_2]: { lat: 31.5, lng: 34.9, accuracy: 20, ts: now },
+            [PARTNER_UID_3]: { lat: 32.1, lng: 35.0, accuracy: 12, ts: now },
+          }),
+        });
+      });
+
+      expect(result.current.participants).toHaveLength(3);
+      expect(result.current.phase).toBe("connected");
+    });
+
+    it("clears participants when data is null", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
@@ -374,20 +439,23 @@ describe("useLiveSession", () => {
         onValueCallback?.({
           val: () => ({
             [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: 1000 },
-            [PARTNER_UID]: { lat: 31.76, lng: 35.21, accuracy: 15, ts: 2000 },
+            [PARTNER_UID]: {
+              lat: 31.76,
+              lng: 35.21,
+              accuracy: 15,
+              ts: Date.now(),
+            },
           }),
         });
       });
 
       expect(result.current.phase).toBe("connected");
 
-      // Then partner leaves (only own data remains, but entire node could be null)
       act(() => {
         onValueCallback?.({ val: () => null });
       });
 
-      expect(result.current.partnerPosition).toBeNull();
-      expect(result.current.partnerAccuracy).toBeNull();
+      expect(result.current.participants).toEqual([]);
     });
 
     it("sets phase to error on connection error", async () => {
@@ -405,14 +473,13 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("CONNECTION_ERROR");
     });
 
-    it("only own uid in participants means no partner found", async () => {
+    it("only own uid in participants means no others found", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession();
       });
 
-      // Only own data present
       act(() => {
         onValueCallback?.({
           val: () => ({
@@ -421,9 +488,7 @@ describe("useLiveSession", () => {
         });
       });
 
-      // Should not set partner position
-      expect(result.current.partnerPosition).toBeNull();
-      // Phase should remain waiting (set from createSession)
+      expect(result.current.participants).toEqual([]);
       expect(result.current.phase).toBe("waiting");
     });
   });
@@ -436,7 +501,6 @@ describe("useLiveSession", () => {
         await result.current.createSession();
       });
 
-      // Clear mocks to isolate updateOwnLocation calls
       mockSet.mockClear();
       mockRef.mockClear();
 
@@ -477,7 +541,6 @@ describe("useLiveSession", () => {
         result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
       });
 
-      // set should not be called for RTDB write (only local state update)
       expect(mockSet).not.toHaveBeenCalled();
     });
   });
@@ -568,7 +631,6 @@ describe("useLiveSession", () => {
 
       mockSet.mockClear();
 
-      // Buffer two more positions
       act(() => {
         vi.advanceTimersByTime(1000);
         result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
@@ -581,12 +643,10 @@ describe("useLiveSession", () => {
 
       expect(mockSet).not.toHaveBeenCalled();
 
-      // Advance past the 3s window from the first write
       act(() => {
         vi.advanceTimersByTime(1500);
       });
 
-      // Should flush the LATEST position
       expect(mockSet).toHaveBeenCalledTimes(1);
       expect(mockSet).toHaveBeenCalledWith(
         expect.anything(),
@@ -620,7 +680,6 @@ describe("useLiveSession", () => {
         vi.advanceTimersByTime(5000);
       });
 
-      // Only remove() should have been called, not a throttled set()
       expect(mockSet).not.toHaveBeenCalled();
     });
   });
@@ -634,7 +693,7 @@ describe("useLiveSession", () => {
       vi.useRealTimers();
     });
 
-    it("marks partner as stale after 30s of no updates", async () => {
+    it("marks participant as stale after 30s of no updates", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
@@ -663,12 +722,12 @@ describe("useLiveSession", () => {
 
       expect(result.current.phase).toBe("connected");
 
-      // Advance 40s (past 30s threshold + one 10s check interval)
       act(() => {
         vi.advanceTimersByTime(40_000);
       });
 
-      expect(result.current.phase).toBe("partner_stale");
+      expect(result.current.phase).toBe("some_stale");
+      expect(result.current.participants[0].stale).toBe(true);
     });
   });
 

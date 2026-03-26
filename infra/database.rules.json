@@ -11,9 +11,11 @@
           ".write": "auth != null && !data.exists()",
           ".validate": "newData.isString() && newData.val() === auth.uid"
         },
-        "joinerUid": {
-          ".write": "auth != null && !data.exists()",
-          ".validate": "newData.isString() && newData.val() === auth.uid && data.parent().child('creatorUid').exists()"
+        "participantUids": {
+          "$uid": {
+            ".write": "auth != null && !data.exists() && $uid === auth.uid",
+            ".validate": "newData.isBoolean() && newData.val() === true"
+          }
         },
         "participants": {
           "$uid": {

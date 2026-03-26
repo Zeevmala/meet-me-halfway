@@ -39,8 +39,7 @@ vi.mock("./hooks/useLiveSession", () => ({
 // ── Mock useDirections ──
 vi.mock("./hooks/useDirections", () => ({
   useDirections: () => ({
-    routeA: null,
-    routeB: null,
+    routes: [],
     loading: false,
     error: null,
   }),
@@ -105,10 +104,9 @@ function defaultSession() {
   return {
     phase: "waiting",
     code: "ABC123",
-    role: "a",
+    ownIndex: 0,
     ownPosition: { lat: 32.08, lng: 34.78 },
-    partnerPosition: null,
-    partnerAccuracy: null,
+    participants: [],
     error: null,
     createSession: vi.fn(),
     joinSession: vi.fn(),
@@ -249,5 +247,35 @@ describe("LiveMidpointPage", () => {
     render(<LiveMidpointPage />);
 
     expect(screen.getByText("app.offline")).toBeTruthy();
+  });
+
+  it("shows connected state with multiple participants", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: Date.now(),
+          index: 1,
+          stale: false,
+        },
+        {
+          uid: "p2",
+          position: { lat: 32.79, lng: 34.99 },
+          accuracy: 20,
+          lastSeen: Date.now(),
+          index: 2,
+          stale: false,
+        },
+      ],
+    });
+
+    render(<LiveMidpointPage />);
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.getByTestId("venue-list-card")).toBeTruthy();
   });
 });

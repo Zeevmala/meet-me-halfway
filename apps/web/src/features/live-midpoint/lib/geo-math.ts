@@ -32,6 +32,40 @@ export function sphericalMidpoint(a: LatLng, b: LatLng): LatLng {
   return { lat: toDeg(phiM), lng: toDeg(lamM) };
 }
 
+/**
+ * Geographic centroid of N points using Cartesian mean.
+ * Converts each lat/lng to 3D unit-sphere coordinates, averages,
+ * then converts back. Gives the spherical "center of mass".
+ */
+export function geographicCentroid(points: LatLng[]): LatLng {
+  if (points.length === 0) {
+    throw new Error("geographicCentroid requires at least one point");
+  }
+  if (points.length === 1) return { lat: points[0].lat, lng: points[0].lng };
+
+  let x = 0;
+  let y = 0;
+  let z = 0;
+
+  for (const p of points) {
+    const phi = toRad(p.lat);
+    const lam = toRad(p.lng);
+    x += Math.cos(phi) * Math.cos(lam);
+    y += Math.cos(phi) * Math.sin(lam);
+    z += Math.sin(phi);
+  }
+
+  x /= points.length;
+  y /= points.length;
+  z /= points.length;
+
+  const lng = Math.atan2(y, x);
+  const hyp = Math.sqrt(x * x + y * y);
+  const lat = Math.atan2(z, hyp);
+
+  return { lat: toDeg(lat), lng: toDeg(lng) };
+}
+
 /** Haversine distance in meters between two WGS84 points. */
 export function haversineDistance(a: LatLng, b: LatLng): number {
   const dPhi = toRad(b.lat - a.lat);

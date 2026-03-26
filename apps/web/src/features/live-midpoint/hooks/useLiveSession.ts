@@ -4,9 +4,8 @@ import type { Unsubscribe } from "firebase/database";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { generateCode } from "../lib/session-code";
 import type { LatLng } from "../lib/geo-math";
-
-/** Display role used for CSS classes and position mapping. */
-export type Role = "a" | "b";
+import type { ParticipantIndex } from "../lib/participant-config";
+import { MAX_PARTICIPANTS } from "../lib/participant-config";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
@@ -22,7 +21,7 @@ export type SessionPhase =
   | "creating"
   | "waiting"
   | "connected"
-  | "partner_stale"
+  | "some_stale"
   | "error";
 
 interface ParticipantData {
@@ -32,14 +31,22 @@ interface ParticipantData {
   ts: number;
 }
 
+/** Info about another participant in the session. */
+export interface ParticipantInfo {
+  uid: string;
+  position: LatLng;
+  accuracy: number;
+  lastSeen: number;
+  index: ParticipantIndex;
+  stale: boolean;
+}
+
 export interface LiveSessionState {
   phase: SessionPhase;
   code: string | null;
-  role: Role | null;
+  ownIndex: ParticipantIndex | null;
   ownPosition: LatLng | null;
-  partnerPosition: LatLng | null;
-  partnerAccuracy: number | null;
-  partnerLastSeen: number | null;
+  participants: ParticipantInfo[];
   error: SessionErrorCode | null;
   createSession: () => Promise<string>;
   joinSession: (code: string) => Promise<void>;
@@ -56,12 +63,27 @@ const WRITE_THROTTLE_MS = 3_000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
+ * Assign a ParticipantIndex based on UID position in sorted UID list.
+ * Creator UID always gets index 0; others sorted lexicographically.
+ */
+function assignIndex(
+  uid: string,
+  creatorUid: string,
+  allUids: string[],
+): ParticipantIndex {
+  if (uid === creatorUid) return 0;
+  const others = allUids.filter((u) => u !== creatorUid).sort();
+  const idx = others.indexOf(uid) + 1; // 1-based since creator is 0
+  return Math.min(idx, MAX_PARTICIPANTS - 1) as ParticipantIndex;
+}
+
+/**
  * Manages a live session backed by Firebase RTDB.
  *
  * RTDB schema:
- *   sessions/{code}/created       — timestamp
- *   sessions/{code}/creatorUid    — uid of session creator
- *   sessions/{code}/joinerUid     — uid of session joiner
+ *   sessions/{code}/created            — timestamp
+ *   sessions/{code}/creatorUid         — uid of session creator
+ *   sessions/{code}/participantUids/{uid} — true (write-once per participant)
  *   sessions/{code}/participants/{uid} — { lat, lng, accuracy, ts }
  *
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
@@ -71,16 +93,15 @@ export function useLiveSession(uid: string): LiveSessionState {
 
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [code, setCode] = useState<string | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
+  const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
   const [ownPosition, setOwnPosition] = useState<LatLng | null>(null);
-  const [partnerPosition, setPartnerPosition] = useState<LatLng | null>(null);
-  const [partnerAccuracy, setPartnerAccuracy] = useState<number | null>(null);
-  const [partnerLastSeen, setPartnerLastSeen] = useState<number | null>(null);
+  const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
   const [error, setError] = useState<SessionErrorCode | null>(null);
 
   const unsubRef = useRef<Unsubscribe | null>(null);
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeRef = useRef<string | null>(null);
+  const creatorUidRef = useRef<string | null>(null);
 
   // Throttle refs for RTDB write limiting
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,8 +116,8 @@ export function useLiveSession(uid: string): LiveSessionState {
     codeRef.current = code;
   }, [code]);
 
-  /** Listen for partner updates by watching the entire participants node. */
-  const listenForPartner = useCallback(
+  /** Listen for all participant updates. */
+  const listenForParticipants = useCallback(
     (sessionCode: string) => {
       const participantsRef = ref(db, `sessions/${sessionCode}/participants`);
 
@@ -105,37 +126,38 @@ export function useLiveSession(uid: string): LiveSessionState {
         (snap) => {
           const data = snap.val() as Record<string, ParticipantData> | null;
           if (!data) {
-            setPartnerPosition(null);
-            setPartnerAccuracy(null);
-            setPartnerLastSeen(null);
+            setParticipants([]);
             return;
           }
 
-          // Find partner: the participant whose key !== our uid
-          let found = false;
+          const creatorUid = creatorUidRef.current ?? "";
+          const allUids = Object.keys(data);
+
+          // Build participant list excluding self
+          const others: ParticipantInfo[] = [];
           for (const [participantUid, participant] of Object.entries(data)) {
             if (participantUid !== uid) {
-              setPartnerPosition({
-                lat: participant.lat,
-                lng: participant.lng,
+              others.push({
+                uid: participantUid,
+                position: { lat: participant.lat, lng: participant.lng },
+                accuracy: participant.accuracy,
+                lastSeen: participant.ts,
+                index: assignIndex(participantUid, creatorUid, allUids),
+                stale: Date.now() - participant.ts > STALE_THRESHOLD_MS,
               });
-              setPartnerAccuracy(participant.accuracy);
-              setPartnerLastSeen(participant.ts);
-              setPhase("connected");
-              found = true;
-              break;
             }
           }
 
-          if (!found) {
-            setPartnerPosition(null);
-            setPartnerAccuracy(null);
-            setPartnerLastSeen(null);
-            // Only go to waiting if we were connected before (partner left)
+          others.sort((a, b) => a.index - b.index);
+          setParticipants(others);
+
+          if (others.length > 0) {
+            const anyStale = others.some((p) => p.stale);
+            setPhase(anyStale ? "some_stale" : "connected");
+          } else {
+            // No other participants with data — go to waiting if we were connected
             setPhase((prev) =>
-              prev === "connected" || prev === "partner_stale"
-                ? "waiting"
-                : prev,
+              prev === "connected" || prev === "some_stale" ? "waiting" : prev,
             );
           }
         },
@@ -148,21 +170,37 @@ export function useLiveSession(uid: string): LiveSessionState {
     [db, uid],
   );
 
-  /** Start stale-partner detection interval. */
+  /** Start stale detection interval. */
   const startStaleDetection = useCallback(() => {
     if (staleTimerRef.current) clearInterval(staleTimerRef.current);
 
     staleTimerRef.current = setInterval(() => {
-      setPartnerLastSeen((ts) => {
-        if (ts !== null && Date.now() - ts > STALE_THRESHOLD_MS) {
-          setPhase((prev) => (prev === "connected" ? "partner_stale" : prev));
+      setParticipants((prev) => {
+        const now = Date.now();
+        let changed = false;
+        const updated = prev.map((p) => {
+          const stale = now - p.lastSeen > STALE_THRESHOLD_MS;
+          if (stale !== p.stale) changed = true;
+          return stale !== p.stale ? { ...p, stale } : p;
+        });
+
+        if (changed) {
+          const anyStale = updated.some((p) => p.stale);
+          setPhase((prev) =>
+            prev === "connected" || prev === "some_stale"
+              ? anyStale
+                ? "some_stale"
+                : "connected"
+              : prev,
+          );
+          return updated;
         }
-        return ts;
+        return prev;
       });
     }, STALE_CHECK_INTERVAL_MS);
   }, []);
 
-  /** Create a new live session as the creator (display role "a"). */
+  /** Create a new live session as the creator (index 0). */
   const createSession = useCallback(async (): Promise<string> => {
     setPhase("creating");
     setError(null);
@@ -173,9 +211,14 @@ export function useLiveSession(uid: string): LiveSessionState {
       // Write session metadata
       await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
       await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
+      await set(
+        ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+        true,
+      );
 
+      creatorUidRef.current = uid;
       setCode(sessionCode);
-      setRole("a");
+      setOwnIndex(0);
       setPhase("waiting");
 
       // Update URL without reload
@@ -183,7 +226,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       url.searchParams.set("code", sessionCode);
       history.replaceState(null, "", url.toString());
 
-      listenForPartner(sessionCode);
+      listenForParticipants(sessionCode);
       startStaleDetection();
 
       return sessionCode;
@@ -192,9 +235,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       setError("CREATE_FAILED");
       throw err;
     }
-  }, [db, uid, listenForPartner, startStaleDetection]);
+  }, [db, uid, listenForParticipants, startStaleDetection]);
 
-  /** Join an existing session as the joiner (display role "b"). */
+  /** Join an existing session. */
   const joinSession = useCallback(
     async (sessionCode: string): Promise<void> => {
       setPhase("creating");
@@ -206,7 +249,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
-          joinerUid?: string;
+          participantUids?: Record<string, boolean>;
           participants?: Record<string, ParticipantData>;
         } | null;
 
@@ -223,26 +266,41 @@ export function useLiveSession(uid: string): LiveSessionState {
           return;
         }
 
-        // Check if joiner slot is taken
-        if (data.joinerUid) {
+        // Check participant count
+        const existingUids = data.participantUids
+          ? Object.keys(data.participantUids)
+          : [];
+        if (
+          existingUids.length >= MAX_PARTICIPANTS &&
+          !existingUids.includes(uid)
+        ) {
           setPhase("error");
           setError("SESSION_FULL");
           return;
         }
 
-        // Claim the joiner slot
-        await set(ref(db, `sessions/${sessionCode}/joinerUid`), uid);
+        // Register as participant
+        if (!existingUids.includes(uid)) {
+          await set(
+            ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+            true,
+          );
+        }
+
+        creatorUidRef.current = data.creatorUid;
+        const allUids = [...existingUids.filter((u) => u !== uid), uid];
+        const myIndex = assignIndex(uid, data.creatorUid, allUids);
 
         setCode(sessionCode);
-        setRole("b");
+        setOwnIndex(myIndex);
 
-        // If creator already has a participant entry, we're connected
-        const hasCreatorData =
+        // If any other participant already has location data, we're connected
+        const hasOtherData =
           data.participants &&
-          Object.keys(data.participants).some((k) => k === data.creatorUid);
-        setPhase(hasCreatorData ? "connected" : "waiting");
+          Object.keys(data.participants).some((k) => k !== uid);
+        setPhase(hasOtherData ? "connected" : "waiting");
 
-        listenForPartner(sessionCode);
+        listenForParticipants(sessionCode);
         startStaleDetection();
       } catch (err) {
         setPhase("error");
@@ -250,7 +308,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         throw err;
       }
     },
-    [db, uid, listenForPartner, startStaleDetection],
+    [db, uid, listenForParticipants, startStaleDetection],
   );
 
   /** Flush a buffered position write to RTDB. */
@@ -344,11 +402,9 @@ export function useLiveSession(uid: string): LiveSessionState {
   return {
     phase,
     code,
-    role,
+    ownIndex,
     ownPosition,
-    partnerPosition,
-    partnerAccuracy,
-    partnerLastSeen,
+    participants,
     error,
     createSession,
     joinSession,

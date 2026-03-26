@@ -34,6 +34,9 @@ function makeRouteResponse(distance: number, duration: number) {
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
 const JERUSALEM: LatLng = { lat: 31.77, lng: 35.21 };
+const HAIFA: LatLng = { lat: 32.794, lng: 34.9896 };
+const BEER_SHEVA: LatLng = { lat: 31.2518, lng: 34.7913 };
+const EILAT: LatLng = { lat: 29.5577, lng: 34.9519 };
 const MIDPOINT: LatLng = { lat: 31.925, lng: 34.995 };
 
 // Positions moved >200m from above
@@ -55,59 +58,75 @@ afterEach(() => {
 });
 
 describe("useDirections", () => {
-  it("returns null routes when positions are null", () => {
-    const { result } = renderHook(() => useDirections(null, null, null));
+  it("returns empty routes when positions are empty", () => {
+    const { result } = renderHook(() => useDirections([], null));
 
-    expect(result.current.routeA).toBeNull();
-    expect(result.current.routeB).toBeNull();
+    expect(result.current.routes).toEqual([]);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBeNull();
   });
 
-  it("fetches dual routes after 3s debounce", async () => {
+  it("returns empty routes when all positions are null", () => {
+    const { result } = renderHook(() => useDirections([null, null], MIDPOINT));
+
+    expect(result.current.routes).toEqual([]);
+  });
+
+  it("fetches routes for 2 participants after 3s debounce", async () => {
     mockFetch.mockResolvedValue(makeRouteResponse(50000, 3600));
 
     const { result } = renderHook(() =>
-      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+      useDirections([TEL_AVIV, JERUSALEM], MIDPOINT),
     );
 
-    // Before debounce
     expect(mockFetch).not.toHaveBeenCalled();
 
-    // Advance past debounce
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(result.current.routeA).not.toBeNull();
-    expect(result.current.routeB).not.toBeNull();
+    expect(result.current.routes).toHaveLength(2);
+    expect(result.current.routes[0]).not.toBeNull();
+    expect(result.current.routes[1]).not.toBeNull();
     expect(result.current.error).toBeNull();
+  });
+
+  it("fetches routes for 5 participants", async () => {
+    mockFetch.mockResolvedValue(makeRouteResponse(50000, 3600));
+
+    const { result } = renderHook(() =>
+      useDirections([TEL_AVIV, JERUSALEM, HAIFA, BEER_SHEVA, EILAT], MIDPOINT),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+    expect(result.current.routes).toHaveLength(5);
   });
 
   it("skips refetch when movement < 200m", async () => {
     const { rerender } = renderHook(
-      ({ posA, posB, dest }) => useDirections(posA, posB, dest),
+      ({ positions, dest }: { positions: (LatLng | null)[]; dest: LatLng }) =>
+        useDirections(positions, dest),
       {
         initialProps: {
-          posA: TEL_AVIV,
-          posB: JERUSALEM,
+          positions: [TEL_AVIV, JERUSALEM],
           dest: MIDPOINT,
         },
       },
     );
 
-    // First fetch
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
-    // Small movement — should NOT trigger refetch
     mockFetch.mockClear();
     rerender({
-      posA: TEL_AVIV_CLOSE,
-      posB: JERUSALEM,
+      positions: [TEL_AVIV_CLOSE, JERUSALEM],
       dest: MIDPOINT,
     });
 
@@ -120,27 +139,24 @@ describe("useDirections", () => {
 
   it("refetches when movement > 200m", async () => {
     const { rerender } = renderHook(
-      ({ posA, posB, dest }) => useDirections(posA, posB, dest),
+      ({ positions, dest }: { positions: (LatLng | null)[]; dest: LatLng }) =>
+        useDirections(positions, dest),
       {
         initialProps: {
-          posA: TEL_AVIV,
-          posB: JERUSALEM,
+          positions: [TEL_AVIV, JERUSALEM],
           dest: MIDPOINT,
         },
       },
     );
 
-    // First fetch
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
-    // Large movement — should trigger refetch
     mockFetch.mockClear();
     rerender({
-      posA: TEL_AVIV_MOVED,
-      posB: JERUSALEM_MOVED,
+      positions: [TEL_AVIV_MOVED, JERUSALEM_MOVED],
       dest: MIDPOINT_MOVED,
     });
 
@@ -151,20 +167,48 @@ describe("useDirections", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("refetches when profile changes", async () => {
+  it("refetches when participant count changes", async () => {
     const { rerender } = renderHook(
-      ({ profile }: { profile: "driving" | "walking" }) =>
-        useDirections(TEL_AVIV, JERUSALEM, MIDPOINT, profile),
-      { initialProps: { profile: "driving" as "driving" | "walking" } },
+      ({ positions, dest }: { positions: (LatLng | null)[]; dest: LatLng }) =>
+        useDirections(positions, dest),
+      {
+        initialProps: {
+          positions: [TEL_AVIV, JERUSALEM] as (LatLng | null)[],
+          dest: MIDPOINT,
+        },
+      },
     );
 
-    // First fetch
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
-    // Change profile
+    mockFetch.mockClear();
+    rerender({
+      positions: [TEL_AVIV, JERUSALEM, HAIFA],
+      dest: MIDPOINT,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("refetches when profile changes", async () => {
+    const { rerender } = renderHook(
+      ({ profile }: { profile: "driving" | "walking" }) =>
+        useDirections([TEL_AVIV, JERUSALEM], MIDPOINT, profile),
+      { initialProps: { profile: "driving" as "driving" | "walking" } },
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
     mockFetch.mockClear();
     rerender({ profile: "walking" });
 
@@ -173,17 +217,15 @@ describe("useDirections", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    // Verify walking profile used in URL
     const callUrl = mockFetch.mock.calls[0][0] as string;
     expect(callUrl).toContain("mapbox/walking/");
   });
 
   it("sets error on non-abort fetch failure", async () => {
-    mockFetch.mockRejectedValueOnce(new Error("Network error"));
-    mockFetch.mockRejectedValueOnce(new Error("Network error"));
+    mockFetch.mockRejectedValue(new Error("Network error"));
 
     const { result } = renderHook(() =>
-      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+      useDirections([TEL_AVIV, JERUSALEM], MIDPOINT),
     );
 
     await act(async () => {
@@ -201,15 +243,15 @@ describe("useDirections", () => {
     });
 
     const { result } = renderHook(() =>
-      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+      useDirections([TEL_AVIV, JERUSALEM], MIDPOINT),
     );
 
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
 
-    expect(result.current.routeA).toBeNull();
-    expect(result.current.routeB).toBeNull();
+    expect(result.current.routes[0]).toBeNull();
+    expect(result.current.routes[1]).toBeNull();
     expect(result.current.error).toBeNull();
   });
 
@@ -221,7 +263,7 @@ describe("useDirections", () => {
     });
 
     const { result } = renderHook(() =>
-      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+      useDirections([TEL_AVIV, JERUSALEM], MIDPOINT),
     );
 
     await act(async () => {
@@ -235,21 +277,18 @@ describe("useDirections", () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
 
     const { unmount } = renderHook(() =>
-      useDirections(TEL_AVIV, JERUSALEM, MIDPOINT),
+      useDirections([TEL_AVIV, JERUSALEM], MIDPOINT),
     );
 
-    // Start debounce but don't complete
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });
 
     unmount();
 
-    // Timer cleanup handled by useEffect cleanup — no fetch should happen
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    // Fetch was never called because timer was cleared
     expect(mockFetch).not.toHaveBeenCalled();
 
     abortSpy.mockRestore();

@@ -11,8 +11,7 @@ export interface RouteInfo {
 }
 
 export interface DirectionsState {
-  routeA: RouteInfo | null;
-  routeB: RouteInfo | null;
+  routes: (RouteInfo | null)[];
   loading: boolean;
   error: string | null;
 }
@@ -51,49 +50,52 @@ async function fetchRoute(
 }
 
 /**
- * Fetch dual Mapbox Directions routes (A→destination, B→destination)
+ * Fetch Mapbox Directions routes for N participants → destination
  * with a 3-second debounce. Skips refetch when all positions moved
  * less than 200m and profile is unchanged.
  *
- * @param posA - Participant A position
- * @param posB - Participant B position
+ * With 5 participants and 3s debounce, worst case is ~100 req/min
+ * (well within Mapbox free tier of 300 req/min).
+ *
+ * @param positions - Array of participant positions
  * @param destination - Selected venue or midpoint
  * @param profile - Travel mode: "driving" (default) or "walking"
  */
 export function useDirections(
-  posA: LatLng | null,
-  posB: LatLng | null,
+  positions: (LatLng | null)[],
   destination: LatLng | null,
   profile: TravelProfile = "driving",
 ): DirectionsState {
-  const [routeA, setRouteA] = useState<RouteInfo | null>(null);
-  const [routeB, setRouteB] = useState<RouteInfo | null>(null);
+  const [routes, setRoutes] = useState<(RouteInfo | null)[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const lastFetchRef = useRef<{
-    posA: LatLng;
-    posB: LatLng;
+    positions: LatLng[];
     dest: LatLng;
     profile: TravelProfile;
   } | null>(null);
 
+  // Serialize positions for dependency tracking
+  const posKey = JSON.stringify(positions);
+
   useEffect(() => {
-    if (!posA || !posB || !destination) return;
+    const validPositions = positions.filter((p): p is LatLng => p !== null);
+    if (validPositions.length === 0 || !destination) return;
 
     // Skip refetch if insufficient movement and same profile
     if (lastFetchRef.current) {
       const prev = lastFetchRef.current;
-      const movedA = haversineDistance(posA, prev.posA);
-      const movedB = haversineDistance(posB, prev.posB);
-      const movedDest = haversineDistance(destination, prev.dest);
       if (
-        movedA < MOVEMENT_THRESHOLD_M &&
-        movedB < MOVEMENT_THRESHOLD_M &&
-        movedDest < MOVEMENT_THRESHOLD_M &&
-        profile === prev.profile
+        prev.positions.length === validPositions.length &&
+        prev.profile === profile &&
+        haversineDistance(destination, prev.dest) < MOVEMENT_THRESHOLD_M &&
+        validPositions.every(
+          (pos, i) =>
+            haversineDistance(pos, prev.positions[i]) < MOVEMENT_THRESHOLD_M,
+        )
       ) {
         return;
       }
@@ -111,16 +113,20 @@ export function useDirections(
       setLoading(true);
 
       try {
-        const [rA, rB] = await Promise.all([
-          fetchRoute(posA, destination, signal, profile),
-          fetchRoute(posB, destination, signal, profile),
-        ]);
+        const results = await Promise.all(
+          validPositions.map((pos) =>
+            fetchRoute(pos, destination, signal, profile),
+          ),
+        );
 
         if (!signal.aborted) {
-          setRouteA(rA);
-          setRouteB(rB);
+          setRoutes(results);
           setError(null);
-          lastFetchRef.current = { posA, posB, dest: destination, profile };
+          lastFetchRef.current = {
+            positions: validPositions,
+            dest: destination,
+            profile,
+          };
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -136,7 +142,7 @@ export function useDirections(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [posA, posB, destination, profile]);
+  }, [posKey, destination, profile]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -146,5 +152,5 @@ export function useDirections(
     };
   }, []);
 
-  return { routeA, routeB, loading, error };
+  return { routes, loading, error };
 }
