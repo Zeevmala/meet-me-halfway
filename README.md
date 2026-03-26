@@ -1,10 +1,10 @@
 # Meet Me Halfway
 
-**A real-time midpoint PWA for two people.** Share a link, stream locations live, find nearby venues, and meet in the middle — all from the browser.
+**A real-time midpoint PWA for up to 5 participants.** Share a link, stream locations live, find nearby venues, and meet in the middle — all from the browser.
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript&logoColor=white)
-![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
 ![Mapbox](https://img.shields.io/badge/Mapbox_GL-3.x-000?logo=mapbox&logoColor=white)
 ![Firebase](https://img.shields.io/badge/Firebase-11-FFCA28?logo=firebase&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -18,19 +18,20 @@
 
 ## Features
 
-- **Live Location Streaming** — Both participants stream GPS coords via Firebase RTDB in real-time
-- **Geodesic Midpoint** — Spherical great-circle formula updates live as either person moves
+- **Multi-Participant** — Up to 5 participants per session with color-coded markers (green, blue, orange, purple, pink)
+- **Live Location Streaming** — All participants stream GPS coords via Firebase RTDB in real-time
+- **Geographic Centroid** — Cartesian mean on unit sphere updates live as any participant moves
 - **Venue Search** — Google Places API finds nearby restaurants, cafes, and bars ranked by rating, proximity, popularity, and open status
-- **Dual Routing** — Mapbox Directions API shows driving or walking routes for both participants to the meeting point
+- **N-Participant Routing** — Mapbox Directions API shows driving or walking routes for all participants to the meeting point
 - **Dark Map UI** — Mapbox GL JS 3.x dark basemap with glass-morphism cards, accuracy circles, and smooth transitions
 - **Navigation Links** — One-tap Waze / Google Maps deep links to the selected venue or midpoint
 - **Session Codes** — 6-character codes with WhatsApp share and copy-link for instant invites
-- **Stale Detection** — Partner offline > 30s triggers dimmed marker + warning banner
+- **Stale Detection** — Per-participant offline detection (> 30s) triggers dimmed marker + warning banner
 - **Error Handling** — GPS denied/unavailable/timeout with retry, offline/reconnect banner, 24h session expiry
 - **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
 - **i18n + RTL** — English, Hebrew, Arabic with full RTL support via CSS logical properties
 - **PWA** — Installable, offline fallback, service worker caching
-- **147 Unit + Integration Tests** — geo-math, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, directions, page lifecycle
+- **162 Unit + Integration Tests** — geo-math, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, directions, page lifecycle
 
 ---
 
@@ -44,10 +45,10 @@
 
 ```mermaid
 graph TB
-    subgraph "Browser A"
+    subgraph "Browser 1"
         A[React PWA]
     end
-    subgraph "Browser B"
+    subgraph "Browser 2..5"
         B[React PWA]
     end
     subgraph "Firebase"
@@ -71,7 +72,7 @@ graph TB
     A -.->|venue search| GP
 ```
 
-Both browsers compute the midpoint client-side using a spherical great-circle formula — no server needed.
+All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed.
 
 ---
 
@@ -86,9 +87,9 @@ Both browsers compute the midpoint client-side using a spherical great-circle fo
 | Real-time | Firebase 11 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
 | Venues | Google Places API (New) — optional |
-| Midpoint | Spherical great-circle formula |
+| Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
 | i18n | i18next — English, Hebrew, Arabic (full RTL) |
-| Tests | Vitest + React Testing Library (147 tests) |
+| Tests | Vitest + React Testing Library (162 tests) |
 
 ---
 
@@ -161,10 +162,10 @@ meet-me-halfway/
 
 1. **Auth** — Firebase Anonymous Auth signs in silently on app load
 2. **Create** — 6-character session code generated, URL becomes `/?code=XXXXX`
-3. **Join** — Partner opens the shared link, joins as participant B
-4. **Stream** — Both locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
-5. **Midpoint** — Client computes spherical great-circle midpoint in real-time
-6. **Routes** — Mapbox Directions API fetches driving/walking routes for both participants
+3. **Join** — Up to 4 others open the shared link and join the session
+4. **Stream** — All locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
+5. **Midpoint** — Client computes geographic centroid in real-time
+6. **Routes** — Mapbox Directions API fetches driving/walking routes for all participants
 7. **Venues** — Google Places API searches nearby; ranked by rating, proximity, popularity, open status
 8. **Navigate** — Tap a venue to pin as meeting point; one-tap Waze/Google Maps navigation
 
@@ -174,7 +175,7 @@ meet-me-halfway/
 
 ```bash
 cd apps/web
-npx vitest run     # 147 unit + integration tests
+npx vitest run     # 162 unit + integration tests
 npm run tsc        # TypeScript strict mode check
 ```
 
