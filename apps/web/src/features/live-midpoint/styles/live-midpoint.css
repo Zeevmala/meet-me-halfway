@@ -9,7 +9,9 @@
   --live-text-muted: #9898b0;
   --live-green: #00d4aa;
   --live-blue: #6c8cff;
-  --live-pink: #ff6b9d;
+  --live-orange: #ff9f43;
+  --live-purple: #a855f7;
+  --live-pink: #f472b6;
   --live-red: #ff8a8a;
   --live-whatsapp: #25d366;
   --live-amber: #ffb300;
@@ -30,6 +32,10 @@
   font-family: var(--live-font);
   color: var(--live-text);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  line-height: 1.5;
 }
 
 .live-map-container {
@@ -101,12 +107,24 @@
   border-radius: 50%;
 }
 
-.live-pill-dot--green {
+.live-pill-dot--p0 {
   background: var(--live-green);
 }
 
-.live-pill-dot--blue {
+.live-pill-dot--p1 {
   background: var(--live-blue);
+}
+
+.live-pill-dot--p2 {
+  background: var(--live-orange);
+}
+
+.live-pill-dot--p3 {
+  background: var(--live-purple);
+}
+
+.live-pill-dot--p4 {
+  background: var(--live-pink);
 }
 
 .live-pill-dot--gray {
@@ -125,6 +143,7 @@
   flex-direction: column;
   gap: 12px;
   pointer-events: none;
+  max-width: 420px;
 }
 
 .live-bottom-panel > * {
@@ -149,6 +168,7 @@
   z-index: 10;
   padding: 16px 18px;
   animation: live-card-slide-up 0.3s ease-out;
+  max-width: 420px;
 }
 
 /* ── Waiting Card ── */
@@ -216,8 +236,10 @@
   min-height: 40px;
 }
 
-.live-btn--nav:hover {
-  background: rgba(255, 255, 255, 0.1);
+@media (hover: hover) {
+  .live-btn--nav:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 /* ── Midpoint Card ── */
@@ -265,9 +287,21 @@
 
 .live-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.live-stats--own {
+  grid-template-columns: 1fr;
+  margin-bottom: 8px;
+}
+
+.live-participant-list {
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 .live-stat {
@@ -282,22 +316,61 @@
 
 .live-stat-label {
   font-size: 11px;
+  line-height: 1.2;
   color: var(--live-text-muted);
   margin-bottom: 4px;
 }
 
 .live-stat-value {
   font-size: 18px;
+  line-height: 1.2;
   font-weight: 600;
   font-family: var(--live-mono);
 }
 
-.live-stat-value--green {
+.live-stat-value--p0 {
   color: var(--live-green);
 }
 
-.live-stat-value--blue {
+.live-stat-value--p1 {
   color: var(--live-blue);
+}
+
+.live-stat-value--p2 {
+  color: var(--live-orange);
+}
+
+.live-stat-value--p3 {
+  color: var(--live-purple);
+}
+
+.live-stat-value--p4 {
+  color: var(--live-pink);
+}
+
+.live-stat-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-inline-end: 4px;
+  vertical-align: middle;
+}
+
+.live-stat-dot--p0 {
+  background: var(--live-green);
+}
+.live-stat-dot--p1 {
+  background: var(--live-blue);
+}
+.live-stat-dot--p2 {
+  background: var(--live-orange);
+}
+.live-stat-dot--p3 {
+  background: var(--live-purple);
+}
+.live-stat-dot--p4 {
+  background: var(--live-pink);
 }
 
 .live-stat-sub {
@@ -321,6 +394,7 @@
   background: rgba(255, 107, 107, 0.15);
   border: 1px solid rgba(255, 107, 107, 0.3);
   font-size: 12px;
+  line-height: 1.4;
   color: var(--live-red);
 }
 
@@ -348,6 +422,7 @@
   font-size: 13px;
   color: var(--live-amber);
   pointer-events: auto;
+  max-width: 420px;
 }
 
 /* ── Error state ── */
@@ -393,14 +468,29 @@
   cursor: default;
 }
 
-.live-marker--a {
+.live-marker--p0 {
   background: var(--live-green);
   box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.3);
 }
 
-.live-marker--b {
+.live-marker--p1 {
   background: var(--live-blue);
   box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.3);
+}
+
+.live-marker--p2 {
+  background: var(--live-orange);
+  box-shadow: 0 0 0 3px rgba(255, 159, 67, 0.3);
+}
+
+.live-marker--p3 {
+  background: var(--live-purple);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.3);
+}
+
+.live-marker--p4 {
+  background: var(--live-pink);
+  box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.3);
 }
 
 .live-marker--mid {
@@ -418,14 +508,29 @@
   opacity: 0;
 }
 
-.live-marker--a .live-marker-ring {
+.live-marker--p0 .live-marker-ring {
   border-color: var(--live-green);
   animation: live-pulse-ring 2s ease-out infinite;
 }
 
-.live-marker--b .live-marker-ring {
+.live-marker--p1 .live-marker-ring {
   border-color: var(--live-blue);
-  animation: live-pulse-ring 2s ease-out infinite 0.5s;
+  animation: live-pulse-ring 2s ease-out infinite 0.4s;
+}
+
+.live-marker--p2 .live-marker-ring {
+  border-color: var(--live-orange);
+  animation: live-pulse-ring 2s ease-out infinite 0.8s;
+}
+
+.live-marker--p3 .live-marker-ring {
+  border-color: var(--live-purple);
+  animation: live-pulse-ring 2s ease-out infinite 1.2s;
+}
+
+.live-marker--p4 .live-marker-ring {
+  border-color: var(--live-pink);
+  animation: live-pulse-ring 2s ease-out infinite 1.6s;
 }
 
 .live-marker--mid .live-marker-ring {
@@ -510,8 +615,10 @@
   transition: background 0.15s;
 }
 
-.live-venues-clear:hover {
-  background: rgba(0, 212, 170, 0.1);
+@media (hover: hover) {
+  .live-venues-clear:hover {
+    background: rgba(0, 212, 170, 0.1);
+  }
 }
 
 .live-venues-list {
@@ -553,8 +660,10 @@
     background 0.15s;
 }
 
-.live-venue-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+@media (hover: hover) {
+  .live-venue-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
 }
 
 .live-venue-item--selected {
@@ -679,4 +788,78 @@
   );
   background-size: 200% 100%;
   animation: live-shimmer 2s ease-in-out infinite;
+}
+
+/* ── Custom scrollbar for venue list ── */
+
+.live-venues-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+.live-venues-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.live-venues-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.live-venues-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.live-venues-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Reduced motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+  .live-card,
+  .live-venues {
+    animation: none;
+  }
+
+  .live-marker-ring,
+  .live-badge-dot,
+  .live-waiting-shimmer {
+    animation: none;
+  }
+
+  .live-marker-ring {
+    opacity: 0.3;
+    transform: scale(1.4);
+  }
+
+  .live-badge-dot {
+    opacity: 1;
+  }
+
+  .live-btn,
+  .live-profile-btn,
+  .live-venue-item,
+  .live-venues-clear,
+  .live-marker--venue,
+  .live-marker--venue-selected,
+  .live-marker--stale {
+    transition: none;
+  }
+}
+
+/* ── Wider viewports: constrain panel width ── */
+
+@media (min-width: 600px) {
+  .live-bottom-panel,
+  .live-card:not(.live-bottom-panel .live-card) {
+    inset-inline-start: auto;
+    inset-inline-end: 14px;
+    width: 420px;
+  }
+
+  .live-offline-banner {
+    inset-inline-end: auto;
+    max-width: 360px;
+  }
 }

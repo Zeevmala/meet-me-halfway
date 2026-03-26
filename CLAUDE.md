@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Meet Me Halfway** — a client-side PWA that computes a live midpoint between two people and shows driving routes to the meeting point. Zero backend. Fully static, deployable to Firebase Hosting / Vercel / Netlify.
+**Meet Me Halfway** — a client-side PWA that computes a live midpoint between up to 5 participants and shows driving routes to the meeting point. Zero backend. Fully static, deployable to Firebase Hosting / Vercel / Netlify.
 
 ## Dev Commands
 
@@ -32,9 +32,10 @@ npx vitest run -t "midpoint"                                      # tests matchi
 - **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation)
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
-- **Mapbox Directions API** — client-side dual routing (both participants to midpoint), 3s debounced
+- **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
 - **Google Places API (New)** — venue search around midpoint (optional, disabled if `VITE_GOOGLE_PLACES_API_KEY` not set)
-- **Midpoint** — spherical great-circle formula, computed client-side
+- **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side
+- **Participant model** — up to 5 participants per session, indexed 0–4 (creator = 0), each with a distinct color
 - **i18next** — en/he/ar with full RTL support via CSS logical properties
 
 No backend, no database server, no Docker, no Python.
@@ -43,9 +44,9 @@ No backend, no database server, no Docker, no Python.
 
 1. App init → `signInAnonymously()` with retry (3 attempts, exponential backoff)
 2. **Creator** opens `/` → geolocation prompt → 6-char session code → URL becomes `/?code=XXXXX`
-3. **Joiner** opens `/?code=XXXXX` → joins as participant B
-4. Both locations stream to Firebase RTDB at `/sessions/{code}/participants/{uid}` (throttled 1 write/3s)
-5. Client computes spherical midpoint + fetches Mapbox driving routes
+3. **Joiners** (up to 4) open `/?code=XXXXX` → each registers in `participantUids/{uid}` and gets assigned an index (1–4)
+4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{uid}` (throttled 1 write/3s)
+5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
 6. Optional venue search around midpoint (Google Places, ranked by rating/proximity/popularity/open_now)
 
 ## Key Source Layout
@@ -58,11 +59,12 @@ apps/web/src/
 │   ├── components/                    # LiveMap, SessionBadge, WaitingCard, MidpointCard, VenueListCard
 │   ├── hooks/
 │   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
-│   │   ├── useLiveSession.ts          # RTDB session CRUD + partner location sync
-│   │   ├── useDirections.ts           # Mapbox Directions with debounce + movement threshold
+│   │   ├── useLiveSession.ts          # RTDB session CRUD + N-participant location sync
+│   │   ├── useDirections.ts           # Mapbox Directions for N participants with debounce + movement threshold
 │   │   └── useVenueSearch.ts          # Google Places with stability delay + distance cache
 │   └── lib/
-│       ├── geo-math.ts                # sphericalMidpoint, haversineDistance, accuracyCircleGeoJSON
+│       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
+│       ├── participant-config.ts      # MAX_PARTICIPANTS, ParticipantIndex type, PARTICIPANT_COLORS (5-color palette)
 │       ├── session-code.ts            # 6-char code generation/validation
 │       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now
 │       ├── places-api.ts              # Google Places API (New) client
@@ -85,11 +87,11 @@ Tests are co-located as `*.test.ts` / `*.test.tsx` next to source files. Test en
 /sessions/{6charCode}/
   created: number (timestamp)
   creatorUid: string (write-once, must match auth.uid)
-  joinerUid: string (write-once, must match auth.uid, requires creatorUid to exist)
+  participantUids/{uid}: true (write-once per uid, up to 5 participants)
   participants/{uid}: { lat, lng, accuracy, ts }  (uid-scoped writes only)
 ```
 
-Security rules enforce: auth required for all reads, uid-scoped writes, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`).
+Security rules enforce: auth required for all reads, uid-scoped writes, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`). Participant count (max 5) checked client-side since Firebase RTDB rules lack `numChildren()`.
 
 ## Code Conventions
 
@@ -101,6 +103,8 @@ Security rules enforce: auth required for all reads, uid-scoped writes, write-on
 - `LatLng` type uses `{ lat, lng }` (not arrays) for internal representation
 - Session error codes use typed union `SessionErrorCode` (not string matching)
 - i18n keys mapped via typed records (e.g., `SESSION_ERROR_I18N`)
+- Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0, joiners sorted by UID)
+- 5-color palette: green (#00d4aa), blue (#6c8cff), orange (#ff9f43), purple (#a855f7), pink (#f472b6) — CSS classes `--p0` through `--p4`
 
 ## Environment Variables
 

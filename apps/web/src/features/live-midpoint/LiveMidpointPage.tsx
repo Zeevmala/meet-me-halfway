@@ -9,9 +9,12 @@ import { useDirections } from "./hooks/useDirections";
 import type { TravelProfile } from "./hooks/useDirections";
 import { useVenueSearch } from "./hooks/useVenueSearch";
 import type { RankedVenue } from "./lib/venue-ranking";
-import { sphericalMidpoint } from "./lib/geo-math";
+import { geographicCentroid } from "./lib/geo-math";
+import type { LatLng } from "./lib/geo-math";
 import { normalizeCode, isValidCode } from "./lib/session-code";
+import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
+import type { MapParticipant } from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
@@ -71,17 +74,18 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();
 
-  // Determine positions for A and B based on role
-  const posA =
-    session.role === "a" ? session.ownPosition : session.partnerPosition;
-  const posB =
-    session.role === "b" ? session.ownPosition : session.partnerPosition;
+  // Build ordered positions array: own position first, then others
+  const allPositions: (LatLng | null)[] = useMemo(() => {
+    const others = session.participants.map((p) => p.position);
+    return [session.ownPosition, ...others];
+  }, [session.ownPosition, session.participants]);
 
-  // Compute midpoint when both positions available
+  // Compute geographic centroid when 2+ positions available
   const midpoint = useMemo(() => {
-    if (!posA || !posB) return null;
-    return sphericalMidpoint(posA, posB);
-  }, [posA, posB]);
+    const valid = allPositions.filter((p): p is LatLng => p !== null);
+    if (valid.length < 2) return null;
+    return geographicCentroid(valid);
+  }, [allPositions]);
 
   // Venue search + selection state
   const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
@@ -91,13 +95,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   // Destination: selected venue or midpoint
   const destination = selectedVenue ? selectedVenue.location : midpoint;
 
-  // Fetch dual routes with 3s debounce + 200m movement threshold
-  const { routeA, routeB } = useDirections(
-    posA,
-    posB,
-    destination,
-    travelProfile,
-  );
+  // Fetch routes for all participants with 3s debounce + 200m movement threshold
+  const { routes } = useDirections(allPositions, destination, travelProfile);
 
   // ── Clear venue selection if venue disappears from refreshed list ──
   useEffect(() => {
@@ -218,32 +217,55 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
-  // Derive accuracy values for A and B based on role
-  const accuracyA =
-    session.role === "a"
-      ? (geo.accuracy ?? null)
-      : (session.partnerAccuracy ?? null);
-  const accuracyB =
-    session.role === "b"
-      ? (geo.accuracy ?? null)
-      : (session.partnerAccuracy ?? null);
-  const partnerStale = session.phase === "partner_stale";
+  const ownIndex = session.ownIndex ?? (0 as ParticipantIndex);
 
   const isConnected =
-    session.phase === "connected" || session.phase === "partner_stale";
+    session.phase === "connected" || session.phase === "some_stale";
+
+  // Build map participants array
+  const mapParticipants: MapParticipant[] = [];
+  if (session.ownPosition) {
+    mapParticipants.push({
+      position: session.ownPosition,
+      accuracy: geo.accuracy ?? 0,
+      index: ownIndex,
+      isOwn: true,
+      stale: false,
+    });
+  }
+  for (const p of session.participants) {
+    mapParticipants.push({
+      position: p.position,
+      accuracy: p.accuracy,
+      index: p.index,
+      isOwn: false,
+      stale: p.stale,
+    });
+  }
+
+  // Build route geometries array (parallel to allPositions)
+  const routeGeometries = routes.map((r) => r?.geometry ?? null);
+
+  // Build badge participants
+  const badgeParticipants = session.participants.map((p) => ({
+    index: p.index,
+    connected: true,
+  }));
+
+  // Build MidpointCard other-participants
+  const otherParticipants = session.participants.map((p, i) => ({
+    index: p.index,
+    route: routes[i + 1] ?? null, // routes[0] is own, others start at 1
+    position: p.position,
+    stale: p.stale,
+  }));
 
   return (
     <div className="live-page">
       <LiveMap
-        posA={posA}
-        posB={posB}
+        participants={mapParticipants}
         midpoint={midpoint}
-        routeA={routeA?.geometry ?? null}
-        routeB={routeB?.geometry ?? null}
-        role={session.role}
-        accuracyA={accuracyA}
-        accuracyB={accuracyB}
-        partnerStale={partnerStale}
+        routes={routeGeometries}
         venues={venueSearch.venues}
         selectedVenue={selectedVenue}
       />
@@ -253,7 +275,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           code={session.code}
           phase={session.phase}
           ownConnected={geo.status === "watching"}
-          partnerConnected={session.partnerPosition !== null}
+          ownIndex={ownIndex}
+          participants={badgeParticipants}
         />
       )}
 
@@ -268,7 +291,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         <WaitingCard code={session.code} />
       )}
 
-      {isConnected && midpoint && posA && posB && (
+      {isConnected && midpoint && session.ownPosition && (
         <div className="live-bottom-panel">
           <VenueListCard
             venues={venueSearch.venues}
@@ -278,11 +301,10 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           />
           <MidpointCard
             midpoint={midpoint}
-            posA={posA}
-            posB={posB}
-            routeA={routeA}
-            routeB={routeB}
-            partnerStale={session.phase === "partner_stale"}
+            ownIndex={ownIndex}
+            ownPosition={session.ownPosition}
+            ownRoute={routes[0] ?? null}
+            otherParticipants={otherParticipants}
             destination={destination ?? midpoint}
             travelProfile={travelProfile}
             onProfileChange={setTravelProfile}

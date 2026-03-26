@@ -2,7 +2,11 @@ import mapboxgl from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
-import type { Role } from "../hooks/useLiveSession";
+import type { ParticipantIndex } from "../lib/participant-config";
+import {
+  PARTICIPANT_COLORS,
+  MAX_PARTICIPANTS,
+} from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
@@ -25,16 +29,18 @@ try {
   /* already loaded */
 }
 
+export interface MapParticipant {
+  position: LatLng;
+  accuracy: number;
+  index: ParticipantIndex;
+  isOwn: boolean;
+  stale: boolean;
+}
+
 interface LiveMapProps {
-  posA: LatLng | null;
-  posB: LatLng | null;
+  participants: MapParticipant[];
   midpoint: LatLng | null;
-  routeA: GeoJSON.LineString | null;
-  routeB: GeoJSON.LineString | null;
-  role: Role | null;
-  accuracyA: number | null;
-  accuracyB: number | null;
-  partnerStale: boolean;
+  routes: (GeoJSON.LineString | null)[];
   venues: RankedVenue[];
   selectedVenue: RankedVenue | null;
 }
@@ -59,72 +65,43 @@ function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
 }
 
 function addSourcesAndLayers(map: mapboxgl.Map): void {
-  // Accuracy circles (rendered below routes)
-  map.addSource("accuracy-a", { type: "geojson", data: EMPTY_FC });
-  map.addLayer({
-    id: "accuracy-a-fill",
-    type: "fill",
-    source: "accuracy-a",
-    paint: { "fill-color": "#00d4aa", "fill-opacity": 0.12 },
-  });
-  map.addLayer({
-    id: "accuracy-a-outline",
-    type: "line",
-    source: "accuracy-a",
-    paint: { "line-color": "#00d4aa", "line-width": 1, "line-opacity": 0.3 },
-  });
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    const color = PARTICIPANT_COLORS[i].hex;
 
-  map.addSource("accuracy-b", { type: "geojson", data: EMPTY_FC });
-  map.addLayer({
-    id: "accuracy-b-fill",
-    type: "fill",
-    source: "accuracy-b",
-    paint: { "fill-color": "#6c8cff", "fill-opacity": 0.12 },
-  });
-  map.addLayer({
-    id: "accuracy-b-outline",
-    type: "line",
-    source: "accuracy-b",
-    paint: { "line-color": "#6c8cff", "line-width": 1, "line-opacity": 0.3 },
-  });
+    // Accuracy circle
+    map.addSource(`accuracy-${i}`, { type: "geojson", data: EMPTY_FC });
+    map.addLayer({
+      id: `accuracy-${i}-fill`,
+      type: "fill",
+      source: `accuracy-${i}`,
+      paint: { "fill-color": color, "fill-opacity": 0.12 },
+    });
+    map.addLayer({
+      id: `accuracy-${i}-outline`,
+      type: "line",
+      source: `accuracy-${i}`,
+      paint: { "line-color": color, "line-width": 1, "line-opacity": 0.3 },
+    });
 
-  // Route A → midpoint (green, on top of accuracy circles)
-  map.addSource("route-a", { type: "geojson", data: EMPTY_FC });
-  map.addLayer({
-    id: "route-a-layer",
-    type: "line",
-    source: "route-a",
-    paint: {
-      "line-color": "#00d4aa",
-      "line-width": 4,
-      "line-opacity": 0.8,
-    },
-  });
-
-  // Route B → midpoint (blue)
-  map.addSource("route-b", { type: "geojson", data: EMPTY_FC });
-  map.addLayer({
-    id: "route-b-layer",
-    type: "line",
-    source: "route-b",
-    paint: {
-      "line-color": "#6c8cff",
-      "line-width": 4,
-      "line-opacity": 0.8,
-    },
-  });
+    // Route line
+    map.addSource(`route-${i}`, { type: "geojson", data: EMPTY_FC });
+    map.addLayer({
+      id: `route-${i}-layer`,
+      type: "line",
+      source: `route-${i}`,
+      paint: {
+        "line-color": color,
+        "line-width": 4,
+        "line-opacity": 0.8,
+      },
+    });
+  }
 }
 
 export default function LiveMap({
-  posA,
-  posB,
+  participants,
   midpoint,
-  routeA,
-  routeB,
-  role,
-  accuracyA,
-  accuracyB,
-  partnerStale,
+  routes,
   venues,
   selectedVenue,
 }: LiveMapProps) {
@@ -137,7 +114,6 @@ export default function LiveMap({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    // Always top-right so language switcher can safely use top-left
     const controlPos = "top-right" as const;
 
     const map = new mapboxgl.Map({
@@ -175,61 +151,51 @@ export default function LiveMap({
     };
   }, []);
 
-  // ── Update route A polyline ──
+  // ── Update route polylines ──
   useEffect(() => {
     if (!mapInstance) return;
-    const src = mapInstance.getSource("route-a") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-    if (!src) return;
-    src.setData(routeA ? lineFeature(routeA) : EMPTY_FC);
-  }, [mapInstance, routeA]);
+    for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+      const src = mapInstance.getSource(`route-${i}`) as
+        | mapboxgl.GeoJSONSource
+        | undefined;
+      if (!src) continue;
+      const routeGeom = routes[i] ?? null;
+      src.setData(routeGeom ? lineFeature(routeGeom) : EMPTY_FC);
+    }
+  }, [mapInstance, routes]);
 
-  // ── Update route B polyline ──
+  // ── Update accuracy circles ──
   useEffect(() => {
     if (!mapInstance) return;
-    const src = mapInstance.getSource("route-b") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-    if (!src) return;
-    src.setData(routeB ? lineFeature(routeB) : EMPTY_FC);
-  }, [mapInstance, routeB]);
 
-  // ── Update accuracy circle A ──
-  useEffect(() => {
-    if (!mapInstance) return;
-    const src = mapInstance.getSource("accuracy-a") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-    if (!src) return;
-    src.setData(
-      posA && accuracyA
-        ? polygonFeature(accuracyCircleGeoJSON(posA, accuracyA))
-        : EMPTY_FC,
-    );
-  }, [mapInstance, posA, accuracyA]);
+    // Build a map of index → participant for quick lookup
+    const byIndex = new Map<number, MapParticipant>();
+    for (const p of participants) {
+      byIndex.set(p.index, p);
+    }
 
-  // ── Update accuracy circle B ──
-  useEffect(() => {
-    if (!mapInstance) return;
-    const src = mapInstance.getSource("accuracy-b") as
-      | mapboxgl.GeoJSONSource
-      | undefined;
-    if (!src) return;
-    src.setData(
-      posB && accuracyB
-        ? polygonFeature(accuracyCircleGeoJSON(posB, accuracyB))
-        : EMPTY_FC,
-    );
-  }, [mapInstance, posB, accuracyB]);
+    for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+      const src = mapInstance.getSource(`accuracy-${i}`) as
+        | mapboxgl.GeoJSONSource
+        | undefined;
+      if (!src) continue;
+      const p = byIndex.get(i);
+      src.setData(
+        p && p.accuracy
+          ? polygonFeature(accuracyCircleGeoJSON(p.position, p.accuracy))
+          : EMPTY_FC,
+      );
+    }
+  }, [mapInstance, participants]);
 
   // ── Fit bounds to all points (with jitter suppression) ──
   useEffect(() => {
     if (!mapInstance) return;
 
     const current: LatLng[] = [];
-    if (posA) current.push(posA);
-    if (posB) current.push(posB);
+    for (const p of participants) {
+      current.push(p.position);
+    }
     if (midpoint) current.push(midpoint);
     if (selectedVenue) current.push(selectedVenue.location);
 
@@ -271,11 +237,7 @@ export default function LiveMap({
         duration: 800,
       },
     );
-  }, [mapInstance, posA, posB, midpoint, selectedVenue]);
-
-  // Determine which position belongs to which role
-  const ownPos = role === "a" ? posA : posB;
-  const partnerPos = role === "a" ? posB : posA;
+  }, [mapInstance, participants, midpoint, selectedVenue]);
 
   return (
     <>
@@ -285,23 +247,17 @@ export default function LiveMap({
         role="application"
         aria-label="Interactive live map showing participant locations and midpoint"
       />
-      {mapInstance && ownPos && (
-        <LiveParticipantMarker
-          map={mapInstance}
-          lat={ownPos.lat}
-          lng={ownPos.lng}
-          role={role ?? "a"}
-        />
-      )}
-      {mapInstance && partnerPos && (
-        <LiveParticipantMarker
-          map={mapInstance}
-          lat={partnerPos.lat}
-          lng={partnerPos.lng}
-          role={role === "a" ? "b" : "a"}
-          stale={partnerStale}
-        />
-      )}
+      {mapInstance &&
+        participants.map((p) => (
+          <LiveParticipantMarker
+            key={p.index}
+            map={mapInstance}
+            lat={p.position.lat}
+            lng={p.position.lng}
+            participantIndex={p.index}
+            stale={p.stale}
+          />
+        ))}
       {mapInstance && midpoint && (
         <LiveMidpointMarker
           map={mapInstance}
