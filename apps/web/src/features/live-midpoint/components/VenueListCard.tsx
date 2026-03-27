@@ -34,7 +34,16 @@ export default function VenueListCard({
     );
   }
 
-  if (venues.length === 0) return null;
+  if (venues.length === 0) {
+    return (
+      <div className="live-venues live-glass">
+        <div className="live-venues-header">
+          <span className="live-venues-title">{t("live.nearbyVenues")}</span>
+        </div>
+        <div className="live-venue-empty">{t("live.noVenues")}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="live-venues live-glass">

@@ -22,7 +22,7 @@ export default function SessionBadge({
   const { t } = useTranslation();
 
   return (
-    <div className="live-badge live-glass">
+    <header className="live-badge live-glass">
       <span className="live-badge-code">{code}</span>
       {(phase === "connected" || phase === "some_stale") && (
         <span className="live-badge-dot" aria-label={t("live.liveIndicator")} />
@@ -43,6 +43,6 @@ export default function SessionBadge({
           </div>
         ))}
       </div>
-    </div>
+    </header>
   );
 }

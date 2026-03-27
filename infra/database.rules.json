@@ -19,7 +19,7 @@
         },
         "participants": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid",
+            ".write": "auth != null && $uid === auth.uid && (!data.exists() || newData.child('ts').val() > data.child('ts').val() + 2000)",
             ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
             "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
             "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },

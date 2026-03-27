@@ -6,7 +6,7 @@
   --live-glass: rgba(255, 255, 255, 0.04);
   --live-border: rgba(255, 255, 255, 0.06);
   --live-text: #e8e8f0;
-  --live-text-muted: #9898b0;
+  --live-text-muted: #a8a8c0;
   --live-green: #00d4aa;
   --live-blue: #6c8cff;
   --live-orange: #ff9f43;
@@ -203,7 +203,7 @@
   font-weight: 500;
   font-family: var(--live-font);
   cursor: pointer;
-  min-height: 40px;
+  min-height: 44px;
   transition:
     opacity 0.2s,
     transform 0.15s;
@@ -231,9 +231,10 @@
 .live-btn--nav {
   background: var(--live-glass);
   color: var(--live-text);
+  border: 1px solid var(--live-border);
   padding: 10px 14px;
   font-size: 13px;
-  min-height: 40px;
+  min-height: 44px;
 }
 
 @media (hover: hover) {
@@ -267,6 +268,7 @@
 .live-profile-btn {
   flex: 1;
   padding: 8px 14px;
+  min-height: 44px;
   background: transparent;
   border: none;
   border-radius: 8px;
@@ -611,6 +613,8 @@
   font-family: var(--live-font);
   cursor: pointer;
   padding: 4px 8px;
+  min-height: 44px;
+  min-width: 44px;
   border-radius: 8px;
   transition: background 0.15s;
 }
@@ -776,6 +780,79 @@
   .live-pill {
     padding: 3px 6px;
     font-size: 11px;
+  }
+}
+
+/* ── Empty venue state ── */
+
+.live-venue-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--live-text-muted);
+}
+
+/* ── Language Switcher (dark theme) ── */
+
+.live-lang-switcher {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top, 8px));
+  inset-inline-end: 10px;
+  z-index: 10;
+  display: flex;
+  gap: 4px;
+}
+
+.live-lang-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--live-border);
+  background: var(--live-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: var(--live-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--live-font);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.live-lang-btn--active {
+  background: var(--live-glass);
+  color: var(--live-text);
+  border-color: var(--live-blue);
+}
+
+.live-lang-btn:hover:not(.live-lang-btn--active) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.live-lang-btn:focus-visible {
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+}
+
+/* ── Tablet layout ── */
+
+@media (min-width: 768px) {
+  .live-bottom-panel {
+    max-width: 420px;
+    inset-inline-start: auto;
+    inset-inline-end: 16px;
+  }
+
+  .live-card {
+    max-width: 420px;
+    inset-inline-start: auto;
+    inset-inline-end: 16px;
   }
 }
 

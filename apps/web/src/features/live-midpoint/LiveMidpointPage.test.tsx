@@ -276,6 +276,5 @@ describe("LiveMidpointPage", () => {
     render(<LiveMidpointPage />);
 
     expect(screen.getByTestId("midpoint-card")).toBeTruthy();
-    expect(screen.getByTestId("venue-list-card")).toBeTruthy();
   });
 });

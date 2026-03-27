@@ -100,9 +100,12 @@ describe("useVenueSearch", () => {
   });
 
   it("caches result when midpoint moves < 100m", async () => {
-    const { result, rerender } = renderHook(({ mid }) => useVenueSearch(mid), {
-      initialProps: { mid: MIDPOINT },
-    });
+    const { result, rerender } = renderHook(
+      ({ mid }: { mid: LatLng | null }) => useVenueSearch(mid),
+      {
+        initialProps: { mid: MIDPOINT },
+      },
+    );
 
     // First search
     await act(async () => {
@@ -123,9 +126,12 @@ describe("useVenueSearch", () => {
   });
 
   it("re-searches when midpoint moves > 100m", async () => {
-    const { rerender } = renderHook(({ mid }) => useVenueSearch(mid), {
-      initialProps: { mid: MIDPOINT },
-    });
+    const { rerender } = renderHook(
+      ({ mid }: { mid: LatLng | null }) => useVenueSearch(mid),
+      {
+        initialProps: { mid: MIDPOINT },
+      },
+    );
 
     // First search
     await act(async () => {
@@ -171,9 +177,12 @@ describe("useVenueSearch", () => {
   });
 
   it("aborts previous request on rapid midpoint changes", async () => {
-    const { rerender } = renderHook(({ mid }) => useVenueSearch(mid), {
-      initialProps: { mid: MIDPOINT },
-    });
+    const { rerender } = renderHook(
+      ({ mid }: { mid: LatLng | null }) => useVenueSearch(mid),
+      {
+        initialProps: { mid: MIDPOINT },
+      },
+    );
 
     // Don't wait for stability — change midpoint
     await act(async () => {
@@ -197,9 +206,12 @@ describe("useVenueSearch", () => {
   });
 
   it("clears venues when midpoint becomes null", async () => {
-    const { result, rerender } = renderHook(({ mid }) => useVenueSearch(mid), {
-      initialProps: { mid: MIDPOINT as LatLng | null },
-    });
+    const { result, rerender } = renderHook(
+      ({ mid }: { mid: LatLng | null }) => useVenueSearch(mid),
+      {
+        initialProps: { mid: MIDPOINT as LatLng | null },
+      },
+    );
 
     await act(async () => {
       vi.advanceTimersByTime(5000);

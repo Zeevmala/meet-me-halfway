@@ -19,7 +19,10 @@ import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
 import VenueListCard from "./components/VenueListCard";
+import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
+
+const placesEnabled = !!import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
 
 /** Map session error codes to i18n keys. */
 const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
@@ -261,7 +264,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }));
 
   return (
-    <div className="live-page">
+    <main className="live-page">
       <LiveMap
         participants={mapParticipants}
         midpoint={midpoint}
@@ -280,6 +283,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         />
       )}
 
+      <LanguageSwitcher />
+
       {!networkStatus.isOnline && (
         <div className="live-offline-banner">
           <span>&#9888;</span>
@@ -293,12 +298,14 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
       {isConnected && midpoint && session.ownPosition && (
         <div className="live-bottom-panel">
-          <VenueListCard
-            venues={venueSearch.venues}
-            loading={venueSearch.loading}
-            selectedVenue={selectedVenue}
-            onSelectVenue={setSelectedVenue}
-          />
+          {placesEnabled && (
+            <VenueListCard
+              venues={venueSearch.venues}
+              loading={venueSearch.loading}
+              selectedVenue={selectedVenue}
+              onSelectVenue={setSelectedVenue}
+            />
+          )}
           <MidpointCard
             midpoint={midpoint}
             ownIndex={ownIndex}
@@ -312,6 +319,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           />
         </div>
       )}
-    </div>
+    </main>
   );
 }
