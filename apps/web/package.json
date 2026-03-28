@@ -9,9 +9,13 @@
     "preview": "vite preview",
     "tsc": "tsc --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lighthouse": "lhci autorun",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@sentry/react": "^10.46.0",
     "firebase": "^12.11.0",
     "i18next": "^23.11.5",
     "mapbox-gl": "^3.20.0",
@@ -20,6 +24,8 @@
     "react-i18next": "^14.1.2"
   },
   "devDependencies": {
+    "@lhci/cli": "^0.15.1",
+    "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/mapbox-gl": "^3.4.0",

@@ -16,7 +16,9 @@ export interface DirectionsState {
   error: string | null;
 }
 
-const DEBOUNCE_MS = 3_000;
+const INITIAL_DEBOUNCE_MS = 3_000;
+const MAX_BACKOFF_MS = 60_000;
+const BACKOFF_MULTIPLIER = 2;
 const MOVEMENT_THRESHOLD_M = 200;
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
@@ -72,6 +74,7 @@ export function useDirections(
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const backoffRef = useRef(INITIAL_DEBOUNCE_MS);
   const lastFetchRef = useRef<{
     positions: LatLng[];
     dest: LatLng;
@@ -122,6 +125,7 @@ export function useDirections(
         if (!signal.aborted) {
           setRoutes(results);
           setError(null);
+          backoffRef.current = INITIAL_DEBOUNCE_MS;
           lastFetchRef.current = {
             positions: validPositions,
             dest: destination,
@@ -131,13 +135,21 @@ export function useDirections(
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         if (!signal.aborted) {
+          const isRateLimit =
+            err instanceof Error && err.message === "RATE_LIMITED";
+          if (isRateLimit) {
+            backoffRef.current = Math.min(
+              backoffRef.current * BACKOFF_MULTIPLIER,
+              MAX_BACKOFF_MS,
+            );
+          }
           console.warn("[useDirections] fetch failed:", err);
           setError("DIRECTIONS_FAILED");
         }
       } finally {
         if (!signal.aborted) setLoading(false);
       }
-    }, DEBOUNCE_MS);
+    }, backoffRef.current);
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);

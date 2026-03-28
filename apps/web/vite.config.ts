@@ -11,6 +11,7 @@ export default defineConfig({
     include: ["mapbox-gl"],
   },
   build: {
+    sourcemap: true,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -18,6 +19,7 @@ export default defineConfig({
           firebase: ["firebase/app", "firebase/auth", "firebase/database"],
           mapbox: ["mapbox-gl"],
           i18n: ["i18next", "react-i18next"],
+          sentry: ["@sentry/react"],
         },
       },
     },

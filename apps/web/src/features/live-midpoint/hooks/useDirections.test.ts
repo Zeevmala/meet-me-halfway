@@ -273,6 +273,82 @@ describe("useDirections", () => {
     expect(result.current.error).toBe("DIRECTIONS_FAILED");
   });
 
+  it("backs off exponentially on 429 responses", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+    });
+
+    const { rerender } = renderHook(
+      ({ positions }: { positions: (LatLng | null)[] }) =>
+        useDirections(positions, MIDPOINT),
+      {
+        initialProps: { positions: [TEL_AVIV, JERUSALEM] as (LatLng | null)[] },
+      },
+    );
+
+    // First attempt fires at normal 3s debounce
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // Move positions so the hook wants to refetch
+    mockFetch.mockClear();
+    rerender({ positions: [TEL_AVIV_MOVED, JERUSALEM_MOVED] });
+
+    // At 3s the backed-off timer (6s) should NOT have fired yet
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // At 6s (doubled backoff) it should fire
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it("resets backoff after successful response", async () => {
+    // First call: 429
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+    });
+
+    const { rerender } = renderHook(
+      ({ positions }: { positions: (LatLng | null)[] }) =>
+        useDirections(positions, MIDPOINT),
+      {
+        initialProps: { positions: [TEL_AVIV, JERUSALEM] as (LatLng | null)[] },
+      },
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    // Second call: success with moved positions
+    mockFetch.mockResolvedValue(makeRouteResponse(50000, 3600));
+    rerender({ positions: [TEL_AVIV_MOVED, JERUSALEM_MOVED] });
+
+    await act(async () => {
+      vi.advanceTimersByTime(6000); // doubled backoff
+    });
+
+    // Third call: should be back to 3s debounce
+    mockFetch.mockClear();
+    rerender({ positions: [HAIFA, JERUSALEM] });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
   it("cleans up abort controller and timer on unmount", async () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
 
