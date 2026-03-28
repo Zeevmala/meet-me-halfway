@@ -2,9 +2,8 @@ import i18next from "i18next";
 import { initReactI18next } from "react-i18next";
 import en from "../i18n/en.json";
 import he from "../i18n/he.json";
-import ar from "../i18n/ar.json";
 
-const RTL_LOCALES = new Set(["he", "ar"]);
+const RTL_LOCALES = new Set(["he"]);
 
 export function applyDocumentDir(lang: string): void {
   document.dir = RTL_LOCALES.has(lang) ? "rtl" : "ltr";
@@ -31,7 +30,6 @@ i18n.init({
   resources: {
     en: { translation: en },
     he: { translation: he },
-    ar: { translation: ar },
   },
   lng: getSavedLanguage(),
   fallbackLng: "en",

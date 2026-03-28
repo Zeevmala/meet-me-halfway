@@ -25,9 +25,9 @@
 - [ ] Accuracy tested against known geodesic reference values (< 1m error)
 
 ### Frontend changes
-- [ ] RTL layout checked (`he` and `ar` locales)
+- [ ] RTL layout checked (`he` locale)
 - [ ] CSS logical properties used (no `margin-left/right`, `padding-left/right`)
-- [ ] i18n strings added to `en.json`, `he.json`, `ar.json`
+- [ ] i18n strings added to `en.json`, `he.json`
 
 ### Database changes
 - [ ] Alembic migration created (`alembic revision -m "..."`)

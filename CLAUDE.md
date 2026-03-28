@@ -36,7 +36,7 @@ npx vitest run -t "midpoint"                                      # tests matchi
 - **Google Places API (New)** — venue search around midpoint (optional, disabled if `VITE_GOOGLE_PLACES_API_KEY` not set)
 - **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side
 - **Participant model** — up to 5 participants per session, indexed 0–4 (creator = 0), each with a distinct color
-- **i18next** — en/he/ar with full RTL support via CSS logical properties
+- **i18next** — en/he with full RTL support via CSS logical properties
 
 No backend, no database server, no Docker, no Python.
 
@@ -76,7 +76,7 @@ apps/web/src/
 ├── lib/
 │   ├── env.ts                         # VITE_* env var validation (throws on missing required vars)
 │   └── i18n.ts                        # i18next config
-└── i18n/                              # en.json, he.json, ar.json — namespaces: app, live, common
+└── i18n/                              # en.json, he.json — namespaces: app, live, common
 ```
 
 Tests are co-located as `*.test.ts` / `*.test.tsx` next to source files. Test environment: jsdom with vitest globals.

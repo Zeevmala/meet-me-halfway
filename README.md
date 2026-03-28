@@ -29,7 +29,7 @@
 - **Stale Detection** — Per-participant offline detection (> 30s) triggers dimmed marker + warning banner
 - **Error Handling** — GPS denied/unavailable/timeout with retry, offline/reconnect banner, 24h session expiry
 - **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
-- **i18n + RTL** — English, Hebrew, Arabic with full RTL support via CSS logical properties
+- **i18n + RTL** — English, Hebrew with full RTL support via CSS logical properties
 - **PWA** — Installable, offline fallback, service worker caching
 - **162 Unit + Integration Tests** — geo-math, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, directions, page lifecycle
 
@@ -88,7 +88,7 @@ All browsers compute the midpoint client-side using a geographic centroid (Carte
 | Routing | Mapbox Directions API (client-side) |
 | Venues | Google Places API (New) — optional |
 | Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
-| i18n | i18next — English, Hebrew, Arabic (full RTL) |
+| i18n | i18next — English, Hebrew (full RTL) |
 | Tests | Vitest + React Testing Library (162 tests) |
 
 ---
@@ -144,7 +144,7 @@ meet-me-halfway/
 │   │   │   ├── lib/                   # geo-math, venue-ranking, places-api, nav-links
 │   │   │   └── styles/               # Dark glass-morphism theme
 │   │   ├── hooks/                     # useFirebase, useAuth, useNetworkStatus
-│   │   ├── i18n/                      # en.json, he.json, ar.json
+│   │   ├── i18n/                      # en.json, he.json
 │   │   └── main.tsx
 │   ├── public/                        # PWA manifest, service worker, icons
 │   └── package.json
@@ -203,7 +203,7 @@ In development, App Check uses a debug token. On first run, a debug token is pri
 
 ## i18n
 
-Three locales with full RTL support: English (`en`), Hebrew (`he`), Arabic (`ar`).
+Two locales with full RTL support: English (`en`), Hebrew (`he`).
 Translation files in `apps/web/src/i18n/`.
 
 ---

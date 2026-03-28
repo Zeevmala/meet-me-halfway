@@ -34,7 +34,9 @@ describe("SessionBadge", () => {
         phase={overrides.phase ?? "waiting"}
         ownConnected={overrides.ownConnected ?? false}
         ownIndex={overrides.ownIndex ?? 0}
-        participants={overrides.participants ?? [{ index: 1, connected: false }]}
+        participants={
+          overrides.participants ?? [{ index: 1, connected: false }]
+        }
       />,
     );
 

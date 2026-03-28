@@ -58,7 +58,12 @@ function renderCard(
     ownPosition,
     ownRoute: null as RouteInfo | null,
     otherParticipants: [
-      { index: 1 as ParticipantIndex, route: null, position: otherPosition, stale: false },
+      {
+        index: 1 as ParticipantIndex,
+        route: null,
+        position: otherPosition,
+        stale: false,
+      },
     ] as OtherParticipant[],
     destination,
     travelProfile: "driving" as const,
@@ -73,11 +78,11 @@ describe("MidpointCard", () => {
     renderCard();
 
     expect(screen.getByText("live.yourDistance")).toBeTruthy();
-    expect(
-      screen.getByText('live.participantDistance:{"n":2}'),
-    ).toBeTruthy();
+    expect(screen.getByText('live.participantDistance:{"n":2}')).toBeTruthy();
 
-    const expectedOwn = formatDistance(haversineDistance(ownPosition, midpoint));
+    const expectedOwn = formatDistance(
+      haversineDistance(ownPosition, midpoint),
+    );
     const expectedOther = formatDistance(
       haversineDistance(otherPosition, midpoint),
     );
@@ -88,20 +93,28 @@ describe("MidpointCard", () => {
   it("shows stale warning when a participant is stale", () => {
     renderCard({
       otherParticipants: [
-        { index: 1 as ParticipantIndex, route: null, position: otherPosition, stale: true },
+        {
+          index: 1 as ParticipantIndex,
+          route: null,
+          position: otherPosition,
+          stale: true,
+        },
       ],
     });
 
-    expect(
-      screen.getByText('live.participantStale:{"n":2}'),
-    ).toBeTruthy();
+    expect(screen.getByText('live.participantStale:{"n":2}')).toBeTruthy();
     expect(screen.getByText("live.participantStaleHint")).toBeTruthy();
   });
 
   it("hides stale warning when no participants are stale", () => {
     renderCard({
       otherParticipants: [
-        { index: 1 as ParticipantIndex, route: null, position: otherPosition, stale: false },
+        {
+          index: 1 as ParticipantIndex,
+          route: null,
+          position: otherPosition,
+          stale: false,
+        },
       ],
     });
 
@@ -111,9 +124,7 @@ describe("MidpointCard", () => {
   it("shows venue name when selectedVenueName is provided", () => {
     renderCard({ selectedVenueName: "Cafe Roma" });
 
-    expect(
-      screen.getByText('live.meetAt:{"name":"Cafe Roma"}'),
-    ).toBeTruthy();
+    expect(screen.getByText('live.meetAt:{"name":"Cafe Roma"}')).toBeTruthy();
   });
 
   it("driving/walking toggle calls onProfileChange", () => {
@@ -131,9 +142,7 @@ describe("MidpointCard", () => {
     renderCard();
 
     const wazeAnchor = screen.getByText("live.navigateWaze").closest("a");
-    const googleAnchor = screen
-      .getByText("live.navigateGoogle")
-      .closest("a");
+    const googleAnchor = screen.getByText("live.navigateGoogle").closest("a");
 
     expect(wazeAnchor!.getAttribute("href")).toBe(
       `https://waze.com/ul?ll=${destination.lat},${destination.lng}&navigate=yes`,
@@ -147,20 +156,19 @@ describe("MidpointCard", () => {
     const { unmount } = renderCard({
       ownRoute,
       otherParticipants: [
-        { index: 1 as ParticipantIndex, route: otherRoute, position: otherPosition, stale: false },
+        {
+          index: 1 as ParticipantIndex,
+          route: otherRoute,
+          position: otherPosition,
+          stale: false,
+        },
       ],
     });
 
     expect(screen.getByText(formatDistance(ownRoute.distance))).toBeTruthy();
-    expect(
-      screen.getByText(formatDistance(otherRoute.distance)),
-    ).toBeTruthy();
-    expect(
-      screen.getByText('live.driveTime:{"minutes":"40"}'),
-    ).toBeTruthy();
-    expect(
-      screen.getByText('live.driveTime:{"minutes":"35"}'),
-    ).toBeTruthy();
+    expect(screen.getByText(formatDistance(otherRoute.distance))).toBeTruthy();
+    expect(screen.getByText('live.driveTime:{"minutes":"40"}')).toBeTruthy();
+    expect(screen.getByText('live.driveTime:{"minutes":"35"}')).toBeTruthy();
 
     unmount();
 
