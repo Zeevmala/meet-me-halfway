@@ -134,7 +134,7 @@
 
 .live-bottom-panel {
   position: absolute;
-  bottom: max(14px, env(safe-area-inset-bottom, 14px));
+  bottom: max(40px, calc(env(safe-area-inset-bottom, 14px) + 26px));
   inset-inline-start: 14px;
   inset-inline-end: 14px;
   z-index: 10;
@@ -161,7 +161,7 @@
 
 .live-card {
   position: absolute;
-  bottom: max(14px, env(safe-area-inset-bottom, 14px));
+  bottom: max(40px, calc(env(safe-area-inset-bottom, 14px) + 26px));
   inset-inline-start: 14px;
   inset-inline-end: 14px;
   z-index: 10;
