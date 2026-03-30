@@ -1,4 +1,4 @@
-const CACHE_VERSION = "mmh-v6";
+const CACHE_VERSION = "mmh-v7";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 
 const SHELL_URLS = ["/", "/index.html"];

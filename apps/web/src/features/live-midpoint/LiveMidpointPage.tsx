@@ -19,7 +19,6 @@ import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
 import VenueListCard from "./components/VenueListCard";
-import LanguageSwitcher from "../../components/LanguageSwitcher";
 import "./styles/live-midpoint.css";
 
 const placesEnabled = !!import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
@@ -282,8 +281,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           participants={badgeParticipants}
         />
       )}
-
-      <LanguageSwitcher />
 
       {!networkStatus.isOnline && (
         <div className="live-offline-banner">

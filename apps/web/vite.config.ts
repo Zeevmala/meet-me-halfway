@@ -11,7 +11,7 @@ export default defineConfig({
     include: ["mapbox-gl"],
   },
   build: {
-    sourcemap: true,
+    sourcemap: !!process.env.CI,
     rollupOptions: {
       output: {
         manualChunks: {
