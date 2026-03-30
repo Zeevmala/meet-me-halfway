@@ -86,14 +86,6 @@ jobs:
           VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
           VITE_GOOGLE_PLACES_API_KEY: ${{ secrets.VITE_GOOGLE_PLACES_API_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
-      - name: Upload Sentry sourcemaps
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
-        working-directory: apps/web
-        run: npx @sentry/cli sourcemaps upload --org $SENTRY_ORG --project $SENTRY_PROJECT dist/
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
 
   lighthouse:
     runs-on: ubuntu-latest
@@ -182,14 +174,6 @@ jobs:
           VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
           VITE_GOOGLE_PLACES_API_KEY: ${{ secrets.VITE_GOOGLE_PLACES_API_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
-      - name: Upload Sentry sourcemaps
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
-        working-directory: apps/web
-        run: npx @sentry/cli sourcemaps upload --org $SENTRY_ORG --project $SENTRY_PROJECT dist/
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       - name: Strip sourcemaps from dist
         working-directory: apps/web
         run: rm -f dist/assets/*.js.map
