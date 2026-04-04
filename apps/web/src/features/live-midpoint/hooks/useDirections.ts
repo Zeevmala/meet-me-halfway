@@ -154,6 +154,7 @@ export function useDirections(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- posKey is the serialized form of positions
   }, [posKey, destination, profile]);
 
   // Cleanup on unmount

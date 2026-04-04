@@ -5,10 +5,12 @@ module.exports = {
   extends: [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
+    "plugin:react-hooks/recommended",
+    "plugin:jsx-a11y/recommended",
   ],
   ignorePatterns: ["dist", ".eslintrc.cjs"],
   parser: "@typescript-eslint/parser",
-  plugins: ["@typescript-eslint"],
+  plugins: ["@typescript-eslint", "react-hooks", "jsx-a11y"],
   rules: {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     // RTL safety: warn on hardcoded physical margin/padding directional properties.

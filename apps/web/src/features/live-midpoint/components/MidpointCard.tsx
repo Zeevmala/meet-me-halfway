@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
@@ -30,7 +31,7 @@ function formatDuration(seconds: number): string {
 }
 
 /** Bottom card shown when participants are connected. */
-export default function MidpointCard({
+export default memo(function MidpointCard({
   midpoint,
   ownIndex,
   ownPosition,
@@ -158,4 +159,4 @@ export default function MidpointCard({
       </div>
     </div>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "../styles/live-midpoint.css";
 
@@ -7,7 +7,7 @@ interface WaitingCardProps {
 }
 
 /** Bottom card shown while waiting for partner to join. */
-export default function WaitingCard({ code }: WaitingCardProps) {
+export default memo(function WaitingCard({ code }: WaitingCardProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
@@ -49,4 +49,4 @@ export default function WaitingCard({ code }: WaitingCardProps) {
       </div>
     </>
   );
-}
+});

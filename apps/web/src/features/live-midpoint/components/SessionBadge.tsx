@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPhase } from "../hooks/useLiveSession";
 import type { ParticipantIndex } from "../lib/participant-config";
@@ -12,7 +13,7 @@ interface SessionBadgeProps {
 }
 
 /** Top bar overlay: session code, live dot, participant status pills. */
-export default function SessionBadge({
+export default memo(function SessionBadge({
   code,
   phase,
   ownConnected,
@@ -45,4 +46,4 @@ export default function SessionBadge({
       </div>
     </header>
   );
-}
+});

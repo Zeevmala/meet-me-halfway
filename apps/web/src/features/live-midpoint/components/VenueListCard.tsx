@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { RankedVenue } from "../lib/venue-ranking";
 import { formatDistance } from "../lib/geo-math";
@@ -11,7 +12,7 @@ interface VenueListCardProps {
 }
 
 /** Bottom card listing nearby venues ranked by composite score. */
-export default function VenueListCard({
+export default memo(function VenueListCard({
   venues,
   loading,
   selectedVenue,
@@ -88,4 +89,4 @@ export default function VenueListCard({
       </div>
     </div>
   );
-}
+});

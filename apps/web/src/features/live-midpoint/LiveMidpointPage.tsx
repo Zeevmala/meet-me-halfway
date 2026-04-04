@@ -124,7 +124,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     } else {
       session.createSession();
     }
-    // Intentionally run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount
   }, []);
 
   // ── Pipe geolocation updates to Firebase ──
@@ -132,6 +132,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     if (geo.position && geo.accuracy !== null) {
       session.updateOwnLocation(geo.position, geo.accuracy);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps use stable sub-properties, not full objects
   }, [geo.position, geo.accuracy, session.updateOwnLocation]);
 
   // ── beforeunload cleanup ──

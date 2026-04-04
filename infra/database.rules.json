@@ -2,7 +2,7 @@
   "rules": {
     "sessions": {
       "$code": {
-        ".read": "auth != null",
+        ".read": "auth != null && data.child('created').val() > now - 86400000",
         "created": {
           ".write": "auth != null && !data.exists()",
           ".validate": "newData.isNumber()"
