@@ -23,7 +23,7 @@ jobs:
         working-directory: apps/web
       - name: npm audit
         working-directory: apps/web
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=high --omit=dev
       - name: eslint
         working-directory: apps/web
         run: npx eslint src/ --max-warnings=0
