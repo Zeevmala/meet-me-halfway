@@ -145,10 +145,10 @@ describe("MidpointCard", () => {
     const googleAnchor = screen.getByText("live.navigateGoogle").closest("a");
 
     expect(wazeAnchor!.getAttribute("href")).toBe(
-      `https://waze.com/ul?ll=${destination.lat},${destination.lng}&navigate=yes`,
+      `https://waze.com/ul?ll=${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}&navigate=yes`,
     );
     expect(googleAnchor!.getAttribute("href")).toBe(
-      `https://www.google.com/maps/dir/?api=1&destination=${destination.lat},${destination.lng}`,
+      `https://www.google.com/maps/dir/?api=1&destination=${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}`,
     );
   });
 

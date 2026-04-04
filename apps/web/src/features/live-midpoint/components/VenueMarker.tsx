@@ -19,12 +19,13 @@ export default function VenueMarker({
   selected,
 }: VenueMarkerProps) {
   const markerRef = useRef<mapboxgl.Marker | null>(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const labelRef = useRef<HTMLDivElement | null>(null);
 
+  // Effect 1: Create marker once per venue identity (map + name)
   useEffect(() => {
     const el = document.createElement("div");
-    el.className = selected
-      ? "live-marker--venue-selected"
-      : "live-marker--venue";
+    el.className = "live-marker--venue";
 
     const label = document.createElement("div");
     label.className = "live-marker-label";
@@ -34,12 +35,31 @@ export default function VenueMarker({
     markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
       .setLngLat([lng, lat])
       .addTo(map);
+    elementRef.current = el;
+    labelRef.current = label;
 
     return () => {
       markerRef.current?.remove();
       markerRef.current = null;
+      elementRef.current = null;
+      labelRef.current = null;
     };
-  }, [map, lat, lng, name, selected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- creation only; position/selection handled below
+  }, [map, name]);
+
+  // Effect 2: Update position without recreating DOM
+  useEffect(() => {
+    markerRef.current?.setLngLat([lng, lat]);
+  }, [lat, lng]);
+
+  // Effect 3: Toggle selected class without recreating DOM
+  useEffect(() => {
+    if (elementRef.current) {
+      elementRef.current.className = selected
+        ? "live-marker--venue-selected"
+        : "live-marker--venue";
+    }
+  }, [selected]);
 
   return null;
 }

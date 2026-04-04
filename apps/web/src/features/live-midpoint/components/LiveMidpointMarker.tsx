@@ -16,6 +16,7 @@ export default function LiveMidpointMarker({
 }: LiveMidpointMarkerProps) {
   const markerRef = useRef<mapboxgl.Marker | null>(null);
 
+  // Effect 1: Create marker once
   useEffect(() => {
     const el = document.createElement("div");
     el.className = "live-marker live-marker--mid";
@@ -24,7 +25,6 @@ export default function LiveMidpointMarker({
     ring.className = "live-marker-ring";
     el.appendChild(ring);
 
-    // lng,lat order — Mapbox/GeoJSON convention
     markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
       .setLngLat([lng, lat])
       .addTo(map);
@@ -33,7 +33,13 @@ export default function LiveMidpointMarker({
       markerRef.current?.remove();
       markerRef.current = null;
     };
-  }, [map, lat, lng]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- creation only; position handled below
+  }, [map]);
+
+  // Effect 2: Update position without recreating DOM
+  useEffect(() => {
+    markerRef.current?.setLngLat([lng, lat]);
+  }, [lat, lng]);
 
   return null;
 }

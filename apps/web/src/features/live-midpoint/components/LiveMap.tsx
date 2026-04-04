@@ -66,6 +66,7 @@ function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
 
 function addSourcesAndLayers(map: mapboxgl.Map): void {
   for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    if (map.getSource(`accuracy-${i}`)) continue; // already added (style.load re-entry)
     const color = PARTICIPANT_COLORS[i].hex;
 
     // Accuracy circle

@@ -8,7 +8,7 @@ export default defineConfig({
     hmr: true,
   },
   optimizeDeps: {
-    include: ["mapbox-gl"],
+    include: ["mapbox-gl", "firebase/app", "firebase/auth", "firebase/database"],
   },
   build: {
     sourcemap: !!process.env.CI,

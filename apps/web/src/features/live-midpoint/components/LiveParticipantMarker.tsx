@@ -20,25 +20,39 @@ export default function LiveParticipantMarker({
   stale = false,
 }: LiveParticipantMarkerProps) {
   const markerRef = useRef<mapboxgl.Marker | null>(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
 
+  // Effect 1: Create marker once (stable deps only)
   useEffect(() => {
     const el = document.createElement("div");
-    el.className = `live-marker live-marker--p${participantIndex}${stale ? " live-marker--stale" : ""}`;
+    el.className = `live-marker live-marker--p${participantIndex}`;
 
     const ring = document.createElement("div");
     ring.className = "live-marker-ring";
     el.appendChild(ring);
 
-    // lng,lat order — Mapbox/GeoJSON convention
     markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
       .setLngLat([lng, lat])
       .addTo(map);
+    elementRef.current = el;
 
     return () => {
       markerRef.current?.remove();
       markerRef.current = null;
+      elementRef.current = null;
     };
-  }, [map, lat, lng, participantIndex, stale]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- creation only; position handled below
+  }, [map, participantIndex]);
+
+  // Effect 2: Update position without recreating DOM
+  useEffect(() => {
+    markerRef.current?.setLngLat([lng, lat]);
+  }, [lat, lng]);
+
+  // Effect 3: Toggle stale class without recreating DOM
+  useEffect(() => {
+    elementRef.current?.classList.toggle("live-marker--stale", stale);
+  }, [stale]);
 
   return null;
 }
