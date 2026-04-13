@@ -50,7 +50,9 @@
     "walkTime": "~{{minutes}} דק׳ הליכה",
     "meetAt": "נפגשים ב{{name}}",
     "participantStaleHint": "ממתין לעדכון מיקומם...",
-    "participantCount": "{{count}}/{{max}} הצטרפו"
+    "participantCount": "{{count}}/{{max}} הצטרפו",
+    "inviteMore": "הזמן עוד",
+    "share": "שתף"
   },
   "common": {
     "back": "חזרה",

@@ -50,7 +50,9 @@
     "walkTime": "~{{minutes}} min walk",
     "meetAt": "Meet at {{name}}",
     "participantStaleHint": "Waiting for their location to update...",
-    "participantCount": "{{count}}/{{max}} joined"
+    "participantCount": "{{count}}/{{max}} joined",
+    "inviteMore": "Invite more",
+    "share": "Share"
   },
   "common": {
     "back": "Back",

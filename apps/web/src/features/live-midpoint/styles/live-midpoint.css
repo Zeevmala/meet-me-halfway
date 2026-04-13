@@ -143,6 +143,7 @@
   gap: 12px;
   pointer-events: none;
   max-width: 420px;
+  contain: layout style;
 }
 
 .live-bottom-panel > * {
@@ -168,6 +169,7 @@
   padding: 16px 18px;
   animation: live-card-slide-up 0.3s ease-out;
   max-width: 420px;
+  will-change: transform, opacity;
 }
 
 /* ── Waiting Card ── */
@@ -383,6 +385,30 @@
 .live-nav-buttons {
   display: flex;
   gap: 10px;
+}
+
+/* ── Share / Invite row ── */
+
+.live-share-row {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--live-border);
+}
+
+.live-share-label {
+  font-size: 11px;
+  color: var(--live-text-muted);
+  margin-bottom: 8px;
+}
+
+.live-share-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.live-btn--share {
+  background: var(--live-green);
+  color: #fff;
 }
 
 .live-stale-warning {
