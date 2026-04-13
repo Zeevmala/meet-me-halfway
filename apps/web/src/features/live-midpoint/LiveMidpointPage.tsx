@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
@@ -18,8 +18,10 @@ import type { MapParticipant } from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
-import VenueListCard from "./components/VenueListCard";
 import "./styles/live-midpoint.css";
+
+// Lazy-load VenueListCard — only needed when Places API key is configured
+const VenueListCard = lazy(() => import("./components/VenueListCard"));
 
 const placesEnabled = !!import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
 
@@ -297,12 +299,14 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       {isConnected && midpoint && session.ownPosition && (
         <div className="live-bottom-panel">
           {placesEnabled && (
-            <VenueListCard
-              venues={venueSearch.venues}
-              loading={venueSearch.loading}
-              selectedVenue={selectedVenue}
-              onSelectVenue={setSelectedVenue}
-            />
+            <Suspense fallback={null}>
+              <VenueListCard
+                venues={venueSearch.venues}
+                loading={venueSearch.loading}
+                selectedVenue={selectedVenue}
+                onSelectVenue={setSelectedVenue}
+              />
+            </Suspense>
           )}
           <MidpointCard
             midpoint={midpoint}
@@ -314,6 +318,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             travelProfile={travelProfile}
             onProfileChange={setTravelProfile}
             selectedVenueName={selectedVenue?.displayName ?? null}
+            code={session.code!}
+            participantCount={session.participants.length + 1}
           />
         </div>
       )}
