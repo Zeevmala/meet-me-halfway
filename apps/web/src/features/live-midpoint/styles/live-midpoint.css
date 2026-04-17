@@ -26,11 +26,16 @@
 
 .live-page {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
   background: var(--live-bg);
   font-family: var(--live-font);
   color: var(--live-text);
   overflow: hidden;
+  isolation: isolate;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -42,6 +47,7 @@
   inset: 0;
   width: 100%;
   height: 100%;
+  z-index: 1;
 }
 
 /* ── Glass-morphism card base ── */
