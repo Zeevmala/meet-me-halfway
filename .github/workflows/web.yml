@@ -6,8 +6,6 @@ on:
       - "apps/web/**"
       - ".github/workflows/web.yml"
   pull_request:
-    paths:
-      - "apps/web/**"
 
 jobs:
   lint:
