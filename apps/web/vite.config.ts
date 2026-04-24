@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { createHash } from "crypto";
@@ -26,12 +27,17 @@ function swCacheBust() {
 }
 
 export default defineConfig({
-  plugins: [react(), swCacheBust()],
+  plugins: [react(), tailwindcss(), swCacheBust()],
   server: {
     hmr: true,
   },
   optimizeDeps: {
-    include: ["mapbox-gl", "firebase/app", "firebase/auth", "firebase/database"],
+    include: [
+      "mapbox-gl",
+      "firebase/app",
+      "firebase/auth",
+      "firebase/database",
+    ],
   },
   build: {
     sourcemap: !!process.env.CI,
