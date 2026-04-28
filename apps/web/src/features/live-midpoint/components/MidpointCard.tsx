@@ -13,6 +13,7 @@ interface OtherParticipant {
   route: RouteInfo | null;
   position: LatLng;
   stale: boolean;
+  name: string | null;
 }
 
 interface MidpointCardProps {
@@ -106,7 +107,9 @@ export default memo(function MidpointCard({
           <div>
             {staleParticipants.map((p) => (
               <div key={p.index}>
-                {t("live.participantStale", { n: p.index + 1 })}
+                {p.name
+                  ? t("live.participantStaleNamed", { name: p.name })
+                  : t("live.participantStale", { n: p.index + 1 })}
               </div>
             ))}
             <div className="live-stale-hint">
@@ -168,7 +171,9 @@ export default memo(function MidpointCard({
                   <span
                     className={`live-stat-dot live-stat-dot--p${p.index}`}
                   />
-                  {t("live.participantDistance", { n: p.index + 1 })}
+                  {p.name
+                    ? t("live.participantDistanceNamed", { name: p.name })
+                    : t("live.participantDistance", { n: p.index + 1 })}
                 </div>
                 <div className={`live-stat-value live-stat-value--p${p.index}`}>
                   {p.route

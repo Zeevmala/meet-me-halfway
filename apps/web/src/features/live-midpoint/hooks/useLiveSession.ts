@@ -3,6 +3,7 @@ import { onValue, ref, remove, set, get } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { generateCode } from "../lib/session-code";
+import { getOrCreateDisplayName, sanitizeName } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
@@ -29,6 +30,7 @@ interface ParticipantData {
   lng: number;
   accuracy: number;
   ts: number;
+  name?: string;
 }
 
 /** Info about another participant in the session. */
@@ -39,6 +41,7 @@ export interface ParticipantInfo {
   lastSeen: number;
   index: ParticipantIndex;
   stale: boolean;
+  name: string | null;
 }
 
 export interface LiveSessionState {
@@ -144,6 +147,7 @@ export function useLiveSession(uid: string): LiveSessionState {
                 lastSeen: participant.ts,
                 index: assignIndex(participantUid, creatorUid, allUids),
                 stale: Date.now() - participant.ts > STALE_THRESHOLD_MS,
+                name: sanitizeName(participant.name),
               });
             }
           }
@@ -321,6 +325,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         lng: pos.lng,
         accuracy,
         ts: Date.now(),
+        name: getOrCreateDisplayName(),
       }).catch(() => {
         /* best-effort write */
       });
