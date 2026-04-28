@@ -25,6 +25,7 @@
             "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
             "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
             "ts": { ".validate": "newData.isNumber()" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 30" },
             "$other": { ".validate": false }
           }
         },

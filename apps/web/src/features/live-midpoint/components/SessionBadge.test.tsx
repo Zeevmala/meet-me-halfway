@@ -25,7 +25,11 @@ describe("SessionBadge", () => {
       phase: SessionPhase;
       ownConnected: boolean;
       ownIndex: ParticipantIndex;
-      participants: Array<{ index: ParticipantIndex; connected: boolean }>;
+      participants: Array<{
+        index: ParticipantIndex;
+        connected: boolean;
+        name: string | null;
+      }>;
     }> = {},
   ) =>
     render(
@@ -35,7 +39,7 @@ describe("SessionBadge", () => {
         ownConnected={overrides.ownConnected ?? false}
         ownIndex={overrides.ownIndex ?? 0}
         participants={
-          overrides.participants ?? [{ index: 1, connected: false }]
+          overrides.participants ?? [{ index: 1, connected: false, name: null }]
         }
       />,
     );
@@ -96,8 +100,8 @@ describe("SessionBadge", () => {
         ownConnected={true}
         ownIndex={0}
         participants={[
-          { index: 1, connected: true },
-          { index: 2, connected: false },
+          { index: 1, connected: true, name: null },
+          { index: 2, connected: false, name: null },
         ]}
       />,
     );

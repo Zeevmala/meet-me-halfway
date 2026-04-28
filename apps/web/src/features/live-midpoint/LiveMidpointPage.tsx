@@ -255,6 +255,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const badgeParticipants = session.participants.map((p) => ({
     index: p.index,
     connected: true,
+    name: p.name,
   }));
 
   // Build MidpointCard other-participants
@@ -263,6 +264,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     route: routes[i + 1] ?? null, // routes[0] is own, others start at 1
     position: p.position,
     stale: p.stale,
+    name: p.name,
   }));
 
   return (

@@ -9,7 +9,11 @@ interface SessionBadgeProps {
   phase: SessionPhase;
   ownConnected: boolean;
   ownIndex: ParticipantIndex;
-  participants: Array<{ index: ParticipantIndex; connected: boolean }>;
+  participants: Array<{
+    index: ParticipantIndex;
+    connected: boolean;
+    name: string | null;
+  }>;
 }
 
 /** Top bar overlay: session code, live dot, participant status pills. */
@@ -40,7 +44,9 @@ export default memo(function SessionBadge({
             <span
               className={`live-pill-dot ${p.connected ? `live-pill-dot--p${p.index}` : "live-pill-dot--gray"}`}
             />
-            {t("live.participant", { n: p.index + 1 })}
+            {p.name
+              ? t("live.participantNamed", { name: p.name })
+              : t("live.participant", { n: p.index + 1 })}
           </div>
         ))}
       </div>

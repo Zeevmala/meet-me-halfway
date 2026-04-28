@@ -261,6 +261,7 @@ describe("LiveMidpointPage", () => {
           lastSeen: Date.now(),
           index: 1,
           stale: false,
+          name: null,
         },
         {
           uid: "p2",
@@ -269,6 +270,7 @@ describe("LiveMidpointPage", () => {
           lastSeen: Date.now(),
           index: 2,
           stale: false,
+          name: null,
         },
       ],
     });

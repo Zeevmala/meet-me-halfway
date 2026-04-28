@@ -47,6 +47,7 @@ interface OtherParticipant {
   route: RouteInfo | null;
   position: LatLng;
   stale: boolean;
+  name: string | null;
 }
 
 function renderCard(
@@ -63,6 +64,7 @@ function renderCard(
         route: null,
         position: otherPosition,
         stale: false,
+        name: null,
       },
     ] as OtherParticipant[],
     destination,
@@ -98,6 +100,7 @@ describe("MidpointCard", () => {
           route: null,
           position: otherPosition,
           stale: true,
+          name: null,
         },
       ],
     });
@@ -114,6 +117,7 @@ describe("MidpointCard", () => {
           route: null,
           position: otherPosition,
           stale: false,
+          name: null,
         },
       ],
     });
@@ -161,6 +165,7 @@ describe("MidpointCard", () => {
           route: otherRoute,
           position: otherPosition,
           stale: false,
+          name: null,
         },
       ],
     });

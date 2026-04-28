@@ -31,6 +31,8 @@
   width: 100%;
   height: 100vh;
   height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--live-bg);
   font-family: var(--live-font);
   color: var(--live-text);
@@ -43,10 +45,10 @@
 }
 
 .live-map-container {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   z-index: 1;
 }
 
@@ -139,10 +141,11 @@
 /* ── Bottom panel container ── */
 
 .live-bottom-panel {
-  position: absolute;
-  bottom: max(40px, calc(env(safe-area-inset-bottom, 14px) + 26px));
-  inset-inline-start: 14px;
-  inset-inline-end: 14px;
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 14px max(14px, env(safe-area-inset-bottom, 14px));
+  max-height: 55dvh;
+  overflow-y: auto;
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -167,15 +170,22 @@
 /* ── Bottom cards (standalone, e.g. WaitingCard) ── */
 
 .live-card {
-  position: absolute;
-  bottom: max(40px, calc(env(safe-area-inset-bottom, 14px) + 26px));
-  inset-inline-start: 14px;
-  inset-inline-end: 14px;
+  position: relative;
+  margin: auto 14px max(14px, env(safe-area-inset-bottom, 14px));
+  flex: 0 0 auto;
+  max-height: 55dvh;
+  overflow-y: auto;
   z-index: 10;
   padding: 16px 18px;
   animation: live-card-slide-up 0.3s ease-out;
   max-width: 420px;
   will-change: transform, opacity;
+}
+
+.live-bottom-panel .live-card {
+  margin: 0;
+  max-height: none;
+  overflow-y: visible;
 }
 
 /* ── Waiting Card ── */
@@ -871,19 +881,19 @@
   outline-offset: 2px;
 }
 
-/* ── Tablet layout ── */
+/* ── Tablet/desktop layout: float card as side-anchored overlay over the map ── */
 
-@media (min-width: 768px) {
-  .live-bottom-panel {
-    max-width: 420px;
-    inset-inline-start: auto;
+@media (min-width: 600px) {
+  .live-bottom-panel,
+  .live-card:not(.live-bottom-panel .live-card) {
+    position: absolute;
     inset-inline-end: 16px;
-  }
-
-  .live-card {
-    max-width: 420px;
     inset-inline-start: auto;
-    inset-inline-end: 16px;
+    bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    width: 420px;
+    max-width: 420px;
+    max-height: calc(100dvh - 80px);
+    margin: 0;
   }
 }
 
@@ -956,16 +966,9 @@
   }
 }
 
-/* ── Wider viewports: constrain panel width ── */
+/* ── Wider viewports: offline banner constraint ── */
 
 @media (min-width: 600px) {
-  .live-bottom-panel,
-  .live-card:not(.live-bottom-panel .live-card) {
-    inset-inline-start: auto;
-    inset-inline-end: 14px;
-    width: 420px;
-  }
-
   .live-offline-banner {
     inset-inline-end: auto;
     max-width: 360px;
