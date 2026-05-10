@@ -283,6 +283,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           phase={session.phase}
           ownConnected={geo.status === "watching"}
           ownIndex={ownIndex}
+          ownName={session.ownName}
+          onNameChange={session.setOwnName}
           participants={badgeParticipants}
         />
       )}
@@ -294,37 +296,36 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         </div>
       )}
 
-      {session.phase === "waiting" && session.code && (
-        <WaitingCard code={session.code} />
-      )}
-
-      {isConnected && midpoint && session.ownPosition && (
-        <div className="live-bottom-panel">
-          {placesEnabled && (
-            <Suspense fallback={null}>
-              <VenueListCard
-                venues={venueSearch.venues}
-                loading={venueSearch.loading}
-                selectedVenue={selectedVenue}
-                onSelectVenue={setSelectedVenue}
-              />
-            </Suspense>
-          )}
-          <MidpointCard
-            midpoint={midpoint}
-            ownIndex={ownIndex}
-            ownPosition={session.ownPosition}
-            ownRoute={routes[0] ?? null}
-            otherParticipants={otherParticipants}
-            destination={destination ?? midpoint}
-            travelProfile={travelProfile}
-            onProfileChange={setTravelProfile}
-            selectedVenueName={selectedVenue?.displayName ?? null}
-            code={session.code!}
-            participantCount={session.participants.length + 1}
-          />
-        </div>
-      )}
+      {session.code &&
+        (isConnected && midpoint && session.ownPosition ? (
+          <div className="live-bottom-panel">
+            {placesEnabled && (
+              <Suspense fallback={null}>
+                <VenueListCard
+                  venues={venueSearch.venues}
+                  loading={venueSearch.loading}
+                  selectedVenue={selectedVenue}
+                  onSelectVenue={setSelectedVenue}
+                />
+              </Suspense>
+            )}
+            <MidpointCard
+              midpoint={midpoint}
+              ownIndex={ownIndex}
+              ownPosition={session.ownPosition}
+              ownRoute={routes[0] ?? null}
+              otherParticipants={otherParticipants}
+              destination={destination ?? midpoint}
+              travelProfile={travelProfile}
+              onProfileChange={setTravelProfile}
+              selectedVenueName={selectedVenue?.displayName ?? null}
+              code={session.code}
+              participantCount={session.participants.length + 1}
+            />
+          </div>
+        ) : (
+          <WaitingCard code={session.code} />
+        ))}
     </main>
   );
 }

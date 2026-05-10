@@ -55,7 +55,8 @@
     "participantStaleHint": "Waiting for their location to update...",
     "participantCount": "{{count}}/{{max}} joined",
     "inviteMore": "Invite more",
-    "share": "Share"
+    "share": "Share",
+    "editName": "Edit your name"
   },
   "common": {
     "back": "Back",

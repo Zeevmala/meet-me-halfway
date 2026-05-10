@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { getOrCreateDisplayName, sanitizeName } from "./display-name";
+import {
+  getOrCreateDisplayName,
+  sanitizeName,
+  saveDisplayName,
+  firstLetter,
+} from "./display-name";
 
 const STORAGE_KEY = "mmhw:displayName";
 
@@ -84,5 +89,75 @@ describe("getOrCreateDisplayName", () => {
       userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
     });
     expect(getOrCreateDisplayName()).toBe("Custom");
+  });
+});
+
+describe("saveDisplayName", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("persists a trimmed value and returns it", () => {
+    const result = saveDisplayName("  Zeev  ");
+    expect(result).toBe("Zeev");
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("Zeev");
+  });
+
+  it("caps a long value at 20 chars before storing", () => {
+    const result = saveDisplayName("a".repeat(40));
+    expect(result).toBe("a".repeat(20));
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("a".repeat(20));
+  });
+
+  it("falls back to UA-derived name when input is empty", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36",
+    });
+    const result = saveDisplayName("   ");
+    expect(result).toBe("Android");
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("Android");
+  });
+
+  it("falls back to UA-derived name when input is non-string-like", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+    });
+    // sanitizeName rejects non-strings; saveDisplayName should fall back.
+    const result = saveDisplayName(42 as unknown as string);
+    expect(result).toBe("Mac");
+  });
+});
+
+describe("firstLetter", () => {
+  it("returns null for null/undefined/empty", () => {
+    expect(firstLetter(null)).toBeNull();
+    expect(firstLetter(undefined)).toBeNull();
+    expect(firstLetter("")).toBeNull();
+    expect(firstLetter("   ")).toBeNull();
+  });
+
+  it("returns uppercase first character for ASCII names", () => {
+    expect(firstLetter("Zeev")).toBe("Z");
+    expect(firstLetter("alex")).toBe("A");
+    expect(firstLetter("  iPhone ")).toBe("I");
+  });
+
+  it("uppercases unicode letters", () => {
+    expect(firstLetter("דני")).toBe("ד"); // Hebrew has no upper/lower case
+    expect(firstLetter("éric")).toBe("É");
+  });
+
+  it("handles surrogate pairs (emoji) without splitting", () => {
+    // Spread the codepoint with Array.from so the test mirrors the impl.
+    const flag = "🇮🇱Zeev";
+    const result = firstLetter(flag);
+    // The emoji's first codepoint is captured as one unit; toUpperCase is a no-op on it.
+    expect(result).toBe(Array.from(flag)[0]!.toUpperCase());
   });
 });

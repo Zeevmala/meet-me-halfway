@@ -3,7 +3,11 @@ import { onValue, ref, remove, set, get } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { generateCode } from "../lib/session-code";
-import { getOrCreateDisplayName, sanitizeName } from "../lib/display-name";
+import {
+  getOrCreateDisplayName,
+  sanitizeName,
+  saveDisplayName,
+} from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
@@ -49,11 +53,13 @@ export interface LiveSessionState {
   code: string | null;
   ownIndex: ParticipantIndex | null;
   ownPosition: LatLng | null;
+  ownName: string;
   participants: ParticipantInfo[];
   error: SessionErrorCode | null;
   createSession: () => Promise<string>;
   joinSession: (code: string) => Promise<void>;
   updateOwnLocation: (pos: LatLng, accuracy: number) => void;
+  setOwnName: (name: string) => void;
   cleanup: () => void;
 }
 
@@ -100,6 +106,9 @@ export function useLiveSession(uid: string): LiveSessionState {
   const [ownPosition, setOwnPosition] = useState<LatLng | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
   const [error, setError] = useState<SessionErrorCode | null>(null);
+  const [ownName, setOwnNameState] = useState<string>(() =>
+    getOrCreateDisplayName(),
+  );
 
   const unsubRef = useRef<Unsubscribe | null>(null);
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -113,6 +122,11 @@ export function useLiveSession(uid: string): LiveSessionState {
     pos: LatLng;
     accuracy: number;
   } | null>(null);
+
+  // Latest known own position/accuracy — used to flush a name change
+  // immediately even if no GPS update is pending.
+  const ownPositionRef = useRef<LatLng | null>(null);
+  const lastAccuracyRef = useRef<number | null>(null);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -206,33 +220,31 @@ export function useLiveSession(uid: string): LiveSessionState {
 
   /** Create a new live session as the creator (index 0). */
   const createSession = useCallback(async (): Promise<string> => {
-    setPhase("creating");
     setError(null);
 
     const sessionCode = generateCode();
 
+    // Make UI usable immediately — share button works even if RTDB is slow/offline.
+    // The code is locally generated; the writes below sync to the server when reachable.
+    creatorUidRef.current = uid;
+    setCode(sessionCode);
+    setOwnIndex(0);
+    setPhase("waiting");
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("code", sessionCode);
+    history.replaceState(null, "", url.toString());
+
+    listenForParticipants(sessionCode);
+    startStaleDetection();
+
     try {
-      // Write session metadata
       await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
       await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
       await set(
         ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
         true,
       );
-
-      creatorUidRef.current = uid;
-      setCode(sessionCode);
-      setOwnIndex(0);
-      setPhase("waiting");
-
-      // Update URL without reload
-      const url = new URL(window.location.href);
-      url.searchParams.set("code", sessionCode);
-      history.replaceState(null, "", url.toString());
-
-      listenForParticipants(sessionCode);
-      startStaleDetection();
-
       return sessionCode;
     } catch (err) {
       setPhase("error");
@@ -343,6 +355,8 @@ export function useLiveSession(uid: string): LiveSessionState {
   const updateOwnLocation = useCallback(
     (pos: LatLng, accuracy: number) => {
       setOwnPosition(pos);
+      ownPositionRef.current = pos;
+      lastAccuracyRef.current = accuracy;
 
       if (!codeRef.current) return;
 
@@ -366,6 +380,25 @@ export function useLiveSession(uid: string): LiveSessionState {
             }
           }, WRITE_THROTTLE_MS - elapsed);
         }
+      }
+    },
+    [flushWrite],
+  );
+
+  /**
+   * Update the local display name. Persists to localStorage and triggers
+   * an immediate RTDB write if we already have a position to attach.
+   */
+  const setOwnName = useCallback(
+    (raw: string) => {
+      const next = saveDisplayName(raw);
+      setOwnNameState(next);
+      if (
+        codeRef.current &&
+        ownPositionRef.current &&
+        lastAccuracyRef.current !== null
+      ) {
+        flushWrite(ownPositionRef.current, lastAccuracyRef.current);
       }
     },
     [flushWrite],
@@ -409,11 +442,13 @@ export function useLiveSession(uid: string): LiveSessionState {
     code,
     ownIndex,
     ownPosition,
+    ownName,
     participants,
     error,
     createSession,
     joinSession,
     updateOwnLocation,
+    setOwnName,
     cleanup,
   };
 }
