@@ -249,6 +249,37 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByText("app.offline")).toBeTruthy();
   });
 
+  it("renders waiting card (with share UI) whenever a code exists, even mid-creation", () => {
+    // Regression: previously, phase === "creating" with a code rendered no card
+    // at all, so the share button silently disappeared. The fix makes WaitingCard
+    // the fallback whenever code is set and the connected MidpointCard can't render.
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "creating",
+      code: "ABC123",
+    });
+
+    render(<LiveMidpointPage />);
+
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
+  });
+
+  it("falls back to waiting card when connected but no peer positions yet", () => {
+    // phase === "connected" can briefly coexist with empty participants during
+    // reconnect or a peer leaving, leaving midpoint null. WaitingCard should
+    // still render so the share button is reachable.
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: [],
+    });
+
+    render(<LiveMidpointPage />);
+
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
+    expect(screen.queryByTestId("midpoint-card")).toBeNull();
+  });
+
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),

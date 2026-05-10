@@ -55,7 +55,8 @@
     "participantStaleHint": "ממתין לעדכון מיקומם...",
     "participantCount": "{{count}}/{{max}} הצטרפו",
     "inviteMore": "הזמן עוד",
-    "share": "שתף"
+    "share": "שתף",
+    "editName": "ערוך/י את השם שלך"
   },
   "common": {
     "back": "חזרה",
