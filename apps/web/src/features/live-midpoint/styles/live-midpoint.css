@@ -417,6 +417,12 @@
   grid-column: 1 / -1;
 }
 
+/* Odd stat count in the 2-column grid → last stat spans the full row
+   instead of leaving a lopsided empty cell. */
+.live-stat:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .live-stat-label {
   font-size: 11px;
   line-height: 1.2;
