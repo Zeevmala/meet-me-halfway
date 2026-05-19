@@ -92,6 +92,24 @@ describe("MidpointCard", () => {
     expect(screen.getByText(expectedOther)).toBeTruthy();
   });
 
+  it("renders the full participant name in stat labels", () => {
+    renderCard({
+      otherParticipants: [
+        {
+          index: 1 as ParticipantIndex,
+          route: null,
+          position: otherPosition,
+          stale: false,
+          name: "Alexandra",
+        },
+      ],
+    });
+
+    expect(
+      screen.getByText('live.participantDistanceNamed:{"name":"Alexandra"}'),
+    ).toBeTruthy();
+  });
+
   it("shows stale warning when a participant is stale", () => {
     renderCard({
       otherParticipants: [

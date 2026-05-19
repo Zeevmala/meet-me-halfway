@@ -52,6 +52,45 @@
   z-index: 1;
 }
 
+/* ── Mapbox controls — match the dark glass theme ── */
+
+.live-map-container .mapboxgl-ctrl-group {
+  background: var(--live-surface);
+  border: 1px solid var(--live-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.live-map-container .mapboxgl-ctrl-group button + button {
+  border-top: 1px solid var(--live-border);
+}
+
+.live-map-container .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
+  filter: invert(1);
+}
+
+@media (hover: hover) {
+  .live-map-container .mapboxgl-ctrl-group button:not(:disabled):hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.live-map-container .mapboxgl-ctrl-attrib {
+  background: var(--live-surface);
+}
+
+.live-map-container .mapboxgl-ctrl-attrib,
+.live-map-container .mapboxgl-ctrl-attrib a {
+  color: var(--live-text-muted);
+}
+
+.live-map-container .mapboxgl-ctrl-attrib-button {
+  filter: invert(1);
+}
+
 /* ── Glass-morphism card base ── */
 
 .live-glass {
@@ -122,6 +161,7 @@
   color: inherit;
   min-height: 44px;
   min-width: 44px;
+  max-width: 120px;
   justify-content: center;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -145,20 +185,29 @@
 }
 
 .live-pill-input {
-  background: transparent;
-  border: none;
+  background: var(--live-glass);
+  border: 1px solid var(--live-border);
   outline: none;
   color: var(--live-text);
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  width: 80px;
-  padding: 2px 4px;
+  width: 120px;
+  padding: 3px 6px;
   border-radius: 6px;
 }
 
 .live-pill-input:focus-visible {
   background: rgba(255, 255, 255, 0.08);
+  border-color: var(--live-blue);
+}
+
+/* Self-pill label — truncates a long chosen name instead of overflowing. */
+.live-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .live-pill-dot--p0 {

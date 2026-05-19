@@ -100,17 +100,17 @@ describe("SessionBadge", () => {
     expect(ownPillAfter.classList.contains("live-pill-dot--gray")).toBe(true);
   });
 
-  it("renders own pill as a single uppercase first letter of ownName", () => {
+  it("renders own pill showing the chosen name", () => {
     renderBadge({ ownName: "zeev" });
     const btn = screen.getByLabelText("live.editName") as HTMLButtonElement;
     expect(btn.tagName).toBe("BUTTON");
-    expect(btn.textContent).toContain("Z");
+    expect(btn.textContent).toContain("zeev");
   });
 
-  it("falls back to '?' for empty ownName", () => {
+  it("shows 'You' for an empty ownName", () => {
     renderBadge({ ownName: "" });
     const btn = screen.getByLabelText("live.editName") as HTMLButtonElement;
-    expect(btn.textContent).toContain("?");
+    expect(btn.textContent).toContain("live.you");
   });
 
   it("shows first letter for named participants and index for unnamed", () => {

@@ -6,7 +6,6 @@ import { wazeLink, googleMapsLink } from "../lib/nav-links";
 import type { RouteInfo, TravelProfile } from "../hooks/useDirections";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
-import { firstLetter } from "../lib/display-name";
 import "../styles/live-midpoint.css";
 
 interface OtherParticipant {
@@ -106,16 +105,13 @@ export default memo(function MidpointCard({
         <div className="live-stale-warning">
           <span>&#9888;</span>
           <div>
-            {staleParticipants.map((p) => {
-              const letter = firstLetter(p.name);
-              return (
-                <div key={p.index}>
-                  {letter
-                    ? t("live.participantStaleNamed", { name: letter })
-                    : t("live.participantStale", { n: p.index + 1 })}
-                </div>
-              );
-            })}
+            {staleParticipants.map((p) => (
+              <div key={p.index}>
+                {p.name
+                  ? t("live.participantStaleNamed", { name: p.name })
+                  : t("live.participantStale", { n: p.index + 1 })}
+              </div>
+            ))}
             <div className="live-stale-hint">
               {t("live.participantStaleHint")}
             </div>
@@ -163,31 +159,28 @@ export default memo(function MidpointCard({
             </div>
           )}
         </div>
-        {otherParticipants.map((p) => {
-          const letter = firstLetter(p.name);
-          return (
-            <div key={p.index} className="live-stat">
-              <div className="live-stat-label">
-                <span className={`live-stat-dot live-stat-dot--p${p.index}`} />
-                {letter
-                  ? t("live.participantDistanceNamed", { name: letter })
-                  : t("live.participantDistance", { n: p.index + 1 })}
-              </div>
-              <div className={`live-stat-value live-stat-value--p${p.index}`}>
-                {p.route
-                  ? formatDistance(p.route.distance)
-                  : formatDistance(haversineDistance(p.position, midpoint))}
-              </div>
-              {p.route && (
-                <div className="live-stat-sub">
-                  {t(timeKey, {
-                    minutes: formatDuration(p.route.duration),
-                  })}
-                </div>
-              )}
+        {otherParticipants.map((p) => (
+          <div key={p.index} className="live-stat">
+            <div className="live-stat-label">
+              <span className={`live-stat-dot live-stat-dot--p${p.index}`} />
+              {p.name
+                ? t("live.participantDistanceNamed", { name: p.name })
+                : t("live.participantDistance", { n: p.index + 1 })}
             </div>
-          );
-        })}
+            <div className={`live-stat-value live-stat-value--p${p.index}`}>
+              {p.route
+                ? formatDistance(p.route.distance)
+                : formatDistance(haversineDistance(p.position, midpoint))}
+            </div>
+            {p.route && (
+              <div className="live-stat-sub">
+                {t(timeKey, {
+                  minutes: formatDuration(p.route.duration),
+                })}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       <div className="live-nav-buttons">

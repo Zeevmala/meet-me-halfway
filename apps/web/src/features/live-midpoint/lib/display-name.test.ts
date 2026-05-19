@@ -4,6 +4,7 @@ import {
   sanitizeName,
   saveDisplayName,
   firstLetter,
+  isDerivedName,
 } from "./display-name";
 
 const STORAGE_KEY = "mmhw:displayName";
@@ -159,5 +160,32 @@ describe("firstLetter", () => {
     const result = firstLetter(flag);
     // The emoji's first codepoint is captured as one unit; toUpperCase is a no-op on it.
     expect(result).toBe(Array.from(flag)[0]!.toUpperCase());
+  });
+});
+
+describe("isDerivedName", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns false for null/undefined/empty values", () => {
+    expect(isDerivedName(null)).toBe(false);
+    expect(isDerivedName(undefined)).toBe(false);
+    expect(isDerivedName("")).toBe(false);
+  });
+
+  it("returns true when the name matches the UA-derived label", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    });
+    expect(isDerivedName("Windows")).toBe(true);
+    expect(isDerivedName("  Windows  ")).toBe(true);
+  });
+
+  it("returns false for a user-chosen name", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    });
+    expect(isDerivedName("Zeev")).toBe(false);
   });
 });
