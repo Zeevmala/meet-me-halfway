@@ -69,15 +69,60 @@ describe("useNetworkStatus", () => {
     expect(result.current.browserOnline).toBe(true);
   });
 
-  it("sets firebaseConnected to false when .info/connected is false", () => {
-    const { result } = renderHook(() => useNetworkStatus());
+  it("flips firebaseConnected immediately but keeps isOnline true during 6s grace period", () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useNetworkStatus());
 
-    act(() => {
-      onValueCallback?.({ val: () => false });
-    });
+      act(() => {
+        onValueCallback?.({ val: () => false });
+      });
 
-    expect(result.current.firebaseConnected).toBe(false);
-    expect(result.current.isOnline).toBe(false);
+      // Raw signal flips immediately; debounced isOnline stays true.
+      expect(result.current.firebaseConnected).toBe(false);
+      expect(result.current.isOnline).toBe(true);
+
+      // Just before grace period — still considered online.
+      act(() => {
+        vi.advanceTimersByTime(5_999);
+      });
+      expect(result.current.isOnline).toBe(true);
+
+      // Once grace period elapses — banner-worthy offline.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(result.current.isOnline).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the offline grace timer if Firebase reconnects before it fires", () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useNetworkStatus());
+
+      act(() => {
+        onValueCallback?.({ val: () => false });
+      });
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      // Reconnect within the grace window.
+      act(() => {
+        onValueCallback?.({ val: () => true });
+      });
+      // Advance past where the timer would have fired.
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(result.current.firebaseConnected).toBe(true);
+      expect(result.current.isOnline).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cleans up event listeners and Firebase subscription on unmount", () => {

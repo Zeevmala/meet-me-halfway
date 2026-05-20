@@ -71,6 +71,24 @@ const WRITE_THROTTLE_MS = 3_000;
 // security rules can enforce server-side TTL in a future iteration.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Retry transient Firebase failures with exponential backoff (1s, 2s)
+// before surfacing the error. Most flake on iOS Safari resolves within
+// ~3s; this means users rarely see the error screen at all.
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Assign a ParticipantIndex based on UID position in sorted UID list.
  * Creator UID always gets index 0; others sorted lexicographically.
@@ -239,12 +257,14 @@ export function useLiveSession(uid: string): LiveSessionState {
     startStaleDetection();
 
     try {
-      await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
-      await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-      await set(
-        ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-        true,
-      );
+      await withRetry(async () => {
+        await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
+        await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
+        await set(
+          ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+          true,
+        );
+      });
       return sessionCode;
     } catch (err) {
       setPhase("error");
@@ -261,7 +281,7 @@ export function useLiveSession(uid: string): LiveSessionState {
 
       try {
         const sessionRef = ref(db, `sessions/${sessionCode}`);
-        const snap = await get(sessionRef);
+        const snap = await withRetry(() => get(sessionRef));
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
@@ -297,9 +317,11 @@ export function useLiveSession(uid: string): LiveSessionState {
 
         // Register as participant
         if (!existingUids.includes(uid)) {
-          await set(
-            ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-            true,
+          await withRetry(() =>
+            set(
+              ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+              true,
+            ),
           );
         }
 

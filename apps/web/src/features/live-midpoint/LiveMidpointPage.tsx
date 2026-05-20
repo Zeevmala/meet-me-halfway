@@ -30,10 +30,17 @@ const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
   SESSION_NOT_FOUND: "live.sessionNotFound",
   SESSION_FULL: "live.sessionFull",
   SESSION_EXPIRED: "live.sessionExpired",
-  CREATE_FAILED: "live.geoError",
-  JOIN_FAILED: "live.geoError",
-  CONNECTION_ERROR: "live.geoError",
+  CREATE_FAILED: "live.sessionCreateFailed",
+  JOIN_FAILED: "live.sessionJoinFailed",
+  CONNECTION_ERROR: "live.connectionError",
 };
+
+/** Session errors recoverable by reloading the page. */
+const RETRYABLE_SESSION_ERRORS: ReadonlySet<SessionErrorCode> = new Set([
+  "CREATE_FAILED",
+  "JOIN_FAILED",
+  "CONNECTION_ERROR",
+]);
 
 /** Read ?code= from URL query string. */
 function getCodeFromURL(): string | null {
@@ -206,6 +213,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }
 
   if (session.phase === "error") {
+    const retryable =
+      session.error !== null && RETRYABLE_SESSION_ERRORS.has(session.error);
     return (
       <div className="live-page">
         <div className="live-error">
@@ -214,9 +223,18 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             {t(
               session.error
                 ? SESSION_ERROR_I18N[session.error]
-                : "live.geoError",
+                : "live.connectionError",
             )}
           </div>
+          {retryable && (
+            <button
+              type="button"
+              className="live-btn live-retry-btn"
+              onClick={() => window.location.reload()}
+            >
+              {t("common.retry")}
+            </button>
+          )}
         </div>
       </div>
     );
