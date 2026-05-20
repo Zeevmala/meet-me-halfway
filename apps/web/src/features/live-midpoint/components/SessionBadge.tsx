@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPhase } from "../hooks/useLiveSession";
 import type { ParticipantIndex } from "../lib/participant-config";
-import { firstLetter } from "../lib/display-name";
+import { firstLetter, isDerivedName } from "../lib/display-name";
 import "../styles/live-midpoint.css";
 
 interface SessionBadgeProps {
@@ -72,7 +72,12 @@ export default memo(function SessionBadge({
     [commit, cancel],
   );
 
-  const ownLetter = firstLetter(ownName) ?? "?";
+  // Show the chosen name; fall back to a generic "You" for the auto-derived
+  // device label so the self pill never reads as a cryptic OS initial.
+  const ownLabel =
+    ownName.trim().length > 0 && !isDerivedName(ownName)
+      ? ownName
+      : t("live.you");
 
   return (
     <header className="live-badge live-glass">
@@ -108,7 +113,7 @@ export default memo(function SessionBadge({
             <span
               className={`live-pill-dot ${ownConnected ? `live-pill-dot--p${ownIndex}` : "live-pill-dot--gray"}`}
             />
-            {ownLetter}
+            <span className="live-pill-label">{ownLabel}</span>
           </button>
         )}
         {participants.map((p) => {

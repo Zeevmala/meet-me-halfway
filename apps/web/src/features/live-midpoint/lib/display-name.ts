@@ -63,3 +63,13 @@ export function firstLetter(name: string | null | undefined): string | null {
   // Array.from handles surrogate pairs (e.g. emoji) cleanly.
   return Array.from(trimmed)[0]!.toUpperCase();
 }
+
+/**
+ * True when `name` is an auto-derived device label (e.g. "Windows", "iPhone")
+ * rather than a name the user explicitly chose. Used to decide whether to
+ * show the name or a generic "You" for the current user.
+ */
+export function isDerivedName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return name.trim() === deriveFromUA();
+}
