@@ -3,6 +3,7 @@
     "title": "Meet Me Halfway",
     "offline": "You are offline",
     "errorTitle": "Something went wrong",
+    "errorMessage": "The app ran into an unexpected error. Please reload to try again.",
     "reload": "Reload"
   },
   "live": {
