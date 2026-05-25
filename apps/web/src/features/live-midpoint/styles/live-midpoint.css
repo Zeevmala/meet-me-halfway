@@ -591,6 +591,91 @@
   line-height: 1.5;
 }
 
+/* ── In-app browser callout (shown above retry on join failures) ── */
+
+.live-error-callout {
+  margin-top: 20px;
+  padding: 16px;
+  width: 100%;
+  max-width: 360px;
+  background: var(--live-glass);
+  border: 1px solid var(--live-border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.live-error-callout-text {
+  font-size: 13px;
+  color: var(--live-text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.live-error-callout-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.live-btn-primary {
+  background: var(--live-green);
+  color: #0a0a0f;
+  font-weight: 600;
+}
+
+.live-btn-secondary {
+  background: var(--live-glass);
+  color: var(--live-text);
+  border: 1px solid var(--live-border);
+}
+
+/* ── Error details expander (raw error text for debugging) ── */
+
+.live-error-details {
+  margin-top: 20px;
+  max-width: 360px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--live-text-muted);
+}
+
+.live-error-details > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  user-select: none;
+  list-style: none;
+}
+
+.live-error-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-error-details > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.live-error-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.live-error-details > code {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--live-border);
+  border-radius: 8px;
+  font-family: var(--live-mono);
+  font-size: 12px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: var(--live-text);
+  text-align: start;
+}
+
 /* ── Marker styles ── */
 
 .live-marker {

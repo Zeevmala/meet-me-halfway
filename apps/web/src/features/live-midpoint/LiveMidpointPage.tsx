@@ -4,7 +4,6 @@ import { useAuth } from "../../hooks/useAuth";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
-import type { SessionErrorCode } from "./hooks/useLiveSession";
 import { useDirections } from "./hooks/useDirections";
 import type { TravelProfile } from "./hooks/useDirections";
 import { useVenueSearch } from "./hooks/useVenueSearch";
@@ -18,29 +17,13 @@ import type { MapParticipant } from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
+import SessionErrorPanel from "./components/SessionErrorPanel";
 import "./styles/live-midpoint.css";
 
 // Lazy-load VenueListCard — only needed when Places API key is configured
 const VenueListCard = lazy(() => import("./components/VenueListCard"));
 
 const placesEnabled = !!import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
-
-/** Map session error codes to i18n keys. */
-const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
-  SESSION_NOT_FOUND: "live.sessionNotFound",
-  SESSION_FULL: "live.sessionFull",
-  SESSION_EXPIRED: "live.sessionExpired",
-  CREATE_FAILED: "live.sessionCreateFailed",
-  JOIN_FAILED: "live.sessionJoinFailed",
-  CONNECTION_ERROR: "live.connectionError",
-};
-
-/** Session errors recoverable by reloading the page. */
-const RETRYABLE_SESSION_ERRORS: ReadonlySet<SessionErrorCode> = new Set([
-  "CREATE_FAILED",
-  "JOIN_FAILED",
-  "CONNECTION_ERROR",
-]);
 
 /** Read ?code= from URL query string. */
 function getCodeFromURL(): string | null {
@@ -213,30 +196,11 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }
 
   if (session.phase === "error") {
-    const retryable =
-      session.error !== null && RETRYABLE_SESSION_ERRORS.has(session.error);
     return (
-      <div className="live-page">
-        <div className="live-error">
-          <div className="live-error-icon">&#9888;</div>
-          <div className="live-error-title">
-            {t(
-              session.error
-                ? SESSION_ERROR_I18N[session.error]
-                : "live.connectionError",
-            )}
-          </div>
-          {retryable && (
-            <button
-              type="button"
-              className="live-btn live-retry-btn"
-              onClick={() => window.location.reload()}
-            >
-              {t("common.retry")}
-            </button>
-          )}
-        </div>
-      </div>
+      <SessionErrorPanel
+        errorCode={session.error ?? "CONNECTION_ERROR"}
+        errorDetails={session.errorDetails}
+      />
     );
   }
 
