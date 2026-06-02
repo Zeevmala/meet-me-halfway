@@ -138,10 +138,17 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       geoStopRef.current();
       cleanupRef.current();
     };
+    // pagehide also fires on iOS Safari, where beforeunload is unreliable.
     window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("pagehide", handleUnload);
     return () => {
       window.removeEventListener("beforeunload", handleUnload);
-      handleUnload();
+      window.removeEventListener("pagehide", handleUnload);
+      // Intentionally do NOT call handleUnload() here. The session and
+      // geolocation hooks already tear themselves down on unmount via their
+      // own cleanup effects. Running the full teardown on every React unmount
+      // breaks StrictMode's dev remount cycle (mount→unmount→mount), where the
+      // init effect is guarded by initRef and never restarts GPS/the listener.
     };
   }, []);
 

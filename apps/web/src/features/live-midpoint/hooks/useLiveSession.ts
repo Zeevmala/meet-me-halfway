@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onValue, ref, remove, set, get } from "firebase/database";
+import {
+  onValue,
+  onDisconnect,
+  ref,
+  remove,
+  set,
+  get,
+} from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { getToken, type AppCheck } from "firebase/app-check";
 import * as Sentry from "@sentry/react";
@@ -211,6 +218,10 @@ export function useLiveSession(uid: string): LiveSessionState {
   // immediately even if no GPS update is pending.
   const ownPositionRef = useRef<LatLng | null>(null);
   const lastAccuracyRef = useRef<number | null>(null);
+
+  // Guard so we register the server-side onDisconnect cleanup only once
+  // per session (firing it repeatedly on every write is wasteful).
+  const disconnectArmedRef = useRef(false);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -455,6 +466,20 @@ export function useLiveSession(uid: string): LiveSessionState {
     (pos: LatLng, accuracy: number) => {
       if (!codeRef.current) return;
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
+
+      // Arm a server-side cleanup: when this client's socket drops (tab close,
+      // crash, network loss — none of which reliably fire beforeunload on
+      // mobile), Firebase removes our participant node. Without this, a
+      // departed participant lingers and keeps dragging the computed midpoint.
+      if (!disconnectArmedRef.current) {
+        disconnectArmedRef.current = true;
+        onDisconnect(ownRef)
+          .remove()
+          .catch(() => {
+            disconnectArmedRef.current = false; // allow a retry on next write
+          });
+      }
+
       set(ownRef, {
         lat: pos.lat,
         lng: pos.lng,
@@ -542,6 +567,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       throttleTimerRef.current = null;
     }
     pendingWriteRef.current = null;
+    // Reset the guard but leave the onDisconnect armed — it is the reliable
+    // backstop if this explicit remove() doesn't complete during unload.
+    disconnectArmedRef.current = false;
 
     if (codeRef.current) {
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
