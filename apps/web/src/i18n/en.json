@@ -64,7 +64,10 @@
     "participantCount": "{{count}}/{{max}} joined",
     "inviteMore": "Invite more",
     "share": "Share",
-    "editName": "Edit your name"
+    "editName": "Edit your name",
+    "privacy": "Privacy",
+    "terms": "Terms",
+    "github": "GitHub"
   },
   "common": {
     "back": "Back",

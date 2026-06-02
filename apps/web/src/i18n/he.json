@@ -64,7 +64,10 @@
     "participantCount": "{{count}}/{{max}} הצטרפו",
     "inviteMore": "הזמן עוד",
     "share": "שתף",
-    "editName": "ערוך/י את השם שלך"
+    "editName": "ערוך/י את השם שלך",
+    "privacy": "פרטיות",
+    "terms": "תנאי שימוש",
+    "github": "GitHub"
   },
   "common": {
     "back": "חזרה",

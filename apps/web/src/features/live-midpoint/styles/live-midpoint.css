@@ -1083,6 +1083,63 @@
   animation: live-shimmer 2s ease-in-out infinite;
 }
 
+/* ── Legal links footer (shown beneath WaitingCard) ── */
+
+.live-legal-links {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 14px max(12px, env(safe-area-inset-bottom, 12px));
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--live-text-muted);
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.live-legal-links a {
+  color: var(--live-text-muted);
+  text-decoration: none;
+  padding: 4px 2px;
+}
+
+@media (hover: hover) {
+  .live-legal-links a:hover {
+    color: var(--live-text);
+    text-decoration: underline;
+  }
+}
+
+.live-legal-links a:focus-visible {
+  color: var(--live-text);
+  text-decoration: underline;
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* When card has legal-links sibling, let legal-links own the bottom safe-area inset */
+.live-card:has(+ .live-legal-links) {
+  margin-bottom: 6px;
+}
+
+@media (min-width: 600px) {
+  .live-legal-links {
+    position: absolute;
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    bottom: max(10px, env(safe-area-inset-bottom, 10px));
+    margin: 0;
+  }
+
+  /* Push the card up so the legal-links bar doesn't overlap it */
+  .live-card:has(+ .live-legal-links):not(.live-bottom-panel .live-card) {
+    bottom: max(48px, calc(env(safe-area-inset-bottom, 16px) + 32px));
+  }
+}
+
 /* ── Custom scrollbar for venue list ── */
 
 .live-venues-list {
