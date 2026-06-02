@@ -1,6 +1,7 @@
 {
   "hosting": {
     "public": "apps/web/dist",
+    "cleanUrls": true,
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
@@ -14,7 +15,7 @@
         "headers": [
           {
             "key": "Content-Security-Policy",
-            "value": "default-src 'self'; script-src 'self' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://www.google.com; style-src 'self' 'unsafe-inline' https://api.mapbox.com; connect-src 'self' https://*.mapbox.com https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com https://places.googleapis.com; img-src 'self' data: blob: https://*.mapbox.com; worker-src 'self' blob:; child-src blob:; font-src 'self' data:; frame-src https://www.google.com https://www.recaptcha.net; frame-ancestors 'none'"
+            "value": "default-src 'self'; script-src 'self' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://www.google.com; style-src 'self' 'unsafe-inline' https://api.mapbox.com; connect-src 'self' https://*.mapbox.com https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com https://places.googleapis.com https://www.google.com https://*.ingest.sentry.io https://*.ingest.de.sentry.io; img-src 'self' data: blob: https://*.mapbox.com; worker-src 'self' blob:; child-src blob:; font-src 'self' data:; frame-src https://www.google.com https://www.recaptcha.net; frame-ancestors 'none'"
           },
           {
             "key": "Strict-Transport-Security",
@@ -44,6 +45,15 @@
           {
             "key": "Cache-Control",
             "value": "public,max-age=31536000,immutable"
+          }
+        ]
+      },
+      {
+        "source": "/sw.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
           }
         ]
       }

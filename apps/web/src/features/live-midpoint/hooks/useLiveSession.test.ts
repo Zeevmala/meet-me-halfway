@@ -6,6 +6,7 @@ import { useLiveSession } from "./useLiveSession";
 const mockSet = vi.fn();
 const mockGet = vi.fn();
 const mockRemove = vi.fn();
+const mockOnDisconnectRemove = vi.fn();
 const mockRef = vi.fn((_db: unknown, path?: string) => ({ path }));
 let onValueCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let onValueErrorCallback: ((err: Error) => void) | null = null;
@@ -23,6 +24,7 @@ vi.mock("firebase/database", () => ({
   },
   ref: (_db: unknown, path?: string) => mockRef(_db, path),
   remove: (r: unknown) => mockRemove(r),
+  onDisconnect: (r: unknown) => ({ remove: () => mockOnDisconnectRemove(r) }),
   set: (r: unknown, v: unknown) => mockSet(r, v),
   get: (r: unknown) => mockGet(r),
 }));
@@ -50,6 +52,7 @@ beforeEach(() => {
   onValueErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
+  mockOnDisconnectRemove.mockResolvedValue(undefined);
 
   // Mock window.location and history
   vi.stubGlobal("location", { href: "http://localhost:5173/", search: "" });
@@ -772,6 +775,27 @@ describe("useLiveSession", () => {
       });
 
       expect(mockRemove).not.toHaveBeenCalled();
+    });
+
+    // Regression guard: a departed participant whose socket drops without a
+    // clean cleanup() must be removed server-side, otherwise their stale
+    // position keeps dragging the computed midpoint.
+    it("arms a server-side onDisconnect removal on first write", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession();
+      });
+
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      });
+
+      expect(mockOnDisconnectRemove).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: `sessions/ABC234/participants/${TEST_UID}`,
+        }),
+      );
     });
   });
 });

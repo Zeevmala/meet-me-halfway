@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onValue, ref, remove, set, get } from "firebase/database";
+import {
+  onValue,
+  onDisconnect,
+  ref,
+  remove,
+  set,
+  get,
+} from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
+import { getToken, type AppCheck } from "firebase/app-check";
+import * as Sentry from "@sentry/react";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { generateCode } from "../lib/session-code";
 import {
@@ -11,6 +20,8 @@ import {
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
+import { classifyJoinError, describeError } from "../lib/error-classification";
+import { detectInAppBrowser } from "../lib/in-app-browser";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
@@ -19,6 +30,8 @@ export type SessionErrorCode =
   | "SESSION_EXPIRED"
   | "CREATE_FAILED"
   | "JOIN_FAILED"
+  | "JOIN_PERMISSION_DENIED"
+  | "JOIN_NETWORK_ERROR"
   | "CONNECTION_ERROR";
 
 export type SessionPhase =
@@ -56,6 +69,9 @@ export interface LiveSessionState {
   ownName: string;
   participants: ParticipantInfo[];
   error: SessionErrorCode | null;
+  /** Raw underlying error description — shown in the UI "Details" expander
+   * and useful when users report a failure. */
+  errorDetails: string | null;
   createSession: () => Promise<string>;
   joinSession: (code: string) => Promise<void>;
   updateOwnLocation: (pos: LatLng, accuracy: number) => void;
@@ -71,22 +87,78 @@ const WRITE_THROTTLE_MS = 3_000;
 // security rules can enforce server-side TTL in a future iteration.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Max time to wait for the initial App Check token before proceeding
+// anyway. In-app browsers can hang the reCAPTCHA fetch indefinitely.
+const APP_CHECK_TIMEOUT_MS = 5_000;
+
 // Retry transient Firebase failures with exponential backoff (1s, 2s)
 // before surfacing the error. Most flake on iOS Safari resolves within
 // ~3s; this means users rarely see the error screen at all.
-async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  attempts = 3,
+  isRetryable: (err: unknown) => boolean = () => true,
+): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i < attempts - 1) {
+      if (i < attempts - 1 && isRetryable(err)) {
         await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i)));
+      } else {
+        break;
       }
     }
   }
   throw lastErr;
+}
+
+/** Permission errors won't recover via retry — bail immediately. */
+function isTransientError(err: unknown): boolean {
+  return classifyJoinError(err) !== "JOIN_PERMISSION_DENIED";
+}
+
+/**
+ * Best-effort wait for the first App Check token. If App Check is not
+ * configured, resolves immediately. If reCAPTCHA hangs, times out so we
+ * don't block the join forever.
+ */
+async function waitForAppCheckToken(appCheck: AppCheck | null): Promise<void> {
+  if (!appCheck) return;
+  try {
+    await Promise.race([
+      getToken(appCheck, /* forceRefresh */ false),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("appcheck_timeout")),
+          APP_CHECK_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+  } catch (err) {
+    console.warn("[session] App Check token wait failed:", err);
+    Sentry.captureMessage("appcheck_token_wait_failed", {
+      level: "warning",
+      extra: { error: describeError(err) },
+    });
+    // Proceed anyway — server may still accept the request.
+  }
+}
+
+/** Build Sentry context for a session-flow failure. */
+function sessionContext(code: string | null) {
+  return {
+    session: {
+      // Don't ship the full code — keep PII low. The first 2 chars are
+      // enough to correlate with our own debug reports.
+      codePrefix: code ? code.slice(0, 2) : null,
+      online: typeof navigator !== "undefined" ? navigator.onLine : null,
+      inAppBrowser: detectInAppBrowser(),
+      hasAppCheck: !!import.meta.env.VITE_RECAPTCHA_SITE_KEY,
+    },
+  };
 }
 
 /**
@@ -116,7 +188,7 @@ function assignIndex(
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
 export function useLiveSession(uid: string): LiveSessionState {
-  const { db } = useFirebase();
+  const { db, appCheck } = useFirebase();
 
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [code, setCode] = useState<string | null>(null);
@@ -124,6 +196,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   const [ownPosition, setOwnPosition] = useState<LatLng | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
   const [error, setError] = useState<SessionErrorCode | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [ownName, setOwnNameState] = useState<string>(() =>
     getOrCreateDisplayName(),
   );
@@ -145,6 +218,10 @@ export function useLiveSession(uid: string): LiveSessionState {
   // immediately even if no GPS update is pending.
   const ownPositionRef = useRef<LatLng | null>(null);
   const lastAccuracyRef = useRef<number | null>(null);
+
+  // Guard so we register the server-side onDisconnect cleanup only once
+  // per session (firing it repeatedly on every write is wasteful).
+  const disconnectArmedRef = useRef(false);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -197,7 +274,13 @@ export function useLiveSession(uid: string): LiveSessionState {
             );
           }
         },
-        () => {
+        (err) => {
+          console.error("[session] participants listener error:", err);
+          Sentry.captureException(err, {
+            tags: { phase: "listen", classified: classifyJoinError(err) },
+            contexts: sessionContext(codeRef.current),
+          });
+          setErrorDetails(describeError(err));
           setError("CONNECTION_ERROR");
           setPhase("error");
         },
@@ -239,6 +322,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   /** Create a new live session as the creator (index 0). */
   const createSession = useCallback(async (): Promise<string> => {
     setError(null);
+    setErrorDetails(null);
 
     const sessionCode = generateCode();
 
@@ -257,31 +341,49 @@ export function useLiveSession(uid: string): LiveSessionState {
     startStaleDetection();
 
     try {
-      await withRetry(async () => {
-        await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
-        await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-        await set(
-          ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-          true,
-        );
-      });
+      await waitForAppCheckToken(appCheck);
+      await withRetry(
+        async () => {
+          await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
+          await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
+          await set(
+            ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+            true,
+          );
+        },
+        3,
+        isTransientError,
+      );
       return sessionCode;
     } catch (err) {
+      console.error("[session] create failed:", err);
+      Sentry.captureException(err, {
+        tags: { phase: "create", classified: classifyJoinError(err) },
+        contexts: sessionContext(sessionCode),
+      });
+      setErrorDetails(describeError(err));
       setPhase("error");
       setError("CREATE_FAILED");
       throw err;
     }
-  }, [db, uid, listenForParticipants, startStaleDetection]);
+  }, [db, uid, appCheck, listenForParticipants, startStaleDetection]);
 
   /** Join an existing session. */
   const joinSession = useCallback(
     async (sessionCode: string): Promise<void> => {
       setPhase("creating");
       setError(null);
+      setErrorDetails(null);
 
       try {
+        await waitForAppCheckToken(appCheck);
+
         const sessionRef = ref(db, `sessions/${sessionCode}`);
-        const snap = await withRetry(() => get(sessionRef));
+        const snap = await withRetry(
+          () => get(sessionRef),
+          3,
+          isTransientError,
+        );
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
@@ -317,11 +419,14 @@ export function useLiveSession(uid: string): LiveSessionState {
 
         // Register as participant
         if (!existingUids.includes(uid)) {
-          await withRetry(() =>
-            set(
-              ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-              true,
-            ),
+          await withRetry(
+            () =>
+              set(
+                ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+                true,
+              ),
+            3,
+            isTransientError,
           );
         }
 
@@ -341,12 +446,19 @@ export function useLiveSession(uid: string): LiveSessionState {
         listenForParticipants(sessionCode);
         startStaleDetection();
       } catch (err) {
+        const classified = classifyJoinError(err);
+        console.error("[session] join failed:", err, "→", classified);
+        Sentry.captureException(err, {
+          tags: { phase: "join", classified },
+          contexts: sessionContext(sessionCode),
+        });
+        setErrorDetails(describeError(err));
         setPhase("error");
-        setError("JOIN_FAILED");
+        setError(classified);
         throw err;
       }
     },
-    [db, uid, listenForParticipants, startStaleDetection],
+    [db, uid, appCheck, listenForParticipants, startStaleDetection],
   );
 
   /** Flush a buffered position write to RTDB. */
@@ -354,6 +466,20 @@ export function useLiveSession(uid: string): LiveSessionState {
     (pos: LatLng, accuracy: number) => {
       if (!codeRef.current) return;
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
+
+      // Arm a server-side cleanup: when this client's socket drops (tab close,
+      // crash, network loss — none of which reliably fire beforeunload on
+      // mobile), Firebase removes our participant node. Without this, a
+      // departed participant lingers and keeps dragging the computed midpoint.
+      if (!disconnectArmedRef.current) {
+        disconnectArmedRef.current = true;
+        onDisconnect(ownRef)
+          .remove()
+          .catch(() => {
+            disconnectArmedRef.current = false; // allow a retry on next write
+          });
+      }
+
       set(ownRef, {
         lat: pos.lat,
         lng: pos.lng,
@@ -441,6 +567,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       throttleTimerRef.current = null;
     }
     pendingWriteRef.current = null;
+    // Reset the guard but leave the onDisconnect armed — it is the reliable
+    // backstop if this explicit remove() doesn't complete during unload.
+    disconnectArmedRef.current = false;
 
     if (codeRef.current) {
       const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
@@ -467,6 +596,7 @@ export function useLiveSession(uid: string): LiveSessionState {
     ownName,
     participants,
     error,
+    errorDetails,
     createSession,
     joinSession,
     updateOwnLocation,

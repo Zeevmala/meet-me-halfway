@@ -37,6 +37,11 @@
     "sessionExpired": "הסשן פג תוקף",
     "sessionCreateFailed": "לא הצלחנו ליצור סשן",
     "sessionJoinFailed": "לא הצלחנו להצטרף לסשן",
+    "sessionJoinPermission": "לא הצלחנו לגשת לסשן. ייתכן שהדפדפן חוסם אחסון או אימות.",
+    "sessionJoinNetwork": "החיבור נכשל. בדוק/י את הרשת ונסה/י שוב.",
+    "inAppBrowserDetected": "זה קורה לעיתים בדפדפנים מובנים של וואטסאפ, אינסטגרם ואפליקציות אחרות. פתח/י את הקישור בדפדפן הרגיל כדי להמשיך.",
+    "openInBrowser": "פתח בדפדפן",
+    "errorDetails": "פרטים",
     "connectionError": "תקלת חיבור",
     "liveIndicator": "חי",
     "accuracy": "דיוק {{meters}} מ׳",
@@ -60,7 +65,10 @@
     "participantCount": "{{count}}/{{max}} הצטרפו",
     "inviteMore": "הזמן עוד",
     "share": "שתף",
-    "editName": "ערוך/י את השם שלך"
+    "editName": "ערוך/י את השם שלך",
+    "privacy": "פרטיות",
+    "terms": "תנאי שימוש",
+    "github": "GitHub"
   },
   "common": {
     "back": "חזרה",
