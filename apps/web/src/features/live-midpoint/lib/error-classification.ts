@@ -26,7 +26,10 @@ function readField(err: unknown, field: keyof ErrorLike): string {
 }
 
 const PERMISSION_PATTERNS = [
-  /permission[_-]denied/i,
+  // Match all forms RTDB uses across transports: "PERMISSION_DENIED" (WS get),
+  // "permission_denied at /path…" (listener cancel), and the bare
+  // "Permission denied" (space-separated) that a denied get() rejects with.
+  /permission[\s_-]?denied/i,
   /^auth\//, // firebase auth/* error codes
   /unauthorized/i,
   /unauthenticated/i,

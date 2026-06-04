@@ -124,9 +124,18 @@ function isTransientError(err: unknown): boolean {
  * Best-effort wait for the first App Check token. If App Check is not
  * configured, resolves immediately. If reCAPTCHA hangs, times out so we
  * don't block the join forever.
+ *
+ * Returns `true` if a token was obtained (or App Check isn't configured),
+ * `false` if attestation failed/timed out. The caller uses this to
+ * disambiguate an otherwise-opaque RTDB failure: when App Check is enforced
+ * server-side and our token never arrived, the database rejects the request
+ * with an HTTP 401 the SDK surfaces with an unhelpful message — so a token
+ * failure is a strong signal the downstream error is an attestation block.
  */
-async function waitForAppCheckToken(appCheck: AppCheck | null): Promise<void> {
-  if (!appCheck) return;
+async function waitForAppCheckToken(
+  appCheck: AppCheck | null,
+): Promise<boolean> {
+  if (!appCheck) return true;
   try {
     await Promise.race([
       getToken(appCheck, /* forceRefresh */ false),
@@ -137,13 +146,16 @@ async function waitForAppCheckToken(appCheck: AppCheck | null): Promise<void> {
         ),
       ),
     ]);
+    return true;
   } catch (err) {
     console.warn("[session] App Check token wait failed:", err);
     Sentry.captureMessage("appcheck_token_wait_failed", {
       level: "warning",
       extra: { error: describeError(err) },
     });
-    // Proceed anyway — server may still accept the request.
+    // Proceed anyway — server may still accept the request if App Check is
+    // unenforced. If it is enforced, the caller reclassifies the failure.
+    return false;
   }
 }
 
@@ -375,8 +387,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       setError(null);
       setErrorDetails(null);
 
+      let appCheckOk = true;
       try {
-        await waitForAppCheckToken(appCheck);
+        appCheckOk = await waitForAppCheckToken(appCheck);
 
         const sessionRef = ref(db, `sessions/${sessionCode}`);
         const snap = await withRetry(
@@ -446,10 +459,16 @@ export function useLiveSession(uid: string): LiveSessionState {
         listenForParticipants(sessionCode);
         startStaleDetection();
       } catch (err) {
-        const classified = classifyJoinError(err);
+        let classified = classifyJoinError(err);
+        // App Check enforced + no token → the RTDB rejection is an attestation
+        // block (HTTP 401) the SDK reports with an opaque message. Promote the
+        // generic failure so the user gets actionable guidance instead.
+        if (classified === "JOIN_FAILED" && !appCheckOk) {
+          classified = "JOIN_PERMISSION_DENIED";
+        }
         console.error("[session] join failed:", err, "→", classified);
         Sentry.captureException(err, {
-          tags: { phase: "join", classified },
+          tags: { phase: "join", classified, appCheckOk: String(appCheckOk) },
           contexts: sessionContext(sessionCode),
         });
         setErrorDetails(describeError(err));

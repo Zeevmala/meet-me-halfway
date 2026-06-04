@@ -17,6 +17,14 @@ describe("classifyJoinError", () => {
     );
   });
 
+  it("classifies space-separated 'Permission denied' (denied WS get) ", () => {
+    // A denied RTDB get() rejects with `new Error(payload)` where payload is
+    // the bare server string "Permission denied" — no code, space-separated.
+    expect(classifyJoinError(new Error("Permission denied"))).toBe(
+      "JOIN_PERMISSION_DENIED",
+    );
+  });
+
   it("classifies Firebase auth/* codes as permission-denied", () => {
     expect(classifyJoinError({ code: "auth/network-request-failed" })).toBe(
       // network-request-failed wins because it's checked second?
