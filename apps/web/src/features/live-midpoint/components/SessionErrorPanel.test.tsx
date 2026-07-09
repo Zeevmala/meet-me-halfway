@@ -95,4 +95,26 @@ describe("SessionErrorPanel", () => {
     render(<SessionErrorPanel errorCode="SESSION_FULL" errorDetails={null} />);
     expect(screen.queryByText("live.inAppBrowserDetected")).toBeNull();
   });
+
+  it("renders auth error codes with a title and retry button", () => {
+    render(<SessionErrorPanel errorCode="AUTH_NETWORK" errorDetails={null} />);
+    expect(screen.getByText("live.authNetwork")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
+  });
+
+  it("shows the in-app callout for AUTH_STORAGE_BLOCKED in a WhatsApp UA", () => {
+    setUA(
+      "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 WhatsApp/2.24.5.78 A",
+    );
+    render(
+      <SessionErrorPanel
+        errorCode="AUTH_STORAGE_BLOCKED"
+        errorDetails={null}
+      />,
+    );
+    expect(screen.getByText("live.inAppBrowserDetected")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "live.openInBrowser" }),
+    ).toBeTruthy();
+  });
 });

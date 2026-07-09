@@ -48,13 +48,7 @@ export default function LiveMidpointPage() {
 
   if (auth.status === "error") {
     return (
-      <div className="live-page">
-        <div className="live-error">
-          <div className="live-error-icon">&#9888;</div>
-          <div className="live-error-title">{t("live.authError")}</div>
-          <div className="live-error-message">{auth.error}</div>
-        </div>
-      </div>
+      <SessionErrorPanel errorCode={auth.code} errorDetails={auth.message} />
     );
   }
 

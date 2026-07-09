@@ -29,10 +29,17 @@ vi.mock("firebase/database", () => ({
   get: (r: unknown) => mockGet(r),
 }));
 
-// ── Mock useFirebase ──
+// ── Mock firebase/app-check ──
+const mockGetToken = vi.fn();
+vi.mock("firebase/app-check", () => ({
+  getToken: (...args: unknown[]) => mockGetToken(...args),
+}));
+
+// ── Mock useFirebase (appCheck is mutable so attestation tests can opt in) ──
 const mockDb = { _db: true };
+let mockAppCheck: object | null = null;
 vi.mock("../../../hooks/useFirebase", () => ({
-  useFirebase: () => ({ app: {}, db: mockDb }),
+  useFirebase: () => ({ app: {}, db: mockDb, appCheck: mockAppCheck }),
 }));
 
 // ── Mock session-code to return deterministic codes ──
@@ -53,6 +60,8 @@ beforeEach(() => {
   mockSet.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
   mockOnDisconnectRemove.mockResolvedValue(undefined);
+  mockAppCheck = null;
+  mockGetToken.mockResolvedValue({ token: "test-token" });
 
   // Mock window.location and history
   vi.stubGlobal("location", { href: "http://localhost:5173/", search: "" });
@@ -373,6 +382,72 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.phase).toBe("waiting");
+    });
+  });
+
+  describe("App Check attestation classification", () => {
+    it("promotes an opaque join failure to JOIN_PERMISSION_DENIED when the token fetch fails", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mockAppCheck = { _appCheck: true };
+      mockGetToken.mockRejectedValue(new Error("recaptcha blocked"));
+      // Opaque error: matches neither permission nor network patterns,
+      // so classifyJoinError returns the catch-all JOIN_FAILED.
+      mockGet.mockRejectedValue(new Error("Something went wrong"));
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        const join = result.current.joinSession("XYZ789").catch(() => {
+          // joinSession rethrows after classifying — expected here
+        });
+        await vi.runAllTimersAsync();
+        await join;
+      });
+
+      expect(result.current.phase).toBe("error");
+      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
+      expect(mockGetToken).toHaveBeenCalledWith(mockAppCheck, false);
+
+      vi.useRealTimers();
+    });
+
+    it("keeps the generic JOIN_FAILED when the token was obtained", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mockAppCheck = { _appCheck: true };
+      mockGet.mockRejectedValue(new Error("Something went wrong"));
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        const join = result.current.joinSession("XYZ789").catch(() => {
+          // rethrow expected
+        });
+        await vi.runAllTimersAsync();
+        await join;
+      });
+
+      expect(result.current.phase).toBe("error");
+      expect(result.current.error).toBe("JOIN_FAILED");
+
+      vi.useRealTimers();
+    });
+
+    it("never requests a token when App Check is not configured", async () => {
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: Date.now(),
+          creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(mockGetToken).not.toHaveBeenCalled();
     });
   });
 

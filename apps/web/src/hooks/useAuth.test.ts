@@ -9,7 +9,6 @@ let authErrorCallback: ((err: Error) => void) | null = null;
 const mockUnsubscribe = vi.fn();
 
 vi.mock("firebase/auth", () => ({
-  getAuth: vi.fn(() => ({})),
   signInAnonymously: (...args: unknown[]) => mockSignInAnonymously(...args),
   onAuthStateChanged: (
     _auth: unknown,
@@ -23,8 +22,12 @@ vi.mock("firebase/auth", () => ({
 }));
 
 // ── Mock useFirebase ──
+// Stable singleton — the real useFirebase memoizes its return value, and
+// useAuth's effect depends on `auth` identity. A fresh object per render
+// would re-run the effect in a loop.
+const stableFirebase = { app: {}, db: {}, auth: {}, appCheck: null };
 vi.mock("./useFirebase", () => ({
-  useFirebase: () => ({ app: {}, db: {} }),
+  useFirebase: () => stableFirebase,
 }));
 
 beforeEach(() => {
@@ -73,7 +76,8 @@ describe("useAuth", () => {
 
     expect(result.current.status).toBe("error");
     if (result.current.status === "error") {
-      expect(result.current.error).toBe("Auth disabled");
+      expect(result.current.code).toBe("AUTH_FAILED");
+      expect(result.current.message).toBe("Auth disabled");
     }
     // Initial call + retries
     expect(mockSignInAnonymously.mock.calls.length).toBeGreaterThanOrEqual(3);
@@ -91,7 +95,8 @@ describe("useAuth", () => {
     });
 
     if (result.current.status === "error") {
-      expect(result.current.error).toBe("Network failure");
+      expect(result.current.code).toBe("AUTH_NETWORK");
+      expect(result.current.message).toBe("Network failure");
     }
   });
 
@@ -109,5 +114,49 @@ describe("useAuth", () => {
 
     // Should still be loading (signInAnonymously hasn't returned a user yet)
     expect(result.current.status).toBe("loading");
+  });
+
+  it("classifies storage-blocked errors and does not retry", async () => {
+    const err = Object.assign(
+      new Error("Firebase: Error (auth/web-storage-unsupported)."),
+      { code: "auth/web-storage-unsupported" },
+    );
+    mockSignInAnonymously.mockRejectedValue(err);
+
+    const { result } = renderHook(() => useAuth());
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("error");
+    });
+
+    if (result.current.status === "error") {
+      expect(result.current.code).toBe("AUTH_STORAGE_BLOCKED");
+      expect(result.current.message).toContain("auth/web-storage-unsupported");
+    }
+    // Terminal failure — no retries scheduled
+    expect(mockSignInAnonymously).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries network errors before surfacing AUTH_NETWORK", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const err = Object.assign(
+      new Error("Firebase: Error (auth/network-request-failed)."),
+      { code: "auth/network-request-failed" },
+    );
+    mockSignInAnonymously.mockRejectedValue(err);
+
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(result.current.status).toBe("error");
+    if (result.current.status === "error") {
+      expect(result.current.code).toBe("AUTH_NETWORK");
+    }
+    expect(mockSignInAnonymously.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    vi.useRealTimers();
   });
 });

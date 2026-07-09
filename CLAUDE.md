@@ -26,9 +26,9 @@ npx vitest run -t "midpoint"                                      # tests matchi
 
 ## Architecture
 
-- **Single-page React 18 app** — one route (`/`), one page component (`LiveMidpointPage`), no router
+- **Single-page React 19 app** — one route (`/`), one page component (`LiveMidpointPage`), no router
 - **Vite 6** with manual chunks: react, firebase, mapbox, i18n
-- **Firebase Anonymous Auth** — `signInAnonymously()` on app init, UID as participant key
+- **Firebase Anonymous Auth** — explicit `initializeAuth` singleton in `useFirebase.ts` with persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once `participantUids` slot
 - **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation)
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
@@ -70,8 +70,8 @@ apps/web/src/
 │       ├── places-api.ts              # Google Places API (New) client
 │       └── nav-links.ts              # Waze/Google Maps deep link generators
 ├── hooks/
-│   ├── useAuth.ts                     # Firebase Anonymous Auth with retry
-│   ├── useFirebase.ts                 # Firebase app/db singleton init
+│   ├── useAuth.ts                     # Anonymous sign-in with retry + typed AuthErrorCode classification
+│   ├── useFirebase.ts                 # Firebase app/db/auth/App Check singleton init (persistence fallback chain)
 │   └── useNetworkStatus.ts            # Firebase RTDB .info/connected tracking
 ├── lib/
 │   ├── env.ts                         # VITE_* env var validation (throws on missing required vars)
@@ -109,6 +109,6 @@ Security rules enforce: auth required for all reads, uid-scoped writes, write-on
 ## Environment Variables
 
 Required: `VITE_MAPBOX_TOKEN`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID`, `VITE_RECAPTCHA_SITE_KEY`.
-Optional: `VITE_GOOGLE_PLACES_API_KEY` (venue search disabled if not set).
+Optional: `VITE_GOOGLE_PLACES_API_KEY` (venue search disabled if not set), `VITE_FIREBASE_APP_ID` (required for App Check — without it the attestation token exchange 400s and App Check init is skipped with a warning).
 
 See `.env.example` at project root. App validates required vars at startup and throws if missing.
