@@ -349,9 +349,6 @@ export function useLiveSession(uid: string): LiveSessionState {
     url.searchParams.set("code", sessionCode);
     history.replaceState(null, "", url.toString());
 
-    listenForParticipants(sessionCode);
-    startStaleDetection();
-
     try {
       await waitForAppCheckToken(appCheck);
       await withRetry(
@@ -366,6 +363,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         3,
         isTransientError,
       );
+
+      // Attach the listener only after `created` exists: the `.read` rule
+      // requires `created > now - 24h`, so a listener attached before the
+      // write is evaluated against a session with no `created` and is
+      // rejected with permission_denied (joinSession is safe because it
+      // reads an already-created session).
+      listenForParticipants(sessionCode);
+      startStaleDetection();
+
       return sessionCode;
     } catch (err) {
       console.error("[session] create failed:", err);
@@ -551,6 +557,17 @@ export function useLiveSession(uid: string): LiveSessionState {
     },
     [flushWrite],
   );
+
+  // Flush the current position once the session code becomes active.
+  // Geolocation can deliver its (sometimes only) fix before the async join
+  // sets the code, in which case updateOwnLocation skipped the write with no
+  // code yet. Without this, a stationary joiner with a single GPS fix never
+  // writes participants/{uid} and peers never see them.
+  useEffect(() => {
+    if (code && ownPositionRef.current && lastAccuracyRef.current !== null) {
+      flushWrite(ownPositionRef.current, lastAccuracyRef.current);
+    }
+  }, [code, flushWrite]);
 
   /**
    * Update the local display name. Persists to localStorage and triggers
