@@ -166,6 +166,28 @@ describe("useLiveSession", () => {
       expect(result.current.phase).toBe("error");
       expect(result.current.error).toBe("CREATE_FAILED");
     });
+
+    // Regression: the participants listener must attach only AFTER `created`
+    // is written. The .read rule requires `created > now - 24h`, so a
+    // listener attached before the write is rejected with permission_denied.
+    it("does not attach the participants listener when the create write fails", async () => {
+      mockSet.mockRejectedValue(new Error("Permission denied"));
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        try {
+          await result.current.createSession();
+        } catch {
+          // Expected to throw
+        }
+      });
+
+      expect(mockRef).not.toHaveBeenCalledWith(
+        mockDb,
+        "sessions/ABC234/participants",
+      );
+    });
   });
 
   describe("joinSession", () => {
@@ -620,6 +642,46 @@ describe("useLiveSession", () => {
       });
 
       expect(mockSet).not.toHaveBeenCalled();
+    });
+
+    // Regression: geolocation can deliver its (only) fix before the async
+    // join sets the code, so the initial write is skipped. Once the code
+    // becomes available the buffered position must be flushed, otherwise a
+    // stationary joiner never writes participants/{uid} and peers never see
+    // it.
+    it("flushes the buffered position once the session code becomes available", async () => {
+      mockGet.mockResolvedValue({
+        val: () => ({
+          created: Date.now(),
+          creatorUid: "creator-uid",
+          participantUids: { "creator-uid": true },
+        }),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      // Position arrives before any session code exists → no write yet.
+      act(() => {
+        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 12);
+      });
+      expect(mockSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: `sessions/XYZ789/participants/${TEST_UID}`,
+        }),
+        expect.anything(),
+      );
+
+      // Joining sets the code → the buffered position is flushed.
+      await act(async () => {
+        await result.current.joinSession("XYZ789");
+      });
+
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: `sessions/XYZ789/participants/${TEST_UID}`,
+        }),
+        expect.objectContaining({ lat: 32.08, lng: 34.78, accuracy: 12 }),
+      );
     });
   });
 
