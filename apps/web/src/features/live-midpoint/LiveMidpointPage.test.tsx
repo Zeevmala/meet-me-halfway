@@ -138,13 +138,20 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByText("live.connecting")).toBeTruthy();
   });
 
-  it("shows auth error when auth fails", () => {
-    mockAuth.mockReturnValue({ status: "error", error: "Auth failed" });
+  it("renders the session error panel when auth fails", () => {
+    mockAuth.mockReturnValue({
+      status: "error",
+      code: "AUTH_STORAGE_BLOCKED",
+      message: "auth/web-storage-unsupported: storage blocked",
+    });
 
     render(<LiveMidpointPage />);
 
-    expect(screen.getByText("live.authError")).toBeTruthy();
-    expect(screen.getByText("Auth failed")).toBeTruthy();
+    expect(screen.getByText("live.authStorageBlocked")).toBeTruthy();
+    expect(screen.getByText("common.retry")).toBeTruthy();
+    expect(
+      screen.getByText("auth/web-storage-unsupported: storage blocked"),
+    ).toBeTruthy();
   });
 
   it("shows geo denied error screen", () => {

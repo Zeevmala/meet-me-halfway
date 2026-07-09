@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionErrorCode } from "../hooks/useLiveSession";
+import type { AuthErrorCode } from "../../../hooks/useAuth";
 import {
   detectInAppBrowser,
   buildOpenInBrowserLink,
@@ -18,27 +19,50 @@ const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
   CONNECTION_ERROR: "live.connectionError",
 };
 
-/** Session errors recoverable by reloading the page. */
-const RETRYABLE_SESSION_ERRORS: ReadonlySet<SessionErrorCode> = new Set([
+/** Errors surfaced by the auth gate, before a session exists. */
+const AUTH_ERROR_I18N: Record<AuthErrorCode, string> = {
+  AUTH_NETWORK: "live.authNetwork",
+  AUTH_STORAGE_BLOCKED: "live.authStorageBlocked",
+  AUTH_FAILED: "live.authFailed",
+};
+
+/** Every error code this panel can render. */
+export type LiveErrorCode = SessionErrorCode | AuthErrorCode;
+
+const PANEL_ERROR_I18N: Record<LiveErrorCode, string> = {
+  ...SESSION_ERROR_I18N,
+  ...AUTH_ERROR_I18N,
+};
+
+/** Errors recoverable by reloading the page (a reload re-runs sign-in and
+ * the session join). */
+const RETRYABLE_ERRORS: ReadonlySet<LiveErrorCode> = new Set([
   "CREATE_FAILED",
   "JOIN_FAILED",
   "JOIN_PERMISSION_DENIED",
   "JOIN_NETWORK_ERROR",
   "CONNECTION_ERROR",
+  "AUTH_NETWORK",
+  "AUTH_STORAGE_BLOCKED",
+  "AUTH_FAILED",
 ]);
 
 /** Show the in-app-browser callout for these errors (where switching
- * browsers is likely to actually help). */
-const IN_APP_BROWSER_HINT_ERRORS: ReadonlySet<SessionErrorCode> = new Set([
+ * browsers is likely to actually help — in-app browsers are the canonical
+ * cause of blocked storage and failed attestation). */
+const IN_APP_BROWSER_HINT_ERRORS: ReadonlySet<LiveErrorCode> = new Set([
   "JOIN_FAILED",
   "JOIN_PERMISSION_DENIED",
   "JOIN_NETWORK_ERROR",
   "CREATE_FAILED",
   "CONNECTION_ERROR",
+  "AUTH_NETWORK",
+  "AUTH_STORAGE_BLOCKED",
+  "AUTH_FAILED",
 ]);
 
 interface Props {
-  errorCode: SessionErrorCode;
+  errorCode: LiveErrorCode;
   errorDetails: string | null;
 }
 
@@ -49,7 +73,7 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
   const inApp = detectInAppBrowser();
   const showInAppHint =
     inApp !== null && IN_APP_BROWSER_HINT_ERRORS.has(errorCode);
-  const retryable = RETRYABLE_SESSION_ERRORS.has(errorCode);
+  const retryable = RETRYABLE_ERRORS.has(errorCode);
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
 
   const handleCopy = useCallback(async () => {
@@ -78,9 +102,7 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
         <div className="live-error-icon" aria-hidden="true">
           &#9888;
         </div>
-        <div className="live-error-title">
-          {t(SESSION_ERROR_I18N[errorCode])}
-        </div>
+        <div className="live-error-title">{t(PANEL_ERROR_I18N[errorCode])}</div>
 
         {showInAppHint && (
           <div className="live-error-callout">
