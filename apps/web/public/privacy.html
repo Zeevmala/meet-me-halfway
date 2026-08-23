@@ -128,8 +128,10 @@
         </li>
         <li>
           <strong>Sentry</strong> (optional) &mdash; if error tracking is enabled by the
-          operator, JavaScript exceptions are reported. No location or session data is
-          attached.
+          operator, JavaScript exceptions are reported. No location data is ever attached.
+          A failure report may include the first two characters of the session code, plus
+          whether the browser was online and whether it was an in-app browser &mdash;
+          enough to correlate reports, not enough to identify you or locate the session.
         </li>
       </ul>
 
