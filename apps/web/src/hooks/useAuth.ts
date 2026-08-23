@@ -8,9 +8,7 @@ import { useFirebase } from "./useFirebase";
 
 /** Typed auth error codes — avoids fragile string matching in the UI layer. */
 export type AuthErrorCode =
-  | "AUTH_NETWORK"
-  | "AUTH_STORAGE_BLOCKED"
-  | "AUTH_FAILED";
+  "AUTH_NETWORK" | "AUTH_STORAGE_BLOCKED" | "AUTH_FAILED";
 
 export type AuthState =
   | { status: "loading" }

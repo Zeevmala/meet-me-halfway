@@ -75,8 +75,7 @@ export async function searchNearbyVenues(
   signal?: AbortSignal,
 ): Promise<PlaceResult[]> {
   const apiKey = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as
-    | string
-    | undefined;
+    string | undefined;
   if (!apiKey) return [];
 
   try {
