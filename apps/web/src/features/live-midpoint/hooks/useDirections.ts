@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance } from "../lib/geo-math";
 
