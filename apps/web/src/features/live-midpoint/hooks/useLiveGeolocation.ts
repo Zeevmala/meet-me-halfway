@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type GeoStatus =
-  | "idle"
-  | "requesting"
-  | "watching"
-  | "denied"
-  | "error"
-  | "unavailable";
+  "idle" | "requesting" | "watching" | "denied" | "error" | "unavailable";
 
 export interface LiveGeoState {
   status: GeoStatus;

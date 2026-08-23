@@ -35,12 +35,7 @@ export type SessionErrorCode =
   | "CONNECTION_ERROR";
 
 export type SessionPhase =
-  | "idle"
-  | "creating"
-  | "waiting"
-  | "connected"
-  | "some_stale"
-  | "error";
+  "idle" | "creating" | "waiting" | "connected" | "some_stale" | "error";
 
 interface ParticipantData {
   lat: number;

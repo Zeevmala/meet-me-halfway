@@ -158,8 +158,7 @@ export default function LiveMap({
     if (!mapInstance) return;
     for (let i = 0; i < MAX_PARTICIPANTS; i++) {
       const src = mapInstance.getSource(`route-${i}`) as
-        | mapboxgl.GeoJSONSource
-        | undefined;
+        mapboxgl.GeoJSONSource | undefined;
       if (!src) continue;
       const routeGeom = routes[i] ?? null;
       src.setData(routeGeom ? lineFeature(routeGeom) : EMPTY_FC);
@@ -178,8 +177,7 @@ export default function LiveMap({
 
     for (let i = 0; i < MAX_PARTICIPANTS; i++) {
       const src = mapInstance.getSource(`accuracy-${i}`) as
-        | mapboxgl.GeoJSONSource
-        | undefined;
+        mapboxgl.GeoJSONSource | undefined;
       if (!src) continue;
       const p = byIndex.get(i);
       src.setData(
