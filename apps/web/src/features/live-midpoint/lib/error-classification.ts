@@ -7,9 +7,7 @@
  */
 
 export type JoinErrorKind =
-  | "JOIN_PERMISSION_DENIED"
-  | "JOIN_NETWORK_ERROR"
-  | "JOIN_FAILED";
+  "JOIN_PERMISSION_DENIED" | "JOIN_NETWORK_ERROR" | "JOIN_FAILED";
 
 interface ErrorLike {
   code?: unknown;
