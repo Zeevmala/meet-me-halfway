@@ -1,10 +1,29 @@
 const CACHE_VERSION = "mmh-__BUILD_HASH__";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 
+const CACHE_PREFIX = "mmh-";
+
 const SHELL_URLS = ["/", "/index.html"];
+
+// The `swCacheBust` plugin in vite.config.ts substitutes the hash at build time
+// only, so a surviving placeholder means this file is being served straight out
+// of `public/` by `vite dev`. A dev service worker is actively harmful there:
+// the cache key never changes, so it pins one Vite optimizer generation and
+// replays it across server restarts and dependency bumps — which surfaces as
+// "Invalid hook call ... more than one copy of React" and reads exactly like a
+// dependency regression. Under dev this worker removes itself instead.
+//
+// The marker is split because swCacheBust substitutes with String.replace and a
+// string pattern, which rewrites only the FIRST occurrence — a second literal
+// would survive the build and leave production stuck in the unbuilt branch.
+const IS_UNBUILT = CACHE_VERSION.endsWith("__BUILD" + "_HASH__");
 
 // ── Install: pre-cache app shell ──
 self.addEventListener("install", (event) => {
+  if (IS_UNBUILT) {
+    self.skipWaiting();
+    return;
+  }
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_URLS))
   );
@@ -13,6 +32,15 @@ self.addEventListener("install", (event) => {
 
 // ── Activate: clean up old caches + enable navigation preload ──
 self.addEventListener("activate", (event) => {
+  // Dev: self-destruct. This is the repair path for a worker installed by an
+  // earlier build — the browser re-fetches and byte-compares sw.js on navigation
+  // without routing that request through the worker, so this still runs when
+  // every other response is being served from the stale cache.
+  if (IS_UNBUILT) {
+    event.waitUntil(selfDestruct());
+    return;
+  }
+
   event.waitUntil(
     Promise.all([
       // Clean old caches
@@ -33,6 +61,8 @@ self.addEventListener("activate", (event) => {
 
 // ── Fetch: strategy per request type ──
 self.addEventListener("fetch", (event) => {
+  if (IS_UNBUILT) return; // dev: never intercept, let Vite serve every request
+
   const { request } = event;
   const url = new URL(request.url);
 
@@ -52,6 +82,21 @@ self.addEventListener("fetch", (event) => {
   // Hashed static assets (JS/CSS) — cache-first (hash in filename = immutable)
   event.respondWith(cacheFirst(request, SHELL_CACHE));
 });
+
+/** Dev only: drop every cache this worker owns, then remove the registration. */
+async function selfDestruct() {
+  const keys = await caches.keys();
+  await Promise.all(
+    keys.filter((k) => k.startsWith(CACHE_PREFIX)).map((k) => caches.delete(k))
+  );
+  await self.registration.unregister();
+
+  // Controlled tabs keep running the stale module graph until they navigate.
+  const clients = await self.clients.matchAll({ type: "window" });
+  for (const client of clients) {
+    client.navigate(client.url).catch(() => {});
+  }
+}
 
 // ── Strategies ──
 

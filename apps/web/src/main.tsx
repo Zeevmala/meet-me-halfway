@@ -1,5 +1,6 @@
 import "./lib/sentry"; // Must be first — captures errors from all subsequent imports
 import "./lib/appcheck-debug"; // Sets debug flag before firebase/app-check loads
+import "./lib/register-sw"; // Registers the PWA SW in prod, tears it down in dev
 import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
