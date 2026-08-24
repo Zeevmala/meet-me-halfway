@@ -1,8 +1,9 @@
 /**
  * Client-side spherical geodesic midpoint and haversine distance.
- * Pure math on WGS84 sphere approximation — no external deps.
+ * Pure math on WGS84 sphere approximation — no runtime deps.
  * Sufficient for typical meetup distances (<200 km, error <1 m vs ellipsoidal).
  */
+import type * as GeoJSON from "geojson";
 
 export interface LatLng {
   lat: number;
