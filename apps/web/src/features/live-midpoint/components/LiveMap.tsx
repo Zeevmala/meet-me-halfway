@@ -1,5 +1,6 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
+import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
