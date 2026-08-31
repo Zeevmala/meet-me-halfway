@@ -3,12 +3,14 @@ import type { LatLng } from "../lib/geo-math";
 import { haversineDistance } from "../lib/geo-math";
 import { searchNearbyVenues } from "../lib/places-api";
 import { rankVenues } from "../lib/venue-ranking";
+import { classifyThrown } from "../../../core/dag/errors";
+import type { ResourceError } from "../../../core/dag/errors";
 import type { RankedVenue } from "../lib/venue-ranking";
 
 export interface VenueSearchState {
   venues: RankedVenue[];
   loading: boolean;
-  error: string | null;
+  error: ResourceError | null;
 }
 
 const STABILITY_DELAY_MS = 5_000;
@@ -23,7 +25,7 @@ const SEARCH_RADIUS_M = 1_000;
 export function useVenueSearch(midpoint: LatLng | null): VenueSearchState {
   const [venues, setVenues] = useState<RankedVenue[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ResourceError | null>(null);
 
   const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -31,28 +33,34 @@ export function useVenueSearch(midpoint: LatLng | null): VenueSearchState {
 
   const doSearch = useCallback(async (center: LatLng) => {
     abortRef.current?.abort();
-    abortRef.current = new AbortController();
-    const { signal } = abortRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const { signal } = controller;
 
     setLoading(true);
     setError(null);
 
     try {
-      const places = await searchNearbyVenues(center, SEARCH_RADIUS_M, signal);
-      if (!signal.aborted) {
-        const ranked = rankVenues(places, center, 5);
-        setVenues(ranked);
+      const result = await searchNearbyVenues(center, SEARCH_RADIUS_M, signal);
+      // Every guard below reads the signal captured for *this* call. Reading
+      // abortRef.current instead consults whichever controller is current, so
+      // a superseded call would clear `loading` out from under the newer
+      // request that replaced it — the loading indicator flickered off while
+      // a search was still in flight.
+      if (signal.aborted) return;
+      if (result.ok) {
+        setVenues(rankVenues(result.value, center, 5));
         lastSearchCenterRef.current = center;
+      } else {
+        setError(result.error);
       }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      if (!abortRef.current?.signal.aborted) {
-        setError("Failed to search for venues");
+    } catch (thrown) {
+      if (thrown instanceof DOMException && thrown.name === "AbortError") {
+        return;
       }
+      if (!signal.aborted) setError(classifyThrown(thrown));
     } finally {
-      if (!abortRef.current?.signal.aborted) {
-        setLoading(false);
-      }
+      if (!signal.aborted) setLoading(false);
     }
   }, []);
 

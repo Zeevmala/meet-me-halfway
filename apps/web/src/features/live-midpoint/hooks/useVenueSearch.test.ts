@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useVenueSearch } from "./useVenueSearch";
 import type { LatLng } from "../lib/geo-math";
 import type { PlaceResult } from "../lib/venue-ranking";
+import { ok, err } from "../../../core/dag/result";
 
 // ── Mock places-api ──
 const mockSearchNearbyVenues = vi.fn();
@@ -48,7 +49,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   // Ensure API key is set so the hook doesn't skip
   vi.stubEnv("VITE_GOOGLE_PLACES_API_KEY", "test-api-key");
-  mockSearchNearbyVenues.mockResolvedValue(MOCK_PLACES);
+  mockSearchNearbyVenues.mockResolvedValue(ok(MOCK_PLACES));
 });
 
 afterEach(() => {
@@ -150,7 +151,7 @@ describe("useVenueSearch", () => {
     expect(mockSearchNearbyVenues).toHaveBeenCalledTimes(1);
   });
 
-  it("handles search error gracefully", async () => {
+  it("classifies an unexpected throw as a network failure", async () => {
     mockSearchNearbyVenues.mockRejectedValueOnce(new Error("API error"));
 
     const { result } = renderHook(() => useVenueSearch(MIDPOINT));
@@ -159,12 +160,20 @@ describe("useVenueSearch", () => {
       vi.advanceTimersByTime(5000);
     });
 
-    expect(result.current.error).toBe("Failed to search for venues");
+    expect(result.current.error).toEqual({
+      kind: "NETWORK",
+      detail: "API error",
+    });
     expect(result.current.venues).toEqual([]);
   });
 
-  it("handles rate limit (RATE_LIMITED) error gracefully", async () => {
-    mockSearchNearbyVenues.mockRejectedValueOnce(new Error("RATE_LIMITED"));
+  // Regression: places-api used to throw RATE_LIMITED and then catch it in its
+  // own catch block, returning []. A rate limit was indistinguishable from
+  // "no venues here", so nothing downstream could ever back off.
+  it("surfaces a rate limit as a distinct, typed error", async () => {
+    mockSearchNearbyVenues.mockResolvedValueOnce(
+      err({ kind: "RATE_LIMITED", retryAfterMs: 30_000 }),
+    );
 
     const { result } = renderHook(() => useVenueSearch(MIDPOINT));
 
@@ -172,8 +181,52 @@ describe("useVenueSearch", () => {
       vi.advanceTimersByTime(5000);
     });
 
-    expect(result.current.error).toBe("Failed to search for venues");
+    expect(result.current.error).toEqual({
+      kind: "RATE_LIMITED",
+      retryAfterMs: 30_000,
+    });
     expect(result.current.venues).toEqual([]);
+  });
+
+  // Regression: the success path guarded on the signal captured for this call,
+  // but catch/finally read abortRef.current?.signal — whichever controller was
+  // *current*. A superseded call therefore cleared `loading` while the newer
+  // request that replaced it was still in flight, flickering the indicator.
+  it("does not clear loading when a superseded search settles", async () => {
+    let settleFirst: (value: unknown) => void = () => {};
+    mockSearchNearbyVenues
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settleFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    const { result, rerender } = renderHook(
+      ({ mid }: { mid: LatLng }) => useVenueSearch(mid),
+      { initialProps: { mid: MIDPOINT } },
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current.loading).toBe(true);
+
+    // A move beyond the cache radius supersedes the in-flight search.
+    rerender({ mid: MIDPOINT_FAR });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSearchNearbyVenues).toHaveBeenCalledTimes(2);
+
+    // The abandoned first call settles late; it must not touch loading.
+    await act(async () => {
+      settleFirst(ok([]));
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(true);
   });
 
   it("aborts previous request on rapid midpoint changes", async () => {
