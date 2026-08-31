@@ -60,7 +60,14 @@ async function fetchRoute(
  * With 5 participants and 3s debounce, worst case is ~100 req/min
  * (well within Mapbox free tier of 300 req/min).
  *
- * @param positions - Array of participant positions
+ * Both the input and the output are **slot-keyed**: index `i` is the
+ * `ParticipantIndex` of the participant it belongs to, and a vacant slot is
+ * `null`. Consumers (`LiveMap`'s `route-{i}` layers, `MidpointCard`) index
+ * the result by participant slot, never by array position — the two used to
+ * disagree, which painted every joiner's route in another participant's
+ * colour.
+ *
+ * @param positions - Slot-keyed participant positions (`null` = vacant slot)
  * @param destination - Selected venue or midpoint
  * @param profile - Travel mode: "driving" (default) or "walking"
  */
@@ -77,7 +84,7 @@ export function useDirections(
   const abortRef = useRef<AbortController | null>(null);
   const backoffRef = useRef(INITIAL_DEBOUNCE_MS);
   const lastFetchRef = useRef<{
-    positions: LatLng[];
+    positions: readonly (LatLng | null)[];
     dest: LatLng;
     profile: TravelProfile;
   } | null>(null);
@@ -86,20 +93,37 @@ export function useDirections(
   const posKey = JSON.stringify(positions);
 
   useEffect(() => {
-    const validPositions = positions.filter((p): p is LatLng => p !== null);
-    if (validPositions.length === 0 || !destination) return;
+    // Collect the occupied slots, remembering which slot each request is for
+    // so results can be scattered back to the right index.
+    const targetSlots: number[] = [];
+    const targets: LatLng[] = [];
+    positions.forEach((pos, slot) => {
+      if (pos !== null) {
+        targetSlots.push(slot);
+        targets.push(pos);
+      }
+    });
+    if (targets.length === 0 || !destination) return;
 
-    // Skip refetch if insufficient movement and same profile
+    // Skip refetch if insufficient movement and same profile. Comparison is
+    // slot-wise: a slot's occupant is stable for the session (see
+    // lib/slot-registry.ts), so slot i always means the same participant.
     if (lastFetchRef.current) {
       const prev = lastFetchRef.current;
+      const sameOccupancy =
+        prev.positions.length === positions.length &&
+        positions.every(
+          (pos, i) => (pos === null) === (prev.positions[i] === null),
+        );
       if (
-        prev.positions.length === validPositions.length &&
+        sameOccupancy &&
         prev.profile === profile &&
         haversineDistance(destination, prev.dest) < MOVEMENT_THRESHOLD_M &&
-        validPositions.every(
-          (pos, i) =>
-            haversineDistance(pos, prev.positions[i]) < MOVEMENT_THRESHOLD_M,
-        )
+        positions.every((pos, i) => {
+          const prevPos = prev.positions[i];
+          if (pos === null || prevPos === null) return true;
+          return haversineDistance(pos, prevPos) < MOVEMENT_THRESHOLD_M;
+        })
       ) {
         return;
       }
@@ -118,17 +142,21 @@ export function useDirections(
 
       try {
         const results = await Promise.all(
-          validPositions.map((pos) =>
-            fetchRoute(pos, destination, signal, profile),
-          ),
+          targets.map((pos) => fetchRoute(pos, destination, signal, profile)),
         );
 
         if (!signal.aborted) {
-          setRoutes(results);
+          // Scatter back into slot order so routes[i] is slot i's route.
+          const bySlot: (RouteInfo | null)[] = positions.map(() => null);
+          results.forEach((route, k) => {
+            const slot = targetSlots[k];
+            if (slot !== undefined) bySlot[slot] = route;
+          });
+          setRoutes(bySlot);
           setError(null);
           backoffRef.current = INITIAL_DEBOUNCE_MS;
           lastFetchRef.current = {
-            positions: validPositions,
+            positions,
             dest: destination,
             profile,
           };

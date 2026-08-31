@@ -72,6 +72,57 @@ describe("useDirections", () => {
     expect(result.current.routes).toEqual([]);
   });
 
+  // Regression: routes used to be returned in filtered-array order while
+  // LiveMap indexed them by ParticipantIndex to pick the layer and colour.
+  // Any joiner (ownIndex !== 0) therefore saw every route under the wrong
+  // participant's colour. Routes are now slot-keyed end to end.
+  it("returns routes keyed by slot, not by array position", async () => {
+    mockFetch
+      .mockResolvedValueOnce(makeRouteResponse(1000, 100))
+      .mockResolvedValueOnce(makeRouteResponse(2000, 200));
+
+    // Slots 1 and 3 occupied; 0, 2 and 4 vacant.
+    const slots = [null, TEL_AVIV, null, JERUSALEM, null];
+    const { result } = renderHook(() => useDirections(slots, MIDPOINT));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(result.current.routes).toHaveLength(5);
+    expect(result.current.routes[0]).toBeNull();
+    expect(result.current.routes[2]).toBeNull();
+    expect(result.current.routes[4]).toBeNull();
+    expect(result.current.routes[1]?.distance).toBe(1000);
+    expect(result.current.routes[3]?.distance).toBe(2000);
+  });
+
+  it("keeps a slot's route attached to that slot when others vacate", async () => {
+    mockFetch.mockResolvedValue(makeRouteResponse(1000, 100));
+
+    const { result, rerender } = renderHook(
+      ({ slots }: { slots: (LatLng | null)[] }) =>
+        useDirections(slots, MIDPOINT),
+      { initialProps: { slots: [TEL_AVIV, JERUSALEM, HAIFA] } },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(result.current.routes[2]).not.toBeNull();
+
+    // Slot 1 leaves. Slot 2 must keep its own route, not inherit slot 1's.
+    mockFetch.mockResolvedValue(makeRouteResponse(7777, 700));
+    rerender({ slots: [TEL_AVIV, null, BEER_SHEVA] });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(result.current.routes[1]).toBeNull();
+    expect(result.current.routes[2]?.distance).toBe(7777);
+  });
+
   it("fetches routes for 2 participants after 3s debounce", async () => {
     mockFetch.mockResolvedValue(makeRouteResponse(50000, 3600));
 

@@ -11,6 +11,7 @@ import type { RankedVenue } from "./lib/venue-ranking";
 import { geographicCentroid } from "./lib/geo-math";
 import type { LatLng } from "./lib/geo-math";
 import { normalizeCode, isValidCode } from "./lib/session-code";
+import { MAX_PARTICIPANTS } from "./lib/participant-config";
 import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
 import type { MapParticipant } from "./components/LiveMap";
@@ -62,18 +63,29 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();
 
-  // Build ordered positions array: own position first, then others
-  const allPositions: (LatLng | null)[] = useMemo(() => {
-    const others = session.participants.map((p) => p.position);
-    return [session.ownPosition, ...others];
-  }, [session.ownPosition, session.participants]);
+  // Slot-keyed participant positions: index === ParticipantIndex, null =
+  // vacant slot. Every downstream consumer indexes by slot, so routes,
+  // accuracy circles and colours all agree on what `i` means.
+  const slotPositions: (LatLng | null)[] = useMemo(() => {
+    const slots: (LatLng | null)[] = Array.from(
+      { length: MAX_PARTICIPANTS },
+      () => null,
+    );
+    if (session.ownIndex !== null && session.ownPosition) {
+      slots[session.ownIndex] = session.ownPosition;
+    }
+    for (const p of session.participants) {
+      slots[p.index] = p.position;
+    }
+    return slots;
+  }, [session.ownIndex, session.ownPosition, session.participants]);
 
   // Compute geographic centroid when 2+ positions available
   const midpoint = useMemo(() => {
-    const valid = allPositions.filter((p): p is LatLng => p !== null);
+    const valid = slotPositions.filter((p): p is LatLng => p !== null);
     if (valid.length < 2) return null;
     return geographicCentroid(valid);
-  }, [allPositions]);
+  }, [slotPositions]);
 
   // Venue search + selection state
   const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
@@ -84,7 +96,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const destination = selectedVenue ? selectedVenue.location : midpoint;
 
   // Fetch routes for all participants with 3s debounce + 200m movement threshold
-  const { routes } = useDirections(allPositions, destination, travelProfile);
+  const { routes } = useDirections(slotPositions, destination, travelProfile);
 
   // ── Clear venue selection if venue disappears from refreshed list ──
   useEffect(() => {
@@ -231,7 +243,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     });
   }
 
-  // Build route geometries array (parallel to allPositions)
+  // Slot-keyed route geometries — LiveMap paints routes[i] on the `route-{i}`
+  // layer in PARTICIPANT_COLORS[i], so this must be indexed by slot.
   const routeGeometries = routes.map((r) => r?.geometry ?? null);
 
   // Build badge participants
@@ -242,9 +255,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }));
 
   // Build MidpointCard other-participants
-  const otherParticipants = session.participants.map((p, i) => ({
+  const otherParticipants = session.participants.map((p) => ({
     index: p.index,
-    route: routes[i + 1] ?? null, // routes[0] is own, others start at 1
+    route: routes[p.index] ?? null,
     position: p.position,
     stale: p.stale,
     name: p.name,
@@ -296,7 +309,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               midpoint={midpoint}
               ownIndex={ownIndex}
               ownPosition={session.ownPosition}
-              ownRoute={routes[0] ?? null}
+              ownRoute={routes[ownIndex] ?? null}
               otherParticipants={otherParticipants}
               destination={destination ?? midpoint}
               travelProfile={travelProfile}
