@@ -19,6 +19,7 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
+import { backoffDelayMs } from "../../../core/dag/backoff";
 import { createSlotRegistry } from "../lib/slot-registry";
 import type { SlotRegistry } from "../lib/slot-registry";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
@@ -105,7 +106,9 @@ async function withRetry<T>(
     } catch (err) {
       lastErr = err;
       if (i < attempts - 1 && isRetryable(err)) {
-        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i)));
+        await new Promise((r) =>
+          setTimeout(r, backoffDelayMs(i, { baseMs: 1000 })),
+        );
       } else {
         break;
       }
