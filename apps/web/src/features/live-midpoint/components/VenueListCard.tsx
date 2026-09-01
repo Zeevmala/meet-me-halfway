@@ -5,7 +5,7 @@ import { formatDistance } from "../lib/geo-math";
 import "../styles/live-midpoint.css";
 
 interface VenueListCardProps {
-  venues: RankedVenue[];
+  venues: readonly RankedVenue[];
   loading: boolean;
   selectedVenue: RankedVenue | null;
   onSelectVenue: (venue: RankedVenue | null) => void;

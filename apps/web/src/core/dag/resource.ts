@@ -133,6 +133,16 @@ export function createResource<I, O>(
   }
 
   function shouldDispatch(input: I, nowMs: number): boolean {
+    // An identical request is already out; its answer will be ours too.
+    // Without this, the "pending" notification re-enters through a consumer
+    // and arms a second call before acceptedInput has been set, so every
+    // fetch is issued twice.
+    if (
+      inFlightIdentity !== null &&
+      policy.identity(input) === inFlightIdentity
+    ) {
+      return false;
+    }
     if (acceptedInput === null) return true;
     if (policy.admits(acceptedInput, input, acceptedAtMs, nowMs)) return true;
     // A stationary user must still recover from an outage, so an elapsed
@@ -273,6 +283,11 @@ export function createResource<I, O>(
         error: null,
         stale: false,
       });
+      // The input may have moved on while this request was in flight; the
+      // consumer will not necessarily offer it again on its own.
+      if (pendingInput !== null && pendingInput !== input) {
+        request(pendingInput);
+      }
       return;
     }
 

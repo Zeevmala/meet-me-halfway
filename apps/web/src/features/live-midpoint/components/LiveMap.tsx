@@ -39,10 +39,10 @@ export interface MapParticipant {
 }
 
 interface LiveMapProps {
-  participants: MapParticipant[];
+  participants: readonly MapParticipant[];
   midpoint: LatLng | null;
-  routes: (GeoJSON.LineString | null)[];
-  venues: RankedVenue[];
+  routes: readonly (GeoJSON.LineString | null)[];
+  venues: readonly RankedVenue[];
   selectedVenue: RankedVenue | null;
 }
 
