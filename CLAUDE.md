@@ -22,7 +22,7 @@ npx vitest run src/features/live-midpoint/lib/geo-math.test.ts   # single test f
 npx vitest run -t "midpoint"                                      # tests matching name pattern
 ```
 
-**CI pipeline** (`.github/workflows/web.yml`): eslint → prettier check → tsc → vitest → vite build. All must pass. ESLint runs with `--max-warnings=0`.
+**CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check) and `typecheck` run in parallel → `test` (vitest) → `build` → `lighthouse` + `e2e` → `deploy` (main only). All must pass. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
 
 ## Architecture
 
@@ -35,6 +35,7 @@ npx vitest run -t "midpoint"                                      # tests matchi
 - **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
 - **Google Places API (New)** — venue search around midpoint (optional, disabled if `VITE_GOOGLE_PLACES_API_KEY` not set)
 - **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side
+- **Derived pipeline runs as a declared DAG** — `slots → midpoint → venues → destination → routes → frame`, declared in `features/live-midpoint/graph/edges.ts`, executed in topological order by a per-mount runtime exposed through `useSyncExternalStore`. Effectful nodes are `createResource` instances carrying debounce + maxWait, admission control, retry, timeout, a lazy circuit breaker and last-known-good degradation. See `ARCHITECTURE.md`
 - **Participant model** — up to 5 participants per session, indexed 0–4 (creator = 0), each with a distinct color
 - **i18next** — en/he with full RTL support via CSS logical properties
 
@@ -57,18 +58,32 @@ apps/web/src/
 ├── features/live-midpoint/
 │   ├── LiveMidpointPage.tsx           # Page orchestrator (auth gate → inner page)
 │   ├── components/                    # LiveMap, SessionBadge, WaitingCard, MidpointCard, VenueListCard
-│   ├── hooks/
+│   ├── graph/                         # the derived pipeline — see ARCHITECTURE.md
+│   │   ├── edges.ts                   # EDGES + assertAcyclic (Kahn); TOPO_ORDER drives the runtime
+│   │   ├── nodes.ts                   # pure: buildSlotVector, deriveMidpoint, deriveDestination
+│   │   ├── policies.ts                # venue + route ResourcePolicy (debounce, admit, identity, breaker)
+│   │   ├── ports.ts                   # injected I/O seam (now/schedule/cancel/searchVenues/fetchRoute)
+│   │   ├── runtime.ts                 # per-mount runtime, atomic GraphSnapshot, setSources(patch)
+│   │   ├── types.ts                   # SlotVector, GraphSources, RouteInfo, TravelProfile
+│   │   └── useGraph.ts                # useSyncExternalStore bindings
+│   ├── hooks/                         # source adapters — event streams, not graph nodes
 │   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
-│   │   ├── useLiveSession.ts          # RTDB session CRUD + N-participant location sync
-│   │   ├── useDirections.ts           # Mapbox Directions for N participants with debounce + movement threshold
-│   │   └── useVenueSearch.ts          # Google Places with stability delay + distance cache
+│   │   └── useLiveSession.ts          # RTDB session CRUD + N-participant location sync
 │   └── lib/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
+│       ├── slot-registry.ts           # first-seen-wins uid→ParticipantIndex; slots are stable for the session
 │       ├── participant-config.ts      # MAX_PARTICIPANTS, ParticipantIndex type, PARTICIPANT_COLORS (5-color palette)
 │       ├── session-code.ts            # 6-char code generation/validation
 │       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now
-│       ├── places-api.ts              # Google Places API (New) client
+│       ├── places-api.ts              # Google Places API (New) client → Result<PlaceResult[], ResourceError>
+│       ├── directions-api.ts          # Mapbox Directions client → Result<RouteInfo | null, ResourceError>
 │       └── nav-links.ts              # Waze/Google Maps deep link generators
+├── core/dag/                          # framework- and domain-agnostic execution core
+│   ├── result.ts                      # Result<T, E> + ok/err
+│   ├── errors.ts                      # ResourceError union, isRetryableError, countsAgainstBreaker
+│   ├── breaker.ts                     # lazy circuit breaker (no timers — clock-compared)
+│   ├── backoff.ts                     # shared exponential backoff with optional jitter
+│   └── resource.ts                    # createResource: the one effectful-node combinator
 ├── hooks/
 │   ├── useAuth.ts                     # Anonymous sign-in with retry + typed AuthErrorCode classification
 │   ├── useFirebase.ts                 # Firebase app/db/auth/App Check singleton init (persistence fallback chain)
@@ -103,7 +118,10 @@ Security rules enforce: auth required for all reads, uid-scoped writes, write-on
 - `LatLng` type uses `{ lat, lng }` (not arrays) for internal representation
 - Session error codes use typed union `SessionErrorCode` (not string matching)
 - i18n keys mapped via typed records (e.g., `SESSION_ERROR_I18N`)
-- Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0, joiners sorted by UID)
+- Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0). Slots come from `lib/slot-registry.ts` and are **stable for the session** — first-seen-wins, never renumbered when someone leaves. Anything keyed by slot (routes, accuracy circles, colours, Mapbox layer ids) must agree on that one index space
+- Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code
+- New effectful work belongs in a `ResourcePolicy` (`graph/policies.ts`), not a bespoke hook with its own debounce and abort handling
+- I/O reaches the graph through `graph/ports.ts` so tests inject fakes and a virtual clock instead of mocking modules, globals or timers
 - 5-color palette: green (#00d4aa), blue (#6c8cff), orange (#ff9f43), purple (#a855f7), pink (#f472b6) — CSS classes `--p0` through `--p4`
 
 ## Environment Variables

@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### P3 — Declared Execution Graph
+
+- **DAG pipeline** — `slots → midpoint → venues → destination → routes → frame`
+  declared in `features/live-midpoint/graph/edges.ts` and executed in
+  topological order. `assertAcyclic` (Kahn) runs at module load, so the cycle
+  that appears when venue search is re-centred on the selected venue — or a
+  midpoint is derived from route durations — fails a test instead of hanging a
+  phone. See `ARCHITECTURE.md`
+- **`core/dag`** — framework- and domain-agnostic execution core: `Result<T, E>`,
+  a closed `ResourceError` union, a lazy circuit breaker, shared backoff, and
+  one `createResource` combinator carrying debounce + starvation ceiling,
+  admission control, in-flight de-duplication, abort, timeout, retry and
+  last-known-good degradation
+- **Stable participant slots** — `lib/slot-registry.ts` replaces a dense rank
+  over a mutating set with first-seen-wins allocation that survives departures
+- **Atomic snapshot** — one `useSyncExternalStore` subscription replaces the
+  four-hook render cascade; `setSources` takes a patch so multi-field updates
+  produce a single render
+- **Injected ports** — `graph/ports.ts` is the I/O seam; tests drive a virtual
+  clock and fake fetchers instead of mocking modules, globals or timers
+- **344 tests** — 62 new, covering slot allocation, the breaker state machine,
+  the resource combinator, graph acyclicity, policy thresholds and the runtime
+- `useDirections` and `useVenueSearch` retired; their behaviour is now two
+  `ResourcePolicy` values
+
+### Fixed (P3)
+
+- **Route/colour misalignment** — `LiveMap` resolved accuracy circles by
+  participant index but routes by array position while painting both into slot
+  `i`'s colour. For any joiner the two disagreed, so every route rendered under
+  the wrong participant. `MidpointCard` consumed the same array
+  correctly-by-position, so neither consumer could be fixed alone
+- **Slot collisions** — own index was ranked over `participantUids` while other
+  participants were ranked over `participants`; those sets diverge whenever
+  somebody is registered but has not yet reported a position, so two
+  participants could share a slot and one accuracy circle would vanish. A
+  clamp also aliased surplus uids onto the last slot
+- **Sticky rate limit** — a 429 doubled the debounce delay, but the movement
+  guard returned before the timer was re-armed, so a stationary user never
+  recovered. The breaker now recovers on an elapsed cooldown
+- **Partial-failure wipeout** — `Promise.all` meant one participant's 429
+  discarded every route and left stale ones on screen unflagged; slots now
+  settle independently
+- **Debounce starvation** — both fetch hooks reset their timer on every
+  dependency change, and dependencies change at GPS rate, so the first fetch
+  could be starved for as long as a user kept walking
+- **Loading flicker** — `useVenueSearch` checked the captured signal on success
+  but the *current* controller in `catch`/`finally`, so an abandoned request
+  cleared `loading` under its replacement
+- **Pinned stale venue** — reconciliation only ran when the venue list was
+  non-empty, so an empty search left a deleted venue as the destination
+  indefinitely; it is now a pure derivation
+- **Unreachable 429** — `searchNearbyVenues` threw `RATE_LIMITED` then caught it
+  in its own catch block, returning `[]`; callers could not distinguish a rate
+  limit from "no venues here", so nothing could back off
+
 ### P2 — Robustness
 - **GPS error handling** — dedicated UI for denied, unavailable, and timeout states with retry button
 - **Offline/reconnect banner** — `useNetworkStatus` hook tracks Firebase RTDB `.info/connected`
