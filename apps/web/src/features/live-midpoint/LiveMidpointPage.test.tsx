@@ -36,18 +36,22 @@ vi.mock("./hooks/useLiveSession", () => ({
   useLiveSession: (_uid: string) => mockSession(),
 }));
 
-// ── Mock useDirections ──
-vi.mock("./hooks/useDirections", () => ({
-  useDirections: () => ({
-    routes: [],
-    loading: false,
-    error: null,
+// ── Fake graph ports ──
+// The page drives the real graph runtime; only its I/O seam is replaced, so
+// these tests exercise the actual slots → midpoint → destination → routes
+// derivation rather than a stubbed-out pipeline. Nothing is scheduled, so no
+// timers leak between tests.
+const mockSearchVenues = vi.fn();
+const mockFetchRoute = vi.fn();
+vi.mock("./graph/ports", () => ({
+  createDefaultPorts: () => ({
+    now: () => 0,
+    schedule: () => 0,
+    cancel: () => {},
+    searchVenues: mockSearchVenues,
+    fetchRoute: mockFetchRoute,
+    placesEnabled: false,
   }),
-}));
-
-// ── Mock useVenueSearch ──
-vi.mock("./hooks/useVenueSearch", () => ({
-  useVenueSearch: () => ({ venues: [], loading: false, error: null }),
 }));
 
 // ── Mock LiveMap (avoid mapbox-gl in jsdom) ──
@@ -117,6 +121,8 @@ function defaultSession() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSearchVenues.mockResolvedValue({ ok: true, value: [] });
+  mockFetchRoute.mockResolvedValue({ ok: true, value: null });
   mockAuth.mockReturnValue({ status: "authenticated", uid: "test-uid" });
   mockNetworkStatus.mockReturnValue({
     browserOnline: true,

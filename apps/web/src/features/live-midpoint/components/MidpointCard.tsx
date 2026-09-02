@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
-import type { RouteInfo, TravelProfile } from "../hooks/useDirections";
+import type { RouteInfo, TravelProfile } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import "../styles/live-midpoint.css";
@@ -21,7 +21,7 @@ interface MidpointCardProps {
   ownIndex: ParticipantIndex;
   ownPosition: LatLng;
   ownRoute: RouteInfo | null;
-  otherParticipants: OtherParticipant[];
+  otherParticipants: readonly OtherParticipant[];
   destination: LatLng;
   travelProfile: TravelProfile;
   onProfileChange: (profile: TravelProfile) => void;

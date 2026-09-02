@@ -19,6 +19,9 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
+import { backoffDelayMs } from "../../../core/dag/backoff";
+import { createSlotRegistry } from "../lib/slot-registry";
+import type { SlotRegistry } from "../lib/slot-registry";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { classifyJoinError, describeError } from "../lib/error-classification";
 import { detectInAppBrowser } from "../lib/in-app-browser";
@@ -59,6 +62,8 @@ export interface ParticipantInfo {
 export interface LiveSessionState {
   phase: SessionPhase;
   code: string | null;
+  /** Session creator's uid — the anchor for stable slot allocation. */
+  creatorUid: string | null;
   ownIndex: ParticipantIndex | null;
   ownPosition: LatLng | null;
   ownName: string;
@@ -101,7 +106,9 @@ async function withRetry<T>(
     } catch (err) {
       lastErr = err;
       if (i < attempts - 1 && isRetryable(err)) {
-        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i)));
+        await new Promise((r) =>
+          setTimeout(r, backoffDelayMs(i, { baseMs: 1000 })),
+        );
       } else {
         break;
       }
@@ -169,21 +176,6 @@ function sessionContext(code: string | null) {
 }
 
 /**
- * Assign a ParticipantIndex based on UID position in sorted UID list.
- * Creator UID always gets index 0; others sorted lexicographically.
- */
-function assignIndex(
-  uid: string,
-  creatorUid: string,
-  allUids: string[],
-): ParticipantIndex {
-  if (uid === creatorUid) return 0;
-  const others = allUids.filter((u) => u !== creatorUid).sort();
-  const idx = others.indexOf(uid) + 1; // 1-based since creator is 0
-  return Math.min(idx, MAX_PARTICIPANTS - 1) as ParticipantIndex;
-}
-
-/**
  * Manages a live session backed by Firebase RTDB.
  *
  * RTDB schema:
@@ -199,6 +191,7 @@ export function useLiveSession(uid: string): LiveSessionState {
 
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [code, setCode] = useState<string | null>(null);
+  const [creatorUid, setCreatorUid] = useState<string | null>(null);
   const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
   const [ownPosition, setOwnPosition] = useState<LatLng | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
@@ -212,6 +205,9 @@ export function useLiveSession(uid: string): LiveSessionState {
   const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeRef = useRef<string | null>(null);
   const creatorUidRef = useRef<string | null>(null);
+  // Slot allocation is first-seen-wins and lasts the whole session, so it must
+  // survive re-renders. See lib/slot-registry.ts.
+  const slotRegistryRef = useRef<SlotRegistry | null>(null);
 
   // Throttle refs for RTDB write limiting
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,23 +245,32 @@ export function useLiveSession(uid: string): LiveSessionState {
             return;
           }
 
-          const creatorUid = creatorUidRef.current ?? "";
-          const allUids = Object.keys(data);
+          let registry = slotRegistryRef.current;
+          if (!registry) {
+            registry = createSlotRegistry(creatorUidRef.current ?? "");
+            slotRegistryRef.current = registry;
+          }
+          // Allocate over the whole snapshot, own uid included, so a slot
+          // never depends on who happens to be present in this frame.
+          registry.assignAll(Object.keys(data));
 
           // Build participant list excluding self
           const others: ParticipantInfo[] = [];
           for (const [participantUid, participant] of Object.entries(data)) {
-            if (participantUid !== uid) {
-              others.push({
-                uid: participantUid,
-                position: { lat: participant.lat, lng: participant.lng },
-                accuracy: participant.accuracy,
-                lastSeen: participant.ts,
-                index: assignIndex(participantUid, creatorUid, allUids),
-                stale: Date.now() - participant.ts > STALE_THRESHOLD_MS,
-                name: sanitizeName(participant.name),
-              });
-            }
+            if (participantUid === uid) continue;
+            const slot = registry.slotOf(participantUid);
+            // Every slot taken: drop rather than alias onto an occupied one
+            // (the old out-of-range clamp silently collided here).
+            if (slot === null) continue;
+            others.push({
+              uid: participantUid,
+              position: { lat: participant.lat, lng: participant.lng },
+              accuracy: participant.accuracy,
+              lastSeen: participant.ts,
+              index: slot,
+              stale: Date.now() - participant.ts > STALE_THRESHOLD_MS,
+              name: sanitizeName(participant.name),
+            });
           }
 
           others.sort((a, b) => a.index - b.index);
@@ -336,6 +341,10 @@ export function useLiveSession(uid: string): LiveSessionState {
     // Make UI usable immediately — share button works even if RTDB is slow/offline.
     // The code is locally generated; the writes below sync to the server when reachable.
     creatorUidRef.current = uid;
+    setCreatorUid(uid);
+    const creatorRegistry = createSlotRegistry(uid);
+    slotRegistryRef.current = creatorRegistry;
+    creatorRegistry.assign(uid);
     setCode(sessionCode);
     setOwnIndex(0);
     setPhase("waiting");
@@ -445,8 +454,16 @@ export function useLiveSession(uid: string): LiveSessionState {
         }
 
         creatorUidRef.current = data.creatorUid;
-        const allUids = [...existingUids.filter((u) => u !== uid), uid];
-        const myIndex = assignIndex(uid, data.creatorUid, allUids);
+        setCreatorUid(data.creatorUid);
+        const registry = createSlotRegistry(data.creatorUid);
+        slotRegistryRef.current = registry;
+        // Seed from participantUids (the write-once registration set) rather
+        // than from participants (only those who have reported a position).
+        // The two diverge while somebody is registered but has no fix yet,
+        // and ranking own over one set while ranking others over the other is
+        // exactly how two participants used to end up sharing a slot.
+        registry.assignAll([...new Set([...existingUids, uid])]);
+        const myIndex = registry.slotOf(uid);
 
         setCode(sessionCode);
         setOwnIndex(myIndex);
@@ -598,6 +615,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       throttleTimerRef.current = null;
     }
     pendingWriteRef.current = null;
+    slotRegistryRef.current = null;
     // Reset the guard but leave the onDisconnect armed — it is the reliable
     // backstop if this explicit remove() doesn't complete during unload.
     disconnectArmedRef.current = false;
@@ -622,6 +640,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   return {
     phase,
     code,
+    creatorUid,
     ownIndex,
     ownPosition,
     ownName,

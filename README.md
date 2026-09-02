@@ -2,11 +2,11 @@
 
 **A real-time midpoint PWA for up to 5 participants.** Share a link, stream locations live, find nearby venues, and meet in the middle — all from the browser.
 
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
 ![Mapbox](https://img.shields.io/badge/Mapbox_GL-3.x-000?logo=mapbox&logoColor=white)
-![Firebase](https://img.shields.io/badge/Firebase-11-FFCA28?logo=firebase&logoColor=black)
+![Firebase](https://img.shields.io/badge/Firebase-12-FFCA28?logo=firebase&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 <!-- Screenshot / demo GIF placeholder -->
@@ -31,7 +31,8 @@
 - **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
 - **i18n + RTL** — English, Hebrew with full RTL support via CSS logical properties
 - **PWA** — Installable, offline fallback, service worker caching
-- **162 Unit + Integration Tests** — geo-math, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, directions, page lifecycle
+- **Declared execution graph** — the derived pipeline runs as a DAG with cycle detection, per-node circuit breakers, retry and last-known-good degradation ([ARCHITECTURE.md](ARCHITECTURE.md))
+- **344 Unit + Integration Tests** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
 
 ---
 
@@ -74,22 +75,44 @@ graph TB
 
 All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed.
 
+Within each browser the derived work runs as a declared graph:
+
+```mermaid
+graph LR
+    S[slots] --> M[midpoint]
+    M --> V[venues]
+    M --> D[destination]
+    V --> D
+    S --> R[routes]
+    D --> R
+    S --> F[frame]
+    M --> F
+    V --> F
+    D --> F
+    R --> F
+```
+
+Edges are declared in one place and checked for cycles at load; the effectful
+nodes carry retry, circuit breaking and last-known-good degradation. See
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 ---
 
 ## Tech Stack
 
 | Layer | Tech |
 |-------|------|
-| UI | React 18 + Vite + Tailwind CSS |
+| UI | React 19 + Vite 6 + Tailwind CSS 4 |
 | Maps | Mapbox GL JS 3.x (dark-v11 basemap) |
 | Auth | Firebase Anonymous Auth (silent sign-in) |
 | Security | Firebase App Check (reCAPTCHA Enterprise) |
-| Real-time | Firebase 11 Realtime Database |
+| Real-time | Firebase 12 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
 | Venues | Google Places API (New) — optional |
 | Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
 | i18n | i18next — English, Hebrew (full RTL) |
-| Tests | Vitest + React Testing Library (162 tests) |
+| Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
+| Tests | Vitest + React Testing Library (344 tests) |
 
 ---
 
@@ -137,11 +160,13 @@ Create a `.env` file at the project root:
 meet-me-halfway/
 ├── apps/web/                      # React PWA
 │   ├── src/
+│   │   ├── core/dag/                  # execution core: Result, breaker, resource combinator
 │   │   ├── features/live-midpoint/    # Core feature
 │   │   │   ├── LiveMidpointPage.tsx   # Page orchestrator
 │   │   │   ├── components/            # LiveMap, markers, cards
-│   │   │   ├── hooks/                 # useGeolocation, useSession, useDirections, useVenueSearch
-│   │   │   ├── lib/                   # geo-math, venue-ranking, places-api, nav-links
+│   │   │   ├── graph/                 # edges, nodes, policies, ports, runtime
+│   │   │   ├── hooks/                 # useLiveGeolocation, useLiveSession (source adapters)
+│   │   │   ├── lib/                   # geo-math, slot-registry, venue-ranking, places-api, directions-api
 │   │   │   └── styles/               # Dark glass-morphism theme
 │   │   ├── hooks/                     # useFirebase, useAuth, useNetworkStatus
 │   │   ├── i18n/                      # en.json, he.json
@@ -151,7 +176,8 @@ meet-me-halfway/
 ├── infra/
 │   ├── database.rules.json            # Firebase RTDB security rules
 │   └── firebase.json                  # Firebase Hosting config
-├── .github/workflows/web.yml          # CI: lint + typecheck + test + build
+├── ARCHITECTURE.md                    # Pipeline topology, resilience, Big-O
+├── .github/workflows/web.yml          # CI: lint + typecheck + test + build + e2e
 ├── .env.example
 └── LICENSE
 ```
@@ -175,7 +201,7 @@ meet-me-halfway/
 
 ```bash
 cd apps/web
-npx vitest run     # 162 unit + integration tests
+npx vitest run     # 344 unit + integration tests
 npm run tsc        # TypeScript strict mode check
 ```
 

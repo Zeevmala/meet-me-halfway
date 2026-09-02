@@ -4,6 +4,10 @@
  */
 
 import type { LatLng } from "./geo-math";
+import { ok, err } from "../../../core/dag/result";
+import type { Result } from "../../../core/dag/result";
+import { classifyResponse, classifyThrown } from "../../../core/dag/errors";
+import type { ResourceError } from "../../../core/dag/errors";
 import type { PlaceResult } from "./venue-ranking";
 
 const PLACES_API_URL = "https://places.googleapis.com/v1/places:searchNearby";
@@ -67,16 +71,24 @@ function mapGooglePlace(gp: GooglePlace): PlaceResult | null {
  * @param center - Search center (the midpoint)
  * @param radiusMeters - Search radius (default 1000)
  * @param signal - AbortSignal for request cancellation
- * @returns PlaceResult[] ready for ranking, or [] on error
+ * Failures are returned, not swallowed. The previous implementation threw
+ * `RATE_LIMITED` on a 429 and then caught it in its own catch block two lines
+ * later, returning `[]` — so a caller could never distinguish "no venues near
+ * here" from "the API rejected us", and nothing downstream could back off.
+ *
+ * An absent API key is not a failure: venue search is an optional feature and
+ * degrades to an empty list by design.
+ *
+ * @returns PlaceResult[] ready for ranking, or a typed transport failure
  */
 export async function searchNearbyVenues(
   center: LatLng,
   radiusMeters: number = 1000,
   signal?: AbortSignal,
-): Promise<PlaceResult[]> {
+): Promise<Result<PlaceResult[], ResourceError>> {
   const apiKey = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as
     string | undefined;
-  if (!apiKey) return [];
+  if (!apiKey) return ok([]);
 
   try {
     const res = await fetch(PLACES_API_URL, {
@@ -101,19 +113,24 @@ export async function searchNearbyVenues(
 
     if (!res.ok) {
       console.warn(`[places-api] HTTP ${res.status}: ${res.statusText}`);
-      if (res.status === 429) throw new Error("RATE_LIMITED");
-      return [];
+      return err(classifyResponse(res));
     }
 
     const data: PlacesNearbyResponse = await res.json();
-    if (!data.places) return [];
+    if (!data.places) return ok([]);
 
-    return data.places
-      .map(mapGooglePlace)
-      .filter((p): p is PlaceResult => p !== null);
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") throw err;
-    console.warn("[places-api] search failed:", err);
-    return [];
+    return ok(
+      data.places
+        .map(mapGooglePlace)
+        .filter((p): p is PlaceResult => p !== null),
+    );
+  } catch (thrown) {
+    // Abort is the caller superseding us, not a dependency failure — it must
+    // stay a throw so the existing stale-response guards keep working.
+    if (thrown instanceof DOMException && thrown.name === "AbortError") {
+      throw thrown;
+    }
+    console.warn("[places-api] search failed:", thrown);
+    return err(classifyThrown(thrown));
   }
 }
