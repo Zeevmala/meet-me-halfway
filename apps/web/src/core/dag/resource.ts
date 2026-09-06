@@ -93,6 +93,13 @@ export interface Resource<I, O> {
   readonly dispose: () => void;
 }
 
+/**
+ * Multiple of `retryBaseMs` beyond which a server's `Retry-After` stops being
+ * something to sleep through inside a dispatch and becomes the breaker's
+ * cooldown instead.
+ */
+const MAX_INLINE_RETRY_AFTER_MULTIPLE = 8;
+
 const IDLE = {
   status: "idle" as const,
   value: null,
@@ -173,37 +180,55 @@ export function createResource<I, O>(
 
   function sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
-      const id = ports.schedule(() => resolve(), ms);
-      signal.addEventListener(
-        "abort",
-        () => {
-          ports.cancel(id);
-          resolve();
-        },
-        { once: true },
-      );
+      const onAbort = (): void => {
+        ports.cancel(id);
+        resolve();
+      };
+      const id = ports.schedule(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 
+  /**
+   * Run one attempt under its own controller, chained to the dispatch signal.
+   *
+   * The deadline has to *cancel* the call, not merely stop waiting for it.
+   * Resolving TIMEOUT while the request stayed open meant `attempt` issued the
+   * retry alongside it: at `retryAttempts × occupied slots` that is up to ten
+   * concurrent sockets against a six-per-host browser cap. A per-attempt
+   * controller aborts just this call; a superseding dispatch still aborts the
+   * parent and, through the forwarder, everything beneath it.
+   */
   function withTimeout(
     input: I,
     signal: AbortSignal,
   ): Promise<Result<O, ResourceError>> {
     return new Promise((resolve) => {
+      const attemptController = new AbortController();
+      const forward = (): void => attemptController.abort();
+      if (signal.aborted) forward();
+      else signal.addEventListener("abort", forward, { once: true });
+
       let settled = false;
       const finish = (result: Result<O, ResourceError>): void => {
         if (settled) return;
         settled = true;
+        signal.removeEventListener("abort", forward);
         resolve(result);
       };
+
       const timeoutId =
         policy.timeoutMs > 0
-          ? ports.schedule(
-              () => finish(err({ kind: "TIMEOUT", afterMs: policy.timeoutMs })),
-              policy.timeoutMs,
-            )
+          ? ports.schedule(() => {
+              attemptController.abort();
+              finish(err({ kind: "TIMEOUT", afterMs: policy.timeoutMs }));
+            }, policy.timeoutMs)
           : null;
-      policy.run(input, signal).then(
+
+      policy.run(input, attemptController.signal).then(
         (result) => {
           if (timeoutId !== null) ports.cancel(timeoutId);
           finish(result);
@@ -231,8 +256,28 @@ export function createResource<I, O>(
       if (last.ok || !isRetryableError(last.error) || i === attempts - 1) {
         return last;
       }
+
+      // Honour the server's own instruction. `Retry-After` was previously
+      // parsed into the error and then read by nobody, so a 429 saying 30 s
+      // was retried at 1 s and 2 s and counted twice against the breaker.
+      //
+      // Division of labour: the retry loop owns seconds, the breaker owns the
+      // long tail. Sleeping through a minute-long hint inside a dispatch would
+      // pin an AbortController and a slot in the resource for that whole time,
+      // so a hint that large is handed to the breaker and the dispatch ends.
+      const hintMs =
+        last.error.kind === "RATE_LIMITED" ? last.error.retryAfterMs : 0;
+      if (hintMs > policy.retryBaseMs * MAX_INLINE_RETRY_AFTER_MULTIPLE) {
+        breaker.openFor(ports.now(), hintMs);
+        return last;
+      }
+
       await sleep(
-        backoffDelayMs(i, { baseMs: policy.retryBaseMs, jitter: true }),
+        backoffDelayMs(i, {
+          baseMs: policy.retryBaseMs,
+          jitter: true,
+          floorMs: hintMs,
+        }),
         signal,
       );
     }

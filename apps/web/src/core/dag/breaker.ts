@@ -35,8 +35,27 @@ export interface Breaker {
   readonly allow: (nowMs: number) => boolean;
   readonly recordSuccess: () => void;
   readonly recordFailure: (nowMs: number) => void;
+  /**
+   * Open the breaker for an explicit window, clamped to the configured
+   * bounds. The caller for this is a server that told us how long to wait —
+   * a `Retry-After` longer than the retry loop is willing to sleep through
+   * belongs here rather than inside a dispatch.
+   */
+  readonly openFor: (nowMs: number, ms: number) => void;
   readonly state: () => BreakerState;
-  /** When the breaker will next admit a probe; `0` while closed. */
+  /**
+   * When the breaker will next admit a probe; `0` when there is nothing to
+   * wait for.
+   *
+   * `0` while **closed** (calls already pass) and also while **halfOpen** (a
+   * probe is out; its result is what moves the state). Returning the elapsed
+   * `openedAt + openMs` in the half-open case put a *past* instant in front of
+   * the caller: `resource.shouldDispatch` read it as "cooldown over, dispatch",
+   * `fire()` was then refused by `allow()`, and `scheduleBreakerWake` re-armed
+   * at `max(0, past - now)` = 0 — an unbounded `setTimeout(…, 0)` spin for the
+   * whole lifetime of the probe, on exactly the degraded network that opened
+   * the breaker.
+   */
   readonly retryAtMs: () => number;
 }
 
@@ -70,6 +89,10 @@ export function createBreaker(config: BreakerConfig): Breaker {
       openMs = Math.min(openMs * config.multiplier, config.maxOpenMs);
       return;
     }
+    // Already open: calls are being refused, so there is nothing to count.
+    // Falling through would restart the window at `baseOpenMs` and silently
+    // shrink an explicit `openFor` cooldown back to the default.
+    if (state === "open") return;
     failures += 1;
     if (failures >= config.failureThreshold) {
       state = "open";
@@ -78,11 +101,19 @@ export function createBreaker(config: BreakerConfig): Breaker {
     }
   }
 
+  function openFor(nowMs: number, ms: number): void {
+    state = "open";
+    openedAtMs = nowMs;
+    failures = config.failureThreshold;
+    openMs = Math.min(Math.max(ms, config.baseOpenMs), config.maxOpenMs);
+  }
+
   return {
     allow,
     recordSuccess,
     recordFailure,
+    openFor,
     state: () => state,
-    retryAtMs: () => (state === "closed" ? 0 : openedAtMs + openMs),
+    retryAtMs: () => (state === "open" ? openedAtMs + openMs : 0),
   };
 }

@@ -53,7 +53,14 @@ function createTestPorts() {
     await flush();
   };
 
-  return { ports, advance, flush, now: () => nowMs };
+  return {
+    ports,
+    advance,
+    flush,
+    now: () => nowMs,
+    /** Timers currently armed. A spin shows up here as work that never drains. */
+    pending: () => tasks.size,
+  };
 }
 
 interface Input {
@@ -328,5 +335,190 @@ describe("createResource", () => {
     await t.advance(1000);
 
     expect(r.getState()).toBe(r.getState());
+  });
+});
+
+describe("createResource — breaker interaction", () => {
+  it("does not re-arm while a half-open probe is outstanding", async () => {
+    const clock = createTestPorts();
+    let resolveProbe: ((r: Result<string, ResourceError>) => void) | null =
+      null;
+    let calls = 0;
+
+    const resource = createResource(
+      makePolicy((_input) => {
+        calls++;
+        // The first two calls fail outright and trip the breaker
+        // (failureThreshold: 2). The third is the half-open probe, which we
+        // hold open so the breaker stays in `halfOpen`.
+        if (calls <= 2) {
+          return Promise.resolve(
+            err({ kind: "NETWORK", detail: "down" }) as Result<
+              string,
+              ResourceError
+            >,
+          );
+        }
+        return new Promise<Result<string, ResourceError>>((resolve) => {
+          resolveProbe = resolve;
+        });
+      }),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    resource.request({ at: 20, tag: "b" });
+    await clock.advance(1000);
+    expect(resource.getState().error?.kind).toBe("NETWORK");
+
+    // Cooldown elapses; exactly one probe goes out and stays out.
+    await clock.advance(5000);
+    expect(calls).toBe(3);
+    expect(resolveProbe).not.toBeNull();
+
+    // A moved input arrives while the probe is still in flight. The breaker
+    // refuses it — and must not schedule a wake for an instant already in the
+    // past, which is how this became an unbounded setTimeout(fire, 0) chain.
+    resource.request({ at: 200, tag: "c" });
+    await clock.advance(1000);
+
+    expect(calls).toBe(3);
+    expect(resource.getState().error?.kind).toBe("OPEN_CIRCUIT");
+    expect(clock.pending()).toBe(0);
+  });
+});
+
+describe("createResource — Retry-After", () => {
+  it("waits at least as long as the server asked before retrying", async () => {
+    const clock = createTestPorts();
+    const attemptAt: number[] = [];
+
+    const resource = createResource(
+      makePolicy(
+        () => {
+          attemptAt.push(clock.now());
+          return Promise.resolve(
+            err({ kind: "RATE_LIMITED", retryAfterMs: 600 }) as Result<
+              string,
+              ResourceError
+            >,
+          );
+        },
+        { retryAttempts: 2, retryBaseMs: 100 },
+      ),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    expect(attemptAt).toEqual([1000]);
+
+    // Plain exponential backoff would have retried at ~100ms. The hint floors
+    // it at 600ms, so nothing happens before then.
+    await clock.advance(599);
+    expect(attemptAt).toEqual([1000]);
+
+    await clock.advance(1);
+    expect(attemptAt).toEqual([1000, 1600]);
+  });
+
+  it("hands a long Retry-After to the breaker instead of sleeping on it", async () => {
+    const clock = createTestPorts();
+    let calls = 0;
+
+    const resource = createResource(
+      makePolicy(
+        () => {
+          calls++;
+          return Promise.resolve(
+            err({ kind: "RATE_LIMITED", retryAfterMs: 30_000 }) as Result<
+              string,
+              ResourceError
+            >,
+          );
+        },
+        { retryAttempts: 3, retryBaseMs: 100 },
+      ),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+
+    // 30s is far past retryBaseMs * 8; the dispatch ends after one attempt
+    // rather than pinning a controller for half a minute.
+    expect(calls).toBe(1);
+    expect(resource.getState().error?.kind).toBe("RATE_LIMITED");
+
+    // The window is the breaker's now — clamped to maxOpenMs (20s here) — and
+    // a later failure must not shrink it back to baseOpenMs.
+    resource.request({ at: 500, tag: "b" });
+    await clock.advance(19_000);
+    expect(calls).toBe(1);
+    expect(resource.getState().error?.kind).toBe("OPEN_CIRCUIT");
+
+    await clock.advance(2000);
+    expect(calls).toBe(2);
+  });
+});
+
+describe("createResource — timeout cancels its request", () => {
+  it("aborts the attempt that timed out and gives the retry a fresh signal", async () => {
+    const clock = createTestPorts();
+    const signals: AbortSignal[] = [];
+
+    const resource = createResource(
+      makePolicy(
+        (_input, signal) => {
+          signals.push(signal);
+          // Never settles: only the deadline can end this attempt.
+          return new Promise<Result<string, ResourceError>>(() => {});
+        },
+        { timeoutMs: 500, retryAttempts: 2, retryBaseMs: 100 },
+      ),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].aborted).toBe(false);
+
+    // The deadline must cancel the in-flight request, not merely stop waiting
+    // for it — otherwise the retry runs alongside it on a second socket.
+    await clock.advance(500);
+    expect(signals[0].aborted).toBe(true);
+
+    await clock.advance(200);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).not.toBe(signals[0]);
+    expect(signals[1].aborted).toBe(false);
+  });
+
+  it("aborts the live attempt when the dispatch is superseded", async () => {
+    const clock = createTestPorts();
+    const signals: AbortSignal[] = [];
+
+    const resource = createResource(
+      makePolicy(
+        (_input, signal) => {
+          signals.push(signal);
+          return new Promise<Result<string, ResourceError>>(() => {});
+        },
+        { timeoutMs: 0, retryAttempts: 1 },
+      ),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    expect(signals).toHaveLength(1);
+
+    resource.request({ at: 500, tag: "b" });
+    await clock.advance(1000);
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(true);
   });
 });
