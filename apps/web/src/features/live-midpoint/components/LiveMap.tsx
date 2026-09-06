@@ -10,6 +10,7 @@ import {
   MAX_PARTICIPANTS,
 } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
+import { APP_CONFIG } from "../../../lib/config";
 export type { MapParticipant };
 
 import LiveParticipantMarker from "./LiveParticipantMarker";
@@ -22,7 +23,10 @@ const DEFAULT_ZOOM = 8;
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string;
+// mapbox-gl exposes one global access token, not a per-instance one, so
+// this cannot be injected. Sourcing it from the config module still keeps
+// the environment read in a single place.
+mapboxgl.accessToken = APP_CONFIG.mapboxToken;
 
 // RTL text plugin for Hebrew map labels
 try {

@@ -6,14 +6,18 @@
  * that only changes when a value actually changed, React commits it
  * atomically — no tearing, and the `memo()` on the cards finally holds.
  */
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { createRuntime } from "./runtime";
 import type { GraphRuntime, GraphSnapshot } from "./runtime";
-import { createDefaultPorts } from "./ports";
 import type { GraphPorts } from "./ports";
 
 /**
  * Own a runtime for the lifetime of the component.
+ *
+ * `ports` is required rather than defaulted. A default meant the page silently
+ * built its own I/O seam while a test that thought it had injected one was
+ * driving something else, and it put an `import.meta.env` read behind a
+ * function nobody had to pass anything to.
  *
  * StrictMode in development mounts, tears down, then remounts. That teardown
  * disposes the runtime while the component keeps living, which would leave
@@ -21,19 +25,18 @@ import type { GraphPorts } from "./ports";
  * disposed, stand up a replacement. In production the effect runs once and
  * this never fires.
  */
-export function useGraphRuntime(ports?: GraphPorts): GraphRuntime {
-  const resolvedPorts = useMemo(() => ports ?? createDefaultPorts(), [ports]);
+export function useGraphRuntime(ports: GraphPorts): GraphRuntime {
   const [runtime, setRuntime] = useState<GraphRuntime>(() =>
-    createRuntime(resolvedPorts),
+    createRuntime(ports),
   );
 
   useEffect(() => {
     if (runtime.isDisposed()) {
-      setRuntime(createRuntime(resolvedPorts));
+      setRuntime(createRuntime(ports));
       return;
     }
     return () => runtime.dispose();
-  }, [runtime, resolvedPorts]);
+  }, [runtime, ports]);
 
   return runtime;
 }

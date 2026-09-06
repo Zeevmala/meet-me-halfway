@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ParticipantIndex } from "./lib/participant-config";
+import { ServicesProvider } from "../../components/ServicesProvider";
+import type { Services } from "../../lib/services";
+import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 
 // ── Mock i18next ──
@@ -42,18 +45,37 @@ vi.mock("./hooks/useLiveSession", () => ({
 // these tests exercise the actual slots → midpoint → destination → routes
 // derivation rather than a stubbed-out pipeline. Nothing is scheduled, so no
 // timers leak between tests.
+//
+// These are *passed in* through ServicesProvider rather than installed with
+// vi.mock, which is the point of the composition root: the page under test is
+// the real one, wired to fakes, not a module graph rewritten underneath it.
 const mockSearchVenues = vi.fn();
 const mockFetchRoute = vi.fn();
-vi.mock("./graph/ports", () => ({
-  createDefaultPorts: () => ({
-    now: () => 0,
-    schedule: () => 0,
-    cancel: () => {},
-    searchVenues: mockSearchVenues,
-    fetchRoute: mockFetchRoute,
-    placesEnabled: false,
-  }),
-}));
+
+const testPorts: GraphPorts = {
+  now: () => 0,
+  schedule: () => 0 as unknown as ReturnType<typeof setTimeout>,
+  cancel: () => {},
+  searchVenues: mockSearchVenues,
+  fetchRoute: mockFetchRoute,
+  placesEnabled: false,
+};
+
+const testServices = {
+  config: {} as Services["config"],
+  firebase: {} as Services["firebase"],
+  graphPorts: testPorts,
+  requestSemaphore: {} as Services["requestSemaphore"],
+} satisfies Services;
+
+/** Render the page inside the injection boundary it now expects. */
+function renderPage() {
+  return render(
+    <ServicesProvider services={testServices}>
+      <LiveMidpointPage />
+    </ServicesProvider>,
+  );
+}
 
 // ── Mock LiveMap (avoid mapbox-gl in jsdom) ──
 // Props are recorded so the referential-stability regression below can assert
@@ -154,7 +176,7 @@ describe("LiveMidpointPage", () => {
   it("shows loading state when auth is loading", () => {
     mockAuth.mockReturnValue({ status: "loading" });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.connecting")).toBeTruthy();
   });
@@ -166,7 +188,7 @@ describe("LiveMidpointPage", () => {
       message: "auth/web-storage-unsupported: storage blocked",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.authStorageBlocked")).toBeTruthy();
     expect(screen.getByText("common.retry")).toBeTruthy();
@@ -182,7 +204,7 @@ describe("LiveMidpointPage", () => {
       position: null,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoDenied")).toBeTruthy();
     expect(screen.getByText("live.geoDeniedInstructions")).toBeTruthy();
@@ -195,7 +217,7 @@ describe("LiveMidpointPage", () => {
       position: null,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoUnavailable")).toBeTruthy();
     expect(screen.getByText("live.geoUnavailableInstructions")).toBeTruthy();
@@ -210,7 +232,7 @@ describe("LiveMidpointPage", () => {
       start: startFn,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoTimeout")).toBeTruthy();
     expect(screen.getByText("live.geoTimeoutInstructions")).toBeTruthy();
@@ -229,7 +251,7 @@ describe("LiveMidpointPage", () => {
       error: "SESSION_NOT_FOUND",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionNotFound")).toBeTruthy();
   });
@@ -241,7 +263,7 @@ describe("LiveMidpointPage", () => {
       error: "SESSION_FULL",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionFull")).toBeTruthy();
   });
@@ -253,13 +275,13 @@ describe("LiveMidpointPage", () => {
       error: "SESSION_EXPIRED",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionExpired")).toBeTruthy();
   });
 
   it("shows waiting card when session is waiting", () => {
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.getByTestId("session-badge")).toBeTruthy();
@@ -272,7 +294,7 @@ describe("LiveMidpointPage", () => {
       isOnline: false,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("app.offline")).toBeTruthy();
   });
@@ -287,7 +309,7 @@ describe("LiveMidpointPage", () => {
       code: "ABC123",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
   });
@@ -302,7 +324,7 @@ describe("LiveMidpointPage", () => {
       participants: [],
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.queryByTestId("midpoint-card")).toBeNull();
@@ -334,7 +356,7 @@ describe("LiveMidpointPage", () => {
       ],
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("midpoint-card")).toBeTruthy();
   });
@@ -363,7 +385,7 @@ describe("LiveMidpointPage — render-path stability", () => {
       participants: roster(),
     });
 
-    const { rerender } = render(<LiveMidpointPage />);
+    const { rerender } = renderPage();
     const before = liveMapProps.length;
     expect(before).toBeGreaterThan(0);
     const first = liveMapProps[before - 1];
@@ -378,7 +400,11 @@ describe("LiveMidpointPage — render-path stability", () => {
       phase: "connected",
       participants: roster(),
     });
-    rerender(<LiveMidpointPage />);
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
 
     expect(liveMapProps.length).toBeGreaterThan(before);
     const second = liveMapProps[liveMapProps.length - 1];
@@ -396,7 +422,7 @@ describe("LiveMidpointPage — render-path stability", () => {
       participants: roster(),
     });
 
-    const { rerender } = render(<LiveMidpointPage />);
+    const { rerender } = renderPage();
     const first = liveMapProps[liveMapProps.length - 1];
 
     const moved = roster();
@@ -406,7 +432,11 @@ describe("LiveMidpointPage — render-path stability", () => {
       phase: "connected",
       participants: moved,
     });
-    rerender(<LiveMidpointPage />);
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
 
     const second = liveMapProps[liveMapProps.length - 1];
     expect(second.participants).not.toBe(first.participants);

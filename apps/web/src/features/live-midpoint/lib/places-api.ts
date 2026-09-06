@@ -65,72 +65,81 @@ function mapGooglePlace(gp: GooglePlace): PlaceResult | null {
   };
 }
 
+export type SearchVenues = (
+  center: LatLng,
+  radiusMeters: number,
+  signal: AbortSignal,
+) => Promise<Result<PlaceResult[], ResourceError>>;
+
 /**
- * Search for nearby venues using Google Places API (New).
+ * Bind a Google Places (New) Nearby Search client to a key.
  *
- * @param center - Search center (the midpoint)
- * @param radiusMeters - Search radius (default 1000)
- * @param signal - AbortSignal for request cancellation
- * Failures are returned, not swallowed. The previous implementation threw
- * `RATE_LIMITED` on a 429 and then caught it in its own catch block two lines
- * later, returning `[]` — so a caller could never distinguish "no venues near
+ * The key is supplied by the composition root rather than read from
+ * `import.meta.env` here — it was previously read in three places, any of
+ * which could disagree about whether the feature was even on.
+ *
+ * A `null` key is not a failure: venue search is optional and degrades to an
+ * empty list by design.
+ *
+ * Failures are returned, not swallowed. The original implementation threw
+ * `RATE_LIMITED` on a 429 and caught it in its own catch block two lines
+ * later, returning `[]` — so a caller could not distinguish "no venues near
  * here" from "the API rejected us", and nothing downstream could back off.
  *
- * An absent API key is not a failure: venue search is an optional feature and
- * degrades to an empty list by design.
- *
- * @returns PlaceResult[] ready for ranking, or a typed transport failure
+ * The returned function takes the search centre, a radius in metres
+ * (default 1000) and an AbortSignal, and resolves `PlaceResult[]` ready for
+ * ranking or a typed transport failure.
  */
-export async function searchNearbyVenues(
-  center: LatLng,
-  radiusMeters: number = 1000,
-  signal?: AbortSignal,
-): Promise<Result<PlaceResult[], ResourceError>> {
-  const apiKey = import.meta.env.VITE_GOOGLE_PLACES_API_KEY as
-    string | undefined;
-  if (!apiKey) return ok([]);
+export function createPlacesClient(apiKey: string | null): SearchVenues {
+  return async function searchNearbyVenues(
+    center: LatLng,
+    radiusMeters: number = 1000,
+    signal?: AbortSignal,
+  ): Promise<Result<PlaceResult[], ResourceError>> {
+    if (apiKey === null) return ok([]);
 
-  try {
-    const res = await fetch(PLACES_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask": FIELD_MASK,
-      },
-      body: JSON.stringify({
-        locationRestriction: {
-          circle: {
-            center: { latitude: center.lat, longitude: center.lng },
-            radiusMeters,
-          },
+    try {
+      const res = await fetch(PLACES_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": FIELD_MASK,
         },
-        includedTypes: [...VENUE_TYPES],
-        maxResultCount: 20,
-      }),
-      signal,
-    });
+        body: JSON.stringify({
+          locationRestriction: {
+            circle: {
+              center: { latitude: center.lat, longitude: center.lng },
+              radiusMeters,
+            },
+          },
+          includedTypes: [...VENUE_TYPES],
+          maxResultCount: 20,
+        }),
+        signal,
+      });
 
-    if (!res.ok) {
-      console.warn(`[places-api] HTTP ${res.status}: ${res.statusText}`);
-      return err(classifyResponse(res));
+      if (!res.ok) {
+        console.warn(`[places-api] HTTP ${res.status}: ${res.statusText}`);
+        return err(classifyResponse(res));
+      }
+
+      const data: PlacesNearbyResponse = await res.json();
+      if (!data.places) return ok([]);
+
+      return ok(
+        data.places
+          .map(mapGooglePlace)
+          .filter((p): p is PlaceResult => p !== null),
+      );
+    } catch (thrown) {
+      // Abort is the caller superseding us, not a dependency failure — it must
+      // stay a throw so the existing stale-response guards keep working.
+      if (thrown instanceof DOMException && thrown.name === "AbortError") {
+        throw thrown;
+      }
+      console.warn("[places-api] search failed:", thrown);
+      return err(classifyThrown(thrown));
     }
-
-    const data: PlacesNearbyResponse = await res.json();
-    if (!data.places) return ok([]);
-
-    return ok(
-      data.places
-        .map(mapGooglePlace)
-        .filter((p): p is PlaceResult => p !== null),
-    );
-  } catch (thrown) {
-    // Abort is the caller superseding us, not a dependency failure — it must
-    // stay a throw so the existing stale-response guards keep working.
-    if (thrown instanceof DOMException && thrown.name === "AbortError") {
-      throw thrown;
-    }
-    console.warn("[places-api] search failed:", thrown);
-    return err(classifyThrown(thrown));
-  }
+  };
 }

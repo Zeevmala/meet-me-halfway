@@ -5,15 +5,21 @@ import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import "./lib/i18n"; // Initialize i18next before React renders
-import { validateEnv } from "./lib/env";
+import { APP_CONFIG, validateAppConfig } from "./lib/config";
+import { createServices } from "./lib/services";
+import { ServicesProvider } from "./components/ServicesProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 const LiveMidpointPage = lazy(
   () => import("./features/live-midpoint/LiveMidpointPage"),
 );
 
-// Validate env vars before anything renders
-validateEnv();
+// Fail before anything renders if the deployment is misconfigured.
+validateAppConfig(APP_CONFIG);
+
+// The composition root. Everything below receives its dependencies from here;
+// nothing below constructs a Firebase handle or reads a credential itself.
+const services = createServices(APP_CONFIG);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element not found");
@@ -21,15 +27,17 @@ if (!root) throw new Error("Root element not found");
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary>
-      <Suspense
-        fallback={
-          <div className="live-page">
-            <div className="live-status">Loading...</div>
-          </div>
-        }
-      >
-        <LiveMidpointPage />
-      </Suspense>
+      <ServicesProvider services={services}>
+        <Suspense
+          fallback={
+            <div className="live-page">
+              <div className="live-status">Loading...</div>
+            </div>
+          }
+        >
+          <LiveMidpointPage />
+        </Suspense>
+      </ServicesProvider>
     </ErrorBoundary>
   </StrictMode>,
 );

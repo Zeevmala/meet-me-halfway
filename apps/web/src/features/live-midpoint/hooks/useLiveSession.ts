@@ -161,8 +161,15 @@ async function waitForAppCheckToken(
   }
 }
 
-/** Build Sentry context for a session-flow failure. */
-function sessionContext(code: string | null) {
+/**
+ * Build Sentry context for a session-flow failure.
+ *
+ * `hasAppCheck` now reports whether attestation is actually *running*, not
+ * merely whether a site key was configured. The two diverge exactly when it
+ * matters — a blocked reCAPTCHA script in an in-app browser leaves the key set
+ * and App Check off — which is the case these reports exist to diagnose.
+ */
+function sessionContext(code: string | null, hasAppCheck: boolean) {
   return {
     session: {
       // Don't ship the full code — keep PII low. The first 2 chars are
@@ -170,7 +177,7 @@ function sessionContext(code: string | null) {
       codePrefix: code ? code.slice(0, 2) : null,
       online: typeof navigator !== "undefined" ? navigator.onLine : null,
       inAppBrowser: detectInAppBrowser(),
-      hasAppCheck: !!import.meta.env.VITE_RECAPTCHA_SITE_KEY,
+      hasAppCheck,
     },
   };
 }
@@ -290,7 +297,7 @@ export function useLiveSession(uid: string): LiveSessionState {
           console.error("[session] participants listener error:", err);
           Sentry.captureException(err, {
             tags: { phase: "listen", classified: classifyJoinError(err) },
-            contexts: sessionContext(codeRef.current),
+            contexts: sessionContext(codeRef.current, appCheck !== null),
           });
           setErrorDetails(describeError(err));
           setError("CONNECTION_ERROR");
@@ -298,7 +305,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         },
       );
     },
-    [db, uid],
+    [db, uid, appCheck],
   );
 
   /** Start stale detection interval. */
@@ -381,7 +388,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       console.error("[session] create failed:", err);
       Sentry.captureException(err, {
         tags: { phase: "create", classified: classifyJoinError(err) },
-        contexts: sessionContext(sessionCode),
+        contexts: sessionContext(sessionCode, appCheck !== null),
       });
       setErrorDetails(describeError(err));
       setPhase("error");
@@ -487,7 +494,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         console.error("[session] join failed:", err, "→", classified);
         Sentry.captureException(err, {
           tags: { phase: "join", classified, appCheckOk: String(appCheckOk) },
-          contexts: sessionContext(sessionCode),
+          contexts: sessionContext(sessionCode, appCheck !== null),
         });
         setErrorDetails(describeError(err));
         setPhase("error");

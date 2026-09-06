@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
+import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
@@ -19,8 +20,6 @@ import "./styles/live-midpoint.css";
 
 // Lazy-load VenueListCard — only needed when Places API key is configured
 const VenueListCard = lazy(() => import("./components/VenueListCard"));
-
-const placesEnabled = !!import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
 
 /** Read ?code= from URL query string. */
 function getCodeFromURL(): string | null {
@@ -64,7 +63,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   // graph/edges.ts and executed in topological order. One subscription
   // replaces the four-hook render cascade, and the snapshot only changes when
   // a value actually changed, so the memo() on the cards below holds.
-  const runtime = useGraphRuntime();
+  const { graphPorts } = useServices();
+  const runtime = useGraphRuntime(graphPorts);
+  const placesEnabled = graphPorts.placesEnabled;
   const graph = useGraph(runtime);
 
   // Feed session and GPS state in. These are event streams, not graph nodes:

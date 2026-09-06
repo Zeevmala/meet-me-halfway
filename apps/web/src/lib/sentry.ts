@@ -1,8 +1,9 @@
 import * as Sentry from "@sentry/react";
+import { APP_CONFIG } from "./config";
 
-const dsn = import.meta.env.VITE_SENTRY_DSN as string | undefined;
+const dsn = APP_CONFIG.sentryDsn;
 
-if (dsn) {
+if (dsn !== null) {
   try {
     Sentry.init({
       dsn,
