@@ -11,7 +11,9 @@ import { createFirebaseServices } from "./firebase-factory";
 import type { FirebaseServices } from "./firebase-factory";
 import { createPlacesClient } from "../features/live-midpoint/lib/places-api";
 import { createDirectionsClient } from "../features/live-midpoint/lib/directions-api";
+import { createPresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
 import type { GraphPorts } from "../features/live-midpoint/graph/ports";
+import type { PresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
 import type { AppConfig } from "./config";
 
 /**
@@ -32,12 +34,16 @@ export interface Services {
   readonly config: AppConfig;
   readonly firebase: FirebaseServices;
   readonly graphPorts: GraphPorts;
+  /** Session teardown needs the removal side, which is not a graph node. */
+  readonly presence: PresenceWriter;
   /** Exposed for diagnostics; the ports above already hold it. */
   readonly requestSemaphore: Semaphore;
 }
 
 export function createServices(config: AppConfig): Services {
   const requestSemaphore = createSemaphore(MAX_CONCURRENT_REQUESTS);
+  const firebase = createFirebaseServices(config);
+  const presence = createPresenceWriter(firebase.db);
 
   // The bulkhead wraps the clients here rather than inside a ResourcePolicy:
   // policies stay declarative records, with no knowledge of global scheduling.
@@ -56,13 +62,12 @@ export function createServices(config: AppConfig): Services {
     cancel: (id) => clearTimeout(id),
     searchVenues,
     fetchRoute,
+    // Not semaphore-wrapped: presence rides the already-open RTDB
+    // WebSocket, so it costs no HTTP connection and must not queue behind
+    // route fetches — peers infer staleness from how recently it landed.
+    writePresence: presence.write,
     placesEnabled: config.places !== null,
   };
 
-  return {
-    config,
-    firebase: createFirebaseServices(config),
-    graphPorts,
-    requestSemaphore,
-  };
+  return { config, firebase, graphPorts, presence, requestSemaphore };
 }

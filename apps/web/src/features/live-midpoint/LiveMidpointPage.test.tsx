@@ -142,15 +142,18 @@ function defaultGeo() {
 
 function defaultSession() {
   return {
-    phase: "waiting",
+    // Lifecycle only — waiting/connected/some_stale is the graph's to derive.
+    status: "ready",
     code: "ABC123",
     ownIndex: 0,
-    ownPosition: { lat: 32.08, lng: 34.78 },
+    ownName: "Me",
     participants: [],
     error: null,
-    createSession: vi.fn(),
-    joinSession: vi.fn(),
-    updateOwnLocation: vi.fn(),
+    errorDetails: null,
+    creatorUid: "test-uid",
+    createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
+    joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
+    setOwnName: vi.fn(),
     cleanup: vi.fn(),
   };
 }
@@ -247,7 +250,7 @@ describe("LiveMidpointPage", () => {
   it("shows session not found error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_NOT_FOUND",
     });
 
@@ -259,7 +262,7 @@ describe("LiveMidpointPage", () => {
   it("shows session full error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_FULL",
     });
 
@@ -271,7 +274,7 @@ describe("LiveMidpointPage", () => {
   it("shows session expired error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_EXPIRED",
     });
 
@@ -305,7 +308,7 @@ describe("LiveMidpointPage", () => {
     // the fallback whenever code is set and the connected MidpointCard can't render.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "creating",
+      status: "connecting",
       code: "ABC123",
     });
 
@@ -320,7 +323,7 @@ describe("LiveMidpointPage", () => {
     // still render so the share button is reachable.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: [],
     });
 
@@ -333,7 +336,7 @@ describe("LiveMidpointPage", () => {
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: [
         {
           uid: "p1",
@@ -341,7 +344,6 @@ describe("LiveMidpointPage", () => {
           accuracy: 15,
           lastSeen: Date.now(),
           index: 1,
-          stale: false,
           name: null,
         },
         {
@@ -350,7 +352,6 @@ describe("LiveMidpointPage", () => {
           accuracy: 20,
           lastSeen: Date.now(),
           index: 2,
-          stale: false,
           name: null,
         },
       ],
@@ -371,8 +372,7 @@ describe("LiveMidpointPage — render-path stability", () => {
         index: 1 as ParticipantIndex,
         position: { lat: 32.09, lng: 34.79 },
         accuracy: 12,
-        lastSeen: 1,
-        stale: false,
+        lastSeen: Date.now(),
         name: "Peer",
       },
     ];
@@ -381,7 +381,7 @@ describe("LiveMidpointPage — render-path stability", () => {
   it("keeps LiveMap's props referentially stable across an unchanged heartbeat", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: roster(),
     });
 
@@ -397,7 +397,7 @@ describe("LiveMidpointPage — render-path stability", () => {
     // sources for geometry that had not moved.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: roster(),
     });
     rerender(
@@ -418,7 +418,7 @@ describe("LiveMidpointPage — render-path stability", () => {
   it("hands LiveMap new projections when the roster actually changes", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: roster(),
     });
 
@@ -429,7 +429,7 @@ describe("LiveMidpointPage — render-path stability", () => {
     moved[0] = { ...moved[0], position: { lat: 32.2, lng: 34.9 } };
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: moved,
     });
     rerender(

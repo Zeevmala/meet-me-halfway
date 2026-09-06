@@ -70,18 +70,32 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
   // Feed session and GPS state in. These are event streams, not graph nodes:
   // the graph derives from them, never the other way round.
+  //
+  // `ownPosition` comes straight from geolocation. It used to be mirrored
+  // through `useLiveSession` — geo → updateOwnLocation → setOwnPosition →
+  // render → setSources — which cost two commits per fix and let position and
+  // accuracy in the same slot vector come from two different fixes, because
+  // accuracy was already read directly from `geo`.
   useEffect(() => {
     runtime.setSources({
       ownSlot: session.ownIndex,
-      ownPosition: session.ownPosition,
+      ownPosition: geo.position,
       ownAccuracy: geo.accuracy,
       participants: session.participants,
+      sessionCode: session.code,
+      ownUid: uid,
+      ownName: session.ownName,
+      sessionStatus: session.status,
     });
   }, [
     runtime,
+    uid,
     session.ownIndex,
-    session.ownPosition,
     session.participants,
+    session.code,
+    session.ownName,
+    session.status,
+    geo.position,
     geo.accuracy,
   ]);
 
@@ -166,29 +180,38 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }, [slots, routes]);
 
   // ── Initialize: start geolocation, then create or join session ──
+  // The handshake returns a Result rather than throwing. It used to throw into
+  // this effect with no `.catch()`, so every failed join raised an unhandled
+  // rejection on top of the Sentry event the hook already recorded. The
+  // controller cancels the retry loop if we unmount mid-handshake.
   const initRef = useRef(false);
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
 
+    const controller = new AbortController();
     geo.start();
 
     const urlCode = getCodeFromURL();
-    if (urlCode) {
-      session.joinSession(urlCode);
-    } else {
-      session.createSession();
-    }
+    void (async () => {
+      const result =
+        urlCode !== null
+          ? await session.joinSession(urlCode, controller.signal)
+          : await session.createSession(controller.signal);
+      // The failure is already reflected in session state, which drives the
+      // error panel below; nothing further to do but leave a breadcrumb.
+      if (!result.ok) {
+        console.warn("[live] session handshake failed:", result.error.code);
+      }
+    })();
+
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount
   }, []);
 
-  // ── Pipe geolocation updates to Firebase ──
-  useEffect(() => {
-    if (geo.position && geo.accuracy !== null) {
-      session.updateOwnLocation(geo.position, geo.accuracy);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps use stable sub-properties, not full objects
-  }, [geo.position, geo.accuracy, session.updateOwnLocation]);
+  // Own location no longer needs piping to Firebase from here: the graph's
+  // `presence` node owns that write, with the debounce, admission control,
+  // retry, timeout and breaker every other effectful node gets.
 
   // ── beforeunload cleanup ──
   const cleanupRef = useRef(session.cleanup);
@@ -265,7 +288,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
-  if (session.phase === "error") {
+  if (graph.phase === "error") {
     return (
       <SessionErrorPanel
         errorCode={session.error ?? "CONNECTION_ERROR"}
@@ -277,7 +300,12 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const ownIndex = session.ownIndex ?? (0 as ParticipantIndex);
 
   const isConnected =
-    session.phase === "connected" || session.phase === "some_stale";
+    graph.phase === "connected" || graph.phase === "some_stale";
+
+  // Read own position back out of the slot vector rather than from a second
+  // source: everything on screen is keyed by slot, and this is that index.
+  const ownPosition =
+    slots.ownSlot === null ? null : (slots.positions[slots.ownSlot] ?? null);
 
   return (
     <main className="live-page">
@@ -292,7 +320,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       {session.code && (
         <SessionBadge
           code={session.code}
-          phase={session.phase}
+          phase={graph.phase}
           ownConnected={geo.status === "watching"}
           ownIndex={ownIndex}
           ownName={session.ownName}
@@ -309,7 +337,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       )}
 
       {session.code &&
-        (isConnected && graph.midpoint && session.ownPosition ? (
+        (isConnected && graph.midpoint && ownPosition ? (
           <div className="live-bottom-panel">
             {placesEnabled && (
               <Suspense fallback={null}>
@@ -324,7 +352,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             <MidpointCard
               midpoint={graph.midpoint}
               ownIndex={ownIndex}
-              ownPosition={session.ownPosition}
+              ownPosition={ownPosition}
               ownRoute={routes[ownIndex] ?? null}
               otherParticipants={otherParticipants}
               destination={graph.destination ?? graph.midpoint}

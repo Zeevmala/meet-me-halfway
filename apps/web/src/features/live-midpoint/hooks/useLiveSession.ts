@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  onValue,
-  onDisconnect,
-  ref,
-  remove,
-  set,
-  get,
-} from "firebase/database";
+import { onValue, ref, set, get } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { getToken, type AppCheck } from "firebase/app-check";
 import * as Sentry from "@sentry/react";
 import { useFirebase } from "../../../hooks/useFirebase";
+import { useServices } from "../../../components/ServicesProvider";
 import { generateCode } from "../lib/session-code";
 import {
   getOrCreateDisplayName,
@@ -19,6 +13,9 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
+import type { SessionStatus } from "../graph/types";
+import { ok, err } from "../../../core/dag/result";
+import type { Result } from "../../../core/dag/result";
 import { backoffDelayMs } from "../../../core/dag/backoff";
 import { createSlotRegistry } from "../lib/slot-registry";
 import type { SlotRegistry } from "../lib/slot-registry";
@@ -37,9 +34,6 @@ export type SessionErrorCode =
   | "JOIN_NETWORK_ERROR"
   | "CONNECTION_ERROR";
 
-export type SessionPhase =
-  "idle" | "creating" | "waiting" | "connected" | "some_stale" | "error";
-
 interface ParticipantData {
   lat: number;
   lng: number;
@@ -48,40 +42,66 @@ interface ParticipantData {
   name?: string;
 }
 
-/** Info about another participant in the session. */
+/**
+ * Info about another participant in the session.
+ *
+ * No `stale` flag: staleness is `now - lastSeen > threshold`, derived by the
+ * graph's `liveness` node. Computing it here meant it could only change when
+ * something pushed, which is why it needed a polling interval.
+ */
 export interface ParticipantInfo {
   uid: string;
   position: LatLng;
   accuracy: number;
   lastSeen: number;
   index: ParticipantIndex;
-  stale: boolean;
   name: string | null;
 }
 
+/** Why a session handshake failed, and what the raw error said. */
+export interface SessionFailure {
+  readonly code: SessionErrorCode;
+  readonly details: string | null;
+}
+
 export interface LiveSessionState {
-  phase: SessionPhase;
+  /**
+   * Lifecycle only. The phase the UI renders is derived by the graph from
+   * this plus the roster and liveness — see `derivePhase`.
+   */
+  status: SessionStatus;
   code: string | null;
   /** Session creator's uid — the anchor for stable slot allocation. */
   creatorUid: string | null;
   ownIndex: ParticipantIndex | null;
-  ownPosition: LatLng | null;
   ownName: string;
   participants: ParticipantInfo[];
   error: SessionErrorCode | null;
   /** Raw underlying error description — shown in the UI "Details" expander
    * and useful when users report a failure. */
   errorDetails: string | null;
-  createSession: () => Promise<string>;
-  joinSession: (code: string) => Promise<void>;
-  updateOwnLocation: (pos: LatLng, accuracy: number) => void;
+  /**
+   * Both return a Result rather than throwing.
+   *
+   * They used to throw, and the page called them from an effect with no
+   * `.catch()` — so every failed join produced an unhandled rejection and a
+   * duplicate Sentry event on top of the one raised deliberately. `Result` is
+   * also what the rest of the codebase uses for fallible work.
+   *
+   * The signal cancels the retry loop: an unmount mid-join previously left a
+   * three-attempt backoff running against a dead component.
+   */
+  createSession: (
+    signal: AbortSignal,
+  ) => Promise<Result<string, SessionFailure>>;
+  joinSession: (
+    code: string,
+    signal: AbortSignal,
+  ) => Promise<Result<string, SessionFailure>>;
   setOwnName: (name: string) => void;
   cleanup: () => void;
 }
 
-const STALE_THRESHOLD_MS = 30_000;
-const STALE_CHECK_INTERVAL_MS = 10_000;
-const WRITE_THROTTLE_MS = 3_000;
 // Note: TTL is only enforced on join. A creator with the page open
 // beyond 24h will continue operating — acceptable for MVP since RTDB
 // security rules can enforce server-side TTL in a future iteration.
@@ -96,25 +116,40 @@ const APP_CHECK_TIMEOUT_MS = 5_000;
 // ~3s; this means users rarely see the error screen at all.
 async function withRetry<T>(
   fn: () => Promise<T>,
+  signal: AbortSignal,
   attempts = 3,
   isRetryable: (err: unknown) => boolean = () => true,
 ): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
       if (i < attempts - 1 && isRetryable(err)) {
-        await new Promise((r) =>
-          setTimeout(r, backoffDelayMs(i, { baseMs: 1000 })),
-        );
+        await sleep(backoffDelayMs(i, { baseMs: 1000 }), signal);
       } else {
         break;
       }
     }
   }
   throw lastErr;
+}
+
+/** Abortable delay, so a teardown does not have to wait out the backoff. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(id);
+      resolve();
+    };
+    const id = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Permission errors won't recover via retry — bail immediately. */
@@ -195,12 +230,12 @@ function sessionContext(code: string | null, hasAppCheck: boolean) {
  */
 export function useLiveSession(uid: string): LiveSessionState {
   const { db, appCheck } = useFirebase();
+  const { presence } = useServices();
 
-  const [phase, setPhase] = useState<SessionPhase>("idle");
+  const [status, setStatus] = useState<SessionStatus>("idle");
   const [code, setCode] = useState<string | null>(null);
   const [creatorUid, setCreatorUid] = useState<string | null>(null);
   const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
-  const [ownPosition, setOwnPosition] = useState<LatLng | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
@@ -209,29 +244,11 @@ export function useLiveSession(uid: string): LiveSessionState {
   );
 
   const unsubRef = useRef<Unsubscribe | null>(null);
-  const staleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeRef = useRef<string | null>(null);
   const creatorUidRef = useRef<string | null>(null);
   // Slot allocation is first-seen-wins and lasts the whole session, so it must
   // survive re-renders. See lib/slot-registry.ts.
   const slotRegistryRef = useRef<SlotRegistry | null>(null);
-
-  // Throttle refs for RTDB write limiting
-  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastWriteRef = useRef<number>(0);
-  const pendingWriteRef = useRef<{
-    pos: LatLng;
-    accuracy: number;
-  } | null>(null);
-
-  // Latest known own position/accuracy — used to flush a name change
-  // immediately even if no GPS update is pending.
-  const ownPositionRef = useRef<LatLng | null>(null);
-  const lastAccuracyRef = useRef<number | null>(null);
-
-  // Guard so we register the server-side onDisconnect cleanup only once
-  // per session (firing it repeatedly on every write is wasteful).
-  const disconnectArmedRef = useRef(false);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -275,23 +292,16 @@ export function useLiveSession(uid: string): LiveSessionState {
               accuracy: participant.accuracy,
               lastSeen: participant.ts,
               index: slot,
-              stale: Date.now() - participant.ts > STALE_THRESHOLD_MS,
               name: sanitizeName(participant.name),
             });
           }
 
           others.sort((a, b) => a.index - b.index);
+          // Whether this means waiting, connected or some_stale is the graph's
+          // to decide. Six `setPhase` call sites used to answer it here, one of
+          // them from inside a `setParticipants` updater — where React requires
+          // purity and StrictMode double-invokes.
           setParticipants(others);
-
-          if (others.length > 0) {
-            const anyStale = others.some((p) => p.stale);
-            setPhase(anyStale ? "some_stale" : "connected");
-          } else {
-            // No other participants with data — go to waiting if we were connected
-            setPhase((prev) =>
-              prev === "connected" || prev === "some_stale" ? "waiting" : prev,
-            );
-          }
         },
         (err) => {
           console.error("[session] participants listener error:", err);
@@ -301,106 +311,94 @@ export function useLiveSession(uid: string): LiveSessionState {
           });
           setErrorDetails(describeError(err));
           setError("CONNECTION_ERROR");
-          setPhase("error");
+          setStatus("error");
         },
       );
     },
     [db, uid, appCheck],
   );
 
-  /** Start stale detection interval. */
-  const startStaleDetection = useCallback(() => {
-    if (staleTimerRef.current) clearInterval(staleTimerRef.current);
-
-    staleTimerRef.current = setInterval(() => {
-      setParticipants((prev) => {
-        const now = Date.now();
-        let changed = false;
-        const updated = prev.map((p) => {
-          const stale = now - p.lastSeen > STALE_THRESHOLD_MS;
-          if (stale !== p.stale) changed = true;
-          return stale !== p.stale ? { ...p, stale } : p;
-        });
-
-        if (changed) {
-          const anyStale = updated.some((p) => p.stale);
-          setPhase((prev) =>
-            prev === "connected" || prev === "some_stale"
-              ? anyStale
-                ? "some_stale"
-                : "connected"
-              : prev,
-          );
-          return updated;
-        }
-        return prev;
-      });
-    }, STALE_CHECK_INTERVAL_MS);
-  }, []);
+  /** Record a handshake failure once, in the shape the UI and the caller need. */
+  const fail = useCallback(
+    (code: SessionErrorCode, details: string | null): SessionFailure => {
+      setErrorDetails(details);
+      setError(code);
+      setStatus("error");
+      return { code, details };
+    },
+    [],
+  );
 
   /** Create a new live session as the creator (index 0). */
-  const createSession = useCallback(async (): Promise<string> => {
-    setError(null);
-    setErrorDetails(null);
+  const createSession = useCallback(
+    async (signal: AbortSignal): Promise<Result<string, SessionFailure>> => {
+      setError(null);
+      setErrorDetails(null);
 
-    const sessionCode = generateCode();
+      const sessionCode = generateCode();
 
-    // Make UI usable immediately — share button works even if RTDB is slow/offline.
-    // The code is locally generated; the writes below sync to the server when reachable.
-    creatorUidRef.current = uid;
-    setCreatorUid(uid);
-    const creatorRegistry = createSlotRegistry(uid);
-    slotRegistryRef.current = creatorRegistry;
-    creatorRegistry.assign(uid);
-    setCode(sessionCode);
-    setOwnIndex(0);
-    setPhase("waiting");
+      // Make the UI usable immediately — the share button works even if RTDB
+      // is slow or offline. The code is generated locally; the writes below
+      // sync when the server is reachable.
+      creatorUidRef.current = uid;
+      setCreatorUid(uid);
+      const creatorRegistry = createSlotRegistry(uid);
+      slotRegistryRef.current = creatorRegistry;
+      creatorRegistry.assign(uid);
+      setCode(sessionCode);
+      setOwnIndex(0);
+      setStatus("ready");
 
-    const url = new URL(window.location.href);
-    url.searchParams.set("code", sessionCode);
-    history.replaceState(null, "", url.toString());
+      const url = new URL(window.location.href);
+      url.searchParams.set("code", sessionCode);
+      history.replaceState(null, "", url.toString());
 
-    try {
-      await waitForAppCheckToken(appCheck);
-      await withRetry(
-        async () => {
-          await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
-          await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-          await set(
-            ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-            true,
-          );
-        },
-        3,
-        isTransientError,
-      );
+      try {
+        await waitForAppCheckToken(appCheck);
+        await withRetry(
+          async () => {
+            await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
+            await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
+            await set(
+              ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
+              true,
+            );
+          },
+          signal,
+          3,
+          isTransientError,
+        );
 
-      // Attach the listener only after `created` exists: the `.read` rule
-      // requires `created > now - 24h`, so a listener attached before the
-      // write is evaluated against a session with no `created` and is
-      // rejected with permission_denied (joinSession is safe because it
-      // reads an already-created session).
-      listenForParticipants(sessionCode);
-      startStaleDetection();
+        // Attach the listener only after `created` exists: the `.read` rule
+        // requires `created > now - 24h`, so a listener attached before the
+        // write is evaluated against a session with no `created` and is
+        // rejected with permission_denied. (joinSession is safe because it
+        // reads an already-created session.)
+        listenForParticipants(sessionCode);
 
-      return sessionCode;
-    } catch (err) {
-      console.error("[session] create failed:", err);
-      Sentry.captureException(err, {
-        tags: { phase: "create", classified: classifyJoinError(err) },
-        contexts: sessionContext(sessionCode, appCheck !== null),
-      });
-      setErrorDetails(describeError(err));
-      setPhase("error");
-      setError("CREATE_FAILED");
-      throw err;
-    }
-  }, [db, uid, appCheck, listenForParticipants, startStaleDetection]);
+        return ok(sessionCode);
+      } catch (thrown) {
+        if (signal.aborted) {
+          return err({ code: "CREATE_FAILED", details: "aborted" });
+        }
+        console.error("[session] create failed:", thrown);
+        Sentry.captureException(thrown, {
+          tags: { phase: "create", classified: classifyJoinError(thrown) },
+          contexts: sessionContext(sessionCode, appCheck !== null),
+        });
+        return err(fail("CREATE_FAILED", describeError(thrown)));
+      }
+    },
+    [db, uid, appCheck, listenForParticipants, fail],
+  );
 
   /** Join an existing session. */
   const joinSession = useCallback(
-    async (sessionCode: string): Promise<void> => {
-      setPhase("creating");
+    async (
+      sessionCode: string,
+      signal: AbortSignal,
+    ): Promise<Result<string, SessionFailure>> => {
+      setStatus("connecting");
       setError(null);
       setErrorDetails(null);
 
@@ -411,6 +409,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         const sessionRef = ref(db, `sessions/${sessionCode}`);
         const snap = await withRetry(
           () => get(sessionRef),
+          signal,
           3,
           isTransientError,
         );
@@ -422,19 +421,13 @@ export function useLiveSession(uid: string): LiveSessionState {
         } | null;
 
         if (!data || !data.creatorUid) {
-          setPhase("error");
-          setError("SESSION_NOT_FOUND");
-          return;
+          return err(fail("SESSION_NOT_FOUND", null));
         }
 
-        // Check if session has expired (24h TTL)
         if (data.created && Date.now() - data.created > SESSION_TTL_MS) {
-          setPhase("error");
-          setError("SESSION_EXPIRED");
-          return;
+          return err(fail("SESSION_EXPIRED", null));
         }
 
-        // Check participant count
         const existingUids = data.participantUids
           ? Object.keys(data.participantUids)
           : [];
@@ -442,12 +435,9 @@ export function useLiveSession(uid: string): LiveSessionState {
           existingUids.length >= MAX_PARTICIPANTS &&
           !existingUids.includes(uid)
         ) {
-          setPhase("error");
-          setError("SESSION_FULL");
-          return;
+          return err(fail("SESSION_FULL", null));
         }
 
-        // Register as participant
         if (!existingUids.includes(uid)) {
           await withRetry(
             () =>
@@ -455,6 +445,7 @@ export function useLiveSession(uid: string): LiveSessionState {
                 ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
                 true,
               ),
+            signal,
             3,
             isTransientError,
           );
@@ -466,176 +457,66 @@ export function useLiveSession(uid: string): LiveSessionState {
         slotRegistryRef.current = registry;
         // Seed from participantUids (the write-once registration set) rather
         // than from participants (only those who have reported a position).
-        // The two diverge while somebody is registered but has no fix yet,
-        // and ranking own over one set while ranking others over the other is
+        // The two diverge while somebody is registered but has no fix yet, and
+        // ranking own over one set while ranking others over the other is
         // exactly how two participants used to end up sharing a slot.
         registry.assignAll([...new Set([...existingUids, uid])]);
-        const myIndex = registry.slotOf(uid);
 
         setCode(sessionCode);
-        setOwnIndex(myIndex);
-
-        // If any other participant already has location data, we're connected
-        const hasOtherData =
-          data.participants &&
-          Object.keys(data.participants).some((k) => k !== uid);
-        setPhase(hasOtherData ? "connected" : "waiting");
+        setOwnIndex(registry.slotOf(uid));
+        setStatus("ready");
 
         listenForParticipants(sessionCode);
-        startStaleDetection();
-      } catch (err) {
-        let classified = classifyJoinError(err);
+        return ok(sessionCode);
+      } catch (thrown) {
+        if (signal.aborted) {
+          return err({ code: "JOIN_FAILED", details: "aborted" });
+        }
+        let classified = classifyJoinError(thrown);
         // App Check enforced + no token → the RTDB rejection is an attestation
         // block (HTTP 401) the SDK reports with an opaque message. Promote the
         // generic failure so the user gets actionable guidance instead.
         if (classified === "JOIN_FAILED" && !appCheckOk) {
           classified = "JOIN_PERMISSION_DENIED";
         }
-        console.error("[session] join failed:", err, "→", classified);
-        Sentry.captureException(err, {
+        console.error("[session] join failed:", thrown, "→", classified);
+        Sentry.captureException(thrown, {
           tags: { phase: "join", classified, appCheckOk: String(appCheckOk) },
           contexts: sessionContext(sessionCode, appCheck !== null),
         });
-        setErrorDetails(describeError(err));
-        setPhase("error");
-        setError(classified);
-        throw err;
+        return err(fail(classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, listenForParticipants, startStaleDetection],
-  );
-
-  /** Flush a buffered position write to RTDB. */
-  const flushWrite = useCallback(
-    (pos: LatLng, accuracy: number) => {
-      if (!codeRef.current) return;
-      const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
-
-      // Arm a server-side cleanup: when this client's socket drops (tab close,
-      // crash, network loss — none of which reliably fire beforeunload on
-      // mobile), Firebase removes our participant node. Without this, a
-      // departed participant lingers and keeps dragging the computed midpoint.
-      if (!disconnectArmedRef.current) {
-        disconnectArmedRef.current = true;
-        onDisconnect(ownRef)
-          .remove()
-          .catch(() => {
-            disconnectArmedRef.current = false; // allow a retry on next write
-          });
-      }
-
-      set(ownRef, {
-        lat: pos.lat,
-        lng: pos.lng,
-        accuracy,
-        ts: Date.now(),
-        name: getOrCreateDisplayName(),
-      }).catch(() => {
-        /* best-effort write */
-      });
-      lastWriteRef.current = Date.now();
-      pendingWriteRef.current = null;
-    },
-    [db, uid],
+    [db, uid, appCheck, listenForParticipants, fail],
   );
 
   /**
-   * Write own location to Firebase under participants/{uid}.
-   * Throttled: max 1 RTDB write per 3s (leading + trailing edge).
-   * Local state always updates immediately for UI responsiveness.
+   * Update the local display name.
+   *
+   * Persisted to localStorage and pushed into state; the `presence` node picks
+   * it up on the next tick and writes it, because a name change is one of its
+   * admission conditions. This used to reach for a cached position and call
+   * the writer directly.
    */
-  const updateOwnLocation = useCallback(
-    (pos: LatLng, accuracy: number) => {
-      setOwnPosition(pos);
-      ownPositionRef.current = pos;
-      lastAccuracyRef.current = accuracy;
+  const setOwnName = useCallback((raw: string) => {
+    setOwnNameState(saveDisplayName(raw));
+  }, []);
 
-      if (!codeRef.current) return;
-
-      const elapsed = Date.now() - lastWriteRef.current;
-
-      if (elapsed >= WRITE_THROTTLE_MS) {
-        // Leading edge: write immediately
-        flushWrite(pos, accuracy);
-      } else {
-        // Buffer the latest position for trailing edge
-        pendingWriteRef.current = { pos, accuracy };
-
-        if (!throttleTimerRef.current) {
-          throttleTimerRef.current = setTimeout(() => {
-            throttleTimerRef.current = null;
-            if (pendingWriteRef.current) {
-              flushWrite(
-                pendingWriteRef.current.pos,
-                pendingWriteRef.current.accuracy,
-              );
-            }
-          }, WRITE_THROTTLE_MS - elapsed);
-        }
-      }
-    },
-    [flushWrite],
-  );
-
-  // Flush the current position once the session code becomes active.
-  // Geolocation can deliver its (sometimes only) fix before the async join
-  // sets the code, in which case updateOwnLocation skipped the write with no
-  // code yet. Without this, a stationary joiner with a single GPS fix never
-  // writes participants/{uid} and peers never see them.
-  useEffect(() => {
-    if (code && ownPositionRef.current && lastAccuracyRef.current !== null) {
-      flushWrite(ownPositionRef.current, lastAccuracyRef.current);
-    }
-  }, [code, flushWrite]);
-
-  /**
-   * Update the local display name. Persists to localStorage and triggers
-   * an immediate RTDB write if we already have a position to attach.
-   */
-  const setOwnName = useCallback(
-    (raw: string) => {
-      const next = saveDisplayName(raw);
-      setOwnNameState(next);
-      if (
-        codeRef.current &&
-        ownPositionRef.current &&
-        lastAccuracyRef.current !== null
-      ) {
-        flushWrite(ownPositionRef.current, lastAccuracyRef.current);
-      }
-    },
-    [flushWrite],
-  );
-
-  /** Remove own data from RTDB. Called on beforeunload + unmount. */
+  /** Detach the listener and remove own presence. */
   const cleanup = useCallback(() => {
     if (unsubRef.current) {
       unsubRef.current();
       unsubRef.current = null;
     }
-    if (staleTimerRef.current) {
-      clearInterval(staleTimerRef.current);
-      staleTimerRef.current = null;
-    }
-    if (throttleTimerRef.current) {
-      clearTimeout(throttleTimerRef.current);
-      throttleTimerRef.current = null;
-    }
-    pendingWriteRef.current = null;
     slotRegistryRef.current = null;
-    // Reset the guard but leave the onDisconnect armed — it is the reliable
-    // backstop if this explicit remove() doesn't complete during unload.
-    disconnectArmedRef.current = false;
 
     if (codeRef.current) {
-      const ownRef = ref(db, `sessions/${codeRef.current}/participants/${uid}`);
-      // Firebase RTDB sends the remove over WebSocket immediately;
-      // it completes even if the page is unloading.
-      remove(ownRef).catch(() => {
-        /* best effort on unload */
-      });
+      // The write side is the graph's; removal is not a derivation, so it
+      // stays here. `onDisconnect` remains armed server-side as the backstop
+      // if this does not complete during unload.
+      presence.remove(codeRef.current, uid);
     }
-  }, [db, uid]);
+  }, [presence, uid]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -645,18 +526,16 @@ export function useLiveSession(uid: string): LiveSessionState {
   }, [cleanup]);
 
   return {
-    phase,
+    status,
     code,
     creatorUid,
     ownIndex,
-    ownPosition,
     ownName,
     participants,
     error,
     errorDetails,
     createSession,
     joinSession,
-    updateOwnLocation,
     setOwnName,
     cleanup,
   };

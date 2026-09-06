@@ -87,6 +87,90 @@ export function createVenuePolicy(
   };
 }
 
+export interface PresenceInput {
+  readonly code: string;
+  readonly uid: string;
+  readonly position: LatLng;
+  readonly accuracy: number;
+  readonly name: string;
+}
+
+/** One RTDB write per this window, matching the old WRITE_THROTTLE_MS. */
+const PRESENCE_WRITE_MS = 3_000;
+/**
+ * Displacement worth an early write. Deliberately below typical GPS noise:
+ * the TTL clause below guarantees a heartbeat regardless, so this exists only
+ * to make real movement visible sooner, and `admits` compares against the last
+ * *accepted* write — its baseline advances, so noise cannot ratchet it.
+ */
+const PRESENCE_ADMIT_M = 10;
+
+/**
+ * Own location, published to RTDB.
+ *
+ * This is a write, not a read, and it is still a `createResource`: everything
+ * the combinator provides — a debounce with a starvation ceiling, admission on
+ * displacement, in-flight de-duplication, abort, timeout, retry and a circuit
+ * breaker — is exactly what the hand-rolled version was approximating with a
+ * pair of refs, a `setTimeout` and a separate `withRetry` that had no
+ * cancellation and no breaker.
+ *
+ * `staleAfterMs: 0` because a write has no value to serve: there is nothing to
+ * degrade *to*, so a failure is reported as failed and the UI can say so.
+ *
+ * The "flush once the session code arrives" effect that used to sit in
+ * `useLiveSession` is gone structurally rather than by being reimplemented:
+ * the input is simply `null` until code, uid and position all exist, and the
+ * resource fires the moment it is not.
+ */
+export function createPresencePolicy(
+  ports: GraphPorts,
+): ResourcePolicy<PresenceInput, null> {
+  return {
+    id: "presence",
+    debounceMs: PRESENCE_WRITE_MS,
+    // Ceiling equal to the debounce: position updates arrive at GPS rate, so a
+    // purely trailing debounce would be reset before it could ever fire.
+    maxWaitMs: PRESENCE_WRITE_MS,
+    timeoutMs: 10_000,
+    staleAfterMs: 0,
+    retryAttempts: 3,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 5,
+      baseOpenMs: 30_000,
+      maxOpenMs: 60_000,
+      multiplier: 2,
+    },
+    admits: (previous, next, previousAtMs, nowMs) =>
+      previous.code !== next.code ||
+      previous.uid !== next.uid ||
+      previous.name !== next.name ||
+      haversineDistance(previous.position, next.position) >= PRESENCE_ADMIT_M ||
+      // The heartbeat: peers infer staleness from the age of this write, so it
+      // has to keep landing even for someone standing still.
+      nowMs - previousAtMs >= PRESENCE_WRITE_MS,
+    identity: (input) =>
+      `pr:${input.code}:${input.uid}:${input.name}:` +
+      cellKey(input.position, PRESENCE_ADMIT_M),
+    run: async (input, signal) => {
+      const result = await ports.writePresence(
+        input.code,
+        input.uid,
+        {
+          lat: input.position.lat,
+          lng: input.position.lng,
+          accuracy: input.accuracy,
+          ts: Date.now(),
+          name: input.name,
+        },
+        signal,
+      );
+      return result.ok ? ok(null) : err(result.error);
+    },
+  };
+}
+
 export interface RouteInput {
   /** Slot-keyed positions; `null` is a vacant slot. */
   readonly slots: readonly (LatLng | null)[];

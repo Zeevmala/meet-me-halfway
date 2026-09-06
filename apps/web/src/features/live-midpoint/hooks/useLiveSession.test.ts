@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useLiveSession } from "./useLiveSession";
 
@@ -42,6 +42,17 @@ vi.mock("../../../hooks/useFirebase", () => ({
   useFirebase: () => ({ app: {}, db: mockDb, appCheck: mockAppCheck }),
 }));
 
+// ── Mock the injected services (the hook only reads the presence writer) ──
+const mockPresenceRemove = vi.fn();
+vi.mock("../../../components/ServicesProvider", () => ({
+  useServices: () => ({
+    presence: { write: vi.fn(), remove: mockPresenceRemove },
+  }),
+}));
+
+/** Handshakes take a signal now, so an unmount can cancel the retry loop. */
+const live = () => new AbortController().signal;
+
 // ── Mock session-code to return deterministic codes ──
 vi.mock("../lib/session-code", () => ({
   generateCode: () => "ABC234",
@@ -60,6 +71,7 @@ beforeEach(() => {
   mockSet.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
   mockOnDisconnectRemove.mockResolvedValue(undefined);
+  mockPresenceRemove.mockReset();
   mockAppCheck = null;
   mockGetToken.mockResolvedValue({ token: "test-token" });
 
@@ -69,13 +81,12 @@ beforeEach(() => {
 });
 
 describe("useLiveSession", () => {
-  it("starts in idle phase with no code or index", () => {
+  it("starts idle with no code or index", () => {
     const { result } = renderHook(() => useLiveSession(TEST_UID));
 
-    expect(result.current.phase).toBe("idle");
+    expect(result.current.status).toBe("idle");
     expect(result.current.code).toBeNull();
     expect(result.current.ownIndex).toBeNull();
-    expect(result.current.ownPosition).toBeNull();
     expect(result.current.participants).toEqual([]);
     expect(result.current.error).toBeNull();
   });
@@ -85,7 +96,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       expect(mockSet).toHaveBeenCalledWith(
@@ -108,11 +119,11 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       expect(result.current.ownIndex).toBe(0);
-      expect(result.current.phase).toBe("waiting");
+      expect(result.current.status).toBe("ready");
       expect(result.current.code).toBe("ABC234");
     });
 
@@ -121,17 +132,17 @@ describe("useLiveSession", () => {
 
       let code: string | undefined;
       await act(async () => {
-        code = await result.current.createSession();
+        code = await result.current.createSession(live());
       });
 
-      expect(code).toBe("ABC234");
+      expect(code).toEqual({ ok: true, value: "ABC234" });
     });
 
     it("updates URL with session code", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       expect(history.replaceState).toHaveBeenCalled();
@@ -141,7 +152,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       expect(mockRef).toHaveBeenCalledWith(
@@ -157,13 +168,13 @@ describe("useLiveSession", () => {
 
       await act(async () => {
         try {
-          await result.current.createSession();
+          await result.current.createSession(live());
         } catch {
           // Expected to throw
         }
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("CREATE_FAILED");
     });
 
@@ -177,7 +188,7 @@ describe("useLiveSession", () => {
 
       await act(async () => {
         try {
-          await result.current.createSession();
+          await result.current.createSession(live());
         } catch {
           // Expected to throw
         }
@@ -197,10 +208,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
@@ -210,10 +221,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
@@ -235,10 +246,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_FULL");
     });
 
@@ -254,7 +265,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
       expect(mockSet).toHaveBeenCalledWith(
@@ -288,10 +299,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("connected");
+      expect(result.current.status).toBe("ready");
     });
 
     it("sets phase to error if session is expired (>24h)", async () => {
@@ -306,10 +317,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
@@ -326,10 +337,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("waiting");
+      expect(result.current.status).toBe("ready");
       expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
     });
 
@@ -344,10 +355,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("waiting");
+      expect(result.current.status).toBe("ready");
       expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
     });
 
@@ -363,10 +374,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
@@ -382,10 +393,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("waiting");
+      expect(result.current.status).toBe("ready");
     });
 
     it("allows rejoining when already a participant", async () => {
@@ -400,10 +411,10 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.phase).toBe("waiting");
+      expect(result.current.status).toBe("ready");
     });
   });
 
@@ -419,14 +430,14 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        const join = result.current.joinSession("XYZ789").catch(() => {
+        const join = result.current.joinSession("XYZ789", live()).catch(() => {
           // joinSession rethrows after classifying — expected here
         });
         await vi.runAllTimersAsync();
         await join;
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
       expect(mockGetToken).toHaveBeenCalledWith(mockAppCheck, false);
 
@@ -441,14 +452,14 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        const join = result.current.joinSession("XYZ789").catch(() => {
+        const join = result.current.joinSession("XYZ789", live()).catch(() => {
           // rethrow expected
         });
         await vi.runAllTimersAsync();
         await join;
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("JOIN_FAILED");
 
       vi.useRealTimers();
@@ -466,7 +477,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789");
+        await result.current.joinSession("XYZ789", live());
       });
 
       expect(mockGetToken).not.toHaveBeenCalled();
@@ -478,7 +489,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       act(() => {
@@ -501,14 +512,14 @@ describe("useLiveSession", () => {
         lng: 35.21,
       });
       expect(result.current.participants[0].accuracy).toBe(15);
-      expect(result.current.phase).toBe("connected");
+      expect(result.current.status).toBe("ready");
     });
 
     it("handles multiple participants", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       const now = Date.now();
@@ -524,14 +535,14 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.participants).toHaveLength(3);
-      expect(result.current.phase).toBe("connected");
+      expect(result.current.status).toBe("ready");
     });
 
     it("clears participants when data is null", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       // First connect
@@ -549,7 +560,7 @@ describe("useLiveSession", () => {
         });
       });
 
-      expect(result.current.phase).toBe("connected");
+      expect(result.current.status).toBe("ready");
 
       act(() => {
         onValueCallback?.({ val: () => null });
@@ -562,14 +573,14 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       act(() => {
         onValueErrorCallback?.(new Error("Permission denied"));
       });
 
-      expect(result.current.phase).toBe("error");
+      expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("CONNECTION_ERROR");
     });
 
@@ -577,7 +588,7 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       act(() => {
@@ -589,285 +600,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.participants).toEqual([]);
-      expect(result.current.phase).toBe("waiting");
-    });
-  });
-
-  describe("updateOwnLocation", () => {
-    it("writes to participants/{uid} in RTDB", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      mockSet.mockClear();
-      mockRef.mockClear();
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      expect(mockRef).toHaveBeenCalledWith(
-        mockDb,
-        `sessions/ABC234/participants/${TEST_UID}`,
-      );
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          lat: 32.08,
-          lng: 34.78,
-          accuracy: 10,
-          ts: expect.any(Number),
-        }),
-      );
-    });
-
-    it("updates local ownPosition state", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      expect(result.current.ownPosition).toEqual({ lat: 32.08, lng: 34.78 });
-    });
-
-    it("does not write to RTDB if no session code", () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      mockSet.mockClear();
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      expect(mockSet).not.toHaveBeenCalled();
-    });
-
-    // Regression: geolocation can deliver its (only) fix before the async
-    // join sets the code, so the initial write is skipped. Once the code
-    // becomes available the buffered position must be flushed, otherwise a
-    // stationary joiner never writes participants/{uid} and peers never see
-    // it.
-    it("flushes the buffered position once the session code becomes available", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
-      });
-
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      // Position arrives before any session code exists → no write yet.
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 12);
-      });
-      expect(mockSet).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: `sessions/XYZ789/participants/${TEST_UID}`,
-        }),
-        expect.anything(),
-      );
-
-      // Joining sets the code → the buffered position is flushed.
-      await act(async () => {
-        await result.current.joinSession("XYZ789");
-      });
-
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: `sessions/XYZ789/participants/${TEST_UID}`,
-        }),
-        expect.objectContaining({ lat: 32.08, lng: 34.78, accuracy: 12 }),
-      );
-    });
-  });
-
-  describe("RTDB write throttle", () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("writes to RTDB immediately on the first call (leading edge)", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      mockSet.mockClear();
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ lat: 32.08, lng: 34.78, accuracy: 10 }),
-      );
-    });
-
-    it("does not write a second call to RTDB within the 3s window", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      mockSet.mockClear();
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      expect(mockSet).toHaveBeenCalledTimes(1);
-      mockSet.mockClear();
-
-      act(() => {
-        vi.advanceTimersByTime(1000);
-        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
-      });
-
-      expect(mockSet).not.toHaveBeenCalled();
-    });
-
-    it("updates local state immediately even when RTDB write is throttled", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(1000);
-        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
-      });
-
-      expect(result.current.ownPosition).toEqual({ lat: 32.09, lng: 34.79 });
-    });
-
-    it("flushes the most recent buffered position after 3s (trailing edge)", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      mockSet.mockClear();
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      mockSet.mockClear();
-
-      act(() => {
-        vi.advanceTimersByTime(1000);
-        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(500);
-        result.current.updateOwnLocation({ lat: 32.1, lng: 34.8 }, 5);
-      });
-
-      expect(mockSet).not.toHaveBeenCalled();
-
-      act(() => {
-        vi.advanceTimersByTime(1500);
-      });
-
-      expect(mockSet).toHaveBeenCalledTimes(1);
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ lat: 32.1, lng: 34.8, accuracy: 5 }),
-      );
-    });
-
-    it("cancels pending throttle timer on cleanup", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(1000);
-        result.current.updateOwnLocation({ lat: 32.09, lng: 34.79 }, 8);
-      });
-
-      mockSet.mockClear();
-
-      act(() => {
-        result.current.cleanup();
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(mockSet).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("stale detection", () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("marks participant as stale after 30s of no updates", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.createSession();
-      });
-
-      const connectTime = Date.now();
-      act(() => {
-        onValueCallback?.({
-          val: () => ({
-            [TEST_UID]: {
-              lat: 32.08,
-              lng: 34.78,
-              accuracy: 10,
-              ts: connectTime,
-            },
-            [PARTNER_UID]: {
-              lat: 31.76,
-              lng: 35.21,
-              accuracy: 15,
-              ts: connectTime,
-            },
-          }),
-        });
-      });
-
-      expect(result.current.phase).toBe("connected");
-
-      act(() => {
-        vi.advanceTimersByTime(40_000);
-      });
-
-      expect(result.current.phase).toBe("some_stale");
-      expect(result.current.participants[0].stale).toBe(true);
+      expect(result.current.status).toBe("ready");
     });
   });
 
@@ -876,25 +609,23 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       act(() => {
         result.current.cleanup();
       });
 
-      expect(mockRemove).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: `sessions/ABC234/participants/${TEST_UID}`,
-        }),
-      );
+      // Removal goes through the injected presence writer now; the *write*
+      // side belongs to the graph's presence node.
+      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", TEST_UID);
     });
 
     it("unsubscribes from onValue listener", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.createSession();
+        await result.current.createSession(live());
       });
 
       act(() => {
@@ -904,35 +635,56 @@ describe("useLiveSession", () => {
       expect(mockOnValueUnsub).toHaveBeenCalled();
     });
 
-    it("does not call remove if no session code", () => {
+    it("does not remove presence if no session code", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       act(() => {
         result.current.cleanup();
       });
 
-      expect(mockRemove).not.toHaveBeenCalled();
+      expect(mockPresenceRemove).not.toHaveBeenCalled();
     });
+  });
 
-    // Regression guard: a departed participant whose socket drops without a
-    // clean cleanup() must be removed server-side, otherwise their stale
-    // position keeps dragging the computed midpoint.
-    it("arms a server-side onDisconnect removal on first write", async () => {
+  describe("handshake cancellation", () => {
+    it("reports an aborted create without recording a UI error", async () => {
+      const controller = new AbortController();
+      controller.abort();
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
+      let outcome: Awaited<
+        ReturnType<typeof result.current.createSession>
+      > | null = null;
       await act(async () => {
-        await result.current.createSession();
+        outcome = await result.current.createSession(controller.signal);
       });
 
-      act(() => {
-        result.current.updateOwnLocation({ lat: 32.08, lng: 34.78 }, 10);
+      // An unmount mid-handshake used to leave a three-attempt backoff running
+      // against a dead component and then set error state on it.
+      expect(outcome).toEqual({
+        ok: false,
+        error: { code: "CREATE_FAILED", details: "aborted" },
+      });
+      expect(result.current.error).toBeNull();
+    });
+
+    it("reports an aborted join without recording a UI error", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let outcome: Awaited<
+        ReturnType<typeof result.current.joinSession>
+      > | null = null;
+      await act(async () => {
+        outcome = await result.current.joinSession("ABC234", controller.signal);
       });
 
-      expect(mockOnDisconnectRemove).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: `sessions/ABC234/participants/${TEST_UID}`,
-        }),
-      );
+      expect(outcome).toEqual({
+        ok: false,
+        error: { code: "JOIN_FAILED", details: "aborted" },
+      });
+      expect(result.current.error).toBeNull();
     });
   });
 });

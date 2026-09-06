@@ -14,6 +14,7 @@ import type { PlaceResult } from "../lib/venue-ranking";
 import type { Result } from "../../../core/dag/result";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
+import type { PresenceValue } from "../lib/presence-rtdb";
 import type { RouteInfo, TravelProfile } from "./types";
 
 export interface GraphPorts {
@@ -31,5 +32,16 @@ export interface GraphPorts {
     profile: TravelProfile,
     signal: AbortSignal,
   ) => Promise<Result<RouteInfo | null, ResourceError>>;
+  /**
+   * Publish own location. A write rather than a read, but it reaches the graph
+   * through the same seam so a test can drive the presence node with a fake
+   * and a virtual clock instead of mocking `firebase/database`.
+   */
+  readonly writePresence: (
+    code: string,
+    uid: string,
+    value: PresenceValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
   readonly placesEnabled: boolean;
 }

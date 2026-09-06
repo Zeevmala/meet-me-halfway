@@ -14,18 +14,43 @@
  */
 
 export type NodeId =
-  "slots" | "midpoint" | "venues" | "destination" | "routes" | "frame";
+  | "liveness"
+  | "slots"
+  | "presence"
+  | "midpoint"
+  | "phase"
+  | "venues"
+  | "destination"
+  | "routes"
+  | "frame";
 
 /** `node: [its dependencies]`. */
 export type EdgeMap = Readonly<Record<NodeId, readonly NodeId[]>>;
 
 export const EDGES: EdgeMap = {
-  slots: [],
+  // Reads sources and the clock only. It runs before `slots` because the slot
+  // vector carries the staleness it derives — keeping `stale` a boolean in the
+  // vector rather than a raw `lastSeen` is what lets `sameSlots` treat a
+  // heartbeat from a stationary participant as no change at all.
+  liveness: [],
+  slots: ["liveness"],
+  // A write, and a sink: it reads sources, and nothing derives from its value.
+  presence: [],
   midpoint: ["slots"],
+  phase: ["slots", "liveness", "presence"],
   venues: ["midpoint"],
   destination: ["midpoint", "venues"],
   routes: ["slots", "destination"],
-  frame: ["slots", "midpoint", "venues", "destination", "routes"],
+  frame: [
+    "slots",
+    "presence",
+    "liveness",
+    "midpoint",
+    "phase",
+    "venues",
+    "destination",
+    "routes",
+  ],
 };
 
 /**
