@@ -1,13 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
-import type { TravelProfile } from "./graph/types";
+import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
-import type { LatLng } from "./lib/geo-math";
 import { normalizeCode, isValidCode } from "./lib/session-code";
 import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
@@ -101,6 +100,69 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     },
     [runtime],
   );
+
+  // ── View projections ──
+  // The graph already hands back referentially stable `slots` and `routes`
+  // (SlotVector is compared element-wise, so an unchanged roster reuses the
+  // previous object). Projecting them with a bare `.map()` in the render body
+  // threw that stability away: this component re-renders on every GPS fix and
+  // every RTDB heartbeat, and each fresh array re-ran LiveMap's effects —
+  // `setData` on five route sources, re-serialising thousands of coordinate
+  // pairs per second for geometry that had not changed. Memoising on the
+  // stable inputs is what makes the graph's work actually pay.
+  const { slots, routes } = graph;
+
+  const mapParticipants = useMemo<MapParticipant[]>(() => {
+    const out: MapParticipant[] = [];
+    for (const slot of slots.occupied) {
+      const position = slots.positions[slot];
+      if (!position) continue;
+      out.push({
+        position,
+        accuracy: slots.accuracy[slot] ?? 0,
+        index: slot,
+        isOwn: slot === slots.ownSlot,
+        stale: slots.stale[slot] ?? false,
+      });
+    }
+    return out;
+  }, [slots]);
+
+  // Slot-keyed route geometries — LiveMap paints routes[i] on the `route-{i}`
+  // layer in PARTICIPANT_COLORS[i], so this must be indexed by slot.
+  const routeGeometries = useMemo(
+    () => routes.map((r) => r?.geometry ?? null),
+    [routes],
+  );
+
+  const badgeParticipants = useMemo(
+    () =>
+      slots.occupied
+        .filter((slot) => slot !== slots.ownSlot)
+        .map((slot) => ({
+          index: slot,
+          connected: true,
+          name: slots.names[slot] ?? null,
+        })),
+    [slots],
+  );
+
+  const otherParticipants = useMemo<OtherParticipantView[]>(() => {
+    const out: OtherParticipantView[] = [];
+    for (const slot of slots.occupied) {
+      if (slot === slots.ownSlot) continue;
+      const position = slots.positions[slot];
+      if (!position) continue;
+      out.push({
+        index: slot,
+        route: routes[slot] ?? null,
+        position,
+        stale: slots.stale[slot] ?? false,
+        name: slots.names[slot] ?? null,
+      });
+    }
+    return out;
+  }, [slots, routes]);
 
   // ── Initialize: start geolocation, then create or join session ──
   const initRef = useRef(false);
@@ -215,53 +277,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
   const isConnected =
     session.phase === "connected" || session.phase === "some_stale";
-
-  // Everything below reads the one slot-indexed vector, so markers, accuracy
-  // circles, route colours and Mapbox layer ids cannot drift apart.
-  const { slots, routes } = graph;
-
-  const mapParticipants: MapParticipant[] = [];
-  for (const slot of slots.occupied) {
-    const position = slots.positions[slot];
-    if (!position) continue;
-    mapParticipants.push({
-      position,
-      accuracy: slots.accuracy[slot] ?? 0,
-      index: slot,
-      isOwn: slot === slots.ownSlot,
-      stale: slots.stale[slot] ?? false,
-    });
-  }
-
-  // Slot-keyed route geometries — LiveMap paints routes[i] on the `route-{i}`
-  // layer in PARTICIPANT_COLORS[i], so this must be indexed by slot.
-  const routeGeometries = routes.map((r) => r?.geometry ?? null);
-
-  const badgeParticipants = session.participants.map((p) => ({
-    index: p.index,
-    connected: true,
-    name: p.name,
-  }));
-
-  const otherParticipants: {
-    index: ParticipantIndex;
-    route: (typeof routes)[number];
-    position: LatLng;
-    stale: boolean;
-    name: string | null;
-  }[] = [];
-  for (const slot of slots.occupied) {
-    if (slot === slots.ownSlot) continue;
-    const position = slots.positions[slot];
-    if (!position) continue;
-    otherParticipants.push({
-      index: slot,
-      route: routes[slot] ?? null,
-      position,
-      stale: slots.stale[slot] ?? false,
-      name: slots.names[slot] ?? null,
-    });
-  }
 
   return (
     <main className="live-page">

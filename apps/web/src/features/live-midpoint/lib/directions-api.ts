@@ -29,10 +29,17 @@ export async function fetchRoute(
   profile: TravelProfile,
   signal: AbortSignal,
 ): Promise<Result<RouteInfo | null, ResourceError>> {
+  // `overview=simplified`, not `full`. Full geometry is commonly 1,500–4,000
+  // coordinate pairs for an urban route — 150–400 KB as parsed GeoJSON, times
+  // five slots, doubled again by the resource's last-good buffer. Simplified
+  // cuts roughly 90% of that, and the difference is not visible at the zoom
+  // `fitBounds` settles on (maxZoom 16, with 350px of bottom padding for the
+  // card): the route is drawn as a 4px line, well above the residual
+  // simplification error.
   const url =
     `https://api.mapbox.com/directions/v5/mapbox/${profile}/` +
     `${from.lng},${from.lat};${to.lng},${to.lat}` +
-    `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+    `?geometries=geojson&overview=simplified&access_token=${MAPBOX_TOKEN}`;
 
   try {
     const res = await fetch(url, { signal });

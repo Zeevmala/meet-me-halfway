@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMidpointPage from "./LiveMidpointPage";
 
 // ── Mock i18next ──
@@ -55,8 +56,21 @@ vi.mock("./graph/ports", () => ({
 }));
 
 // ── Mock LiveMap (avoid mapbox-gl in jsdom) ──
+// Props are recorded so the referential-stability regression below can assert
+// on exactly what the real LiveMap's effects key off.
+interface RecordedMapProps {
+  participants: unknown;
+  routes: unknown;
+  midpoint: unknown;
+  venues: unknown;
+  selectedVenue: unknown;
+}
+const liveMapProps: RecordedMapProps[] = [];
 vi.mock("./components/LiveMap", () => ({
-  default: () => <div data-testid="live-map">Map</div>,
+  default: (props: RecordedMapProps) => {
+    liveMapProps.push(props);
+    return <div data-testid="live-map">Map</div>;
+  },
 }));
 
 // ── Mock LanguageSwitcher ──
@@ -121,6 +135,7 @@ function defaultSession() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  liveMapProps.length = 0;
   mockSearchVenues.mockResolvedValue({ ok: true, value: [] });
   mockFetchRoute.mockResolvedValue({ ok: true, value: null });
   mockAuth.mockReturnValue({ status: "authenticated", uid: "test-uid" });
@@ -322,5 +337,78 @@ describe("LiveMidpointPage", () => {
     render(<LiveMidpointPage />);
 
     expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+  });
+});
+
+describe("LiveMidpointPage — render-path stability", () => {
+  /** One RTDB heartbeat: same roster, brand-new array and objects. */
+  function roster(): ReturnType<typeof defaultSession>["participants"] {
+    return [
+      {
+        uid: "peer-1",
+        index: 1 as ParticipantIndex,
+        position: { lat: 32.09, lng: 34.79 },
+        accuracy: 12,
+        lastSeen: 1,
+        stale: false,
+        name: "Peer",
+      },
+    ];
+  }
+
+  it("keeps LiveMap's props referentially stable across an unchanged heartbeat", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: roster(),
+    });
+
+    const { rerender } = render(<LiveMidpointPage />);
+    const before = liveMapProps.length;
+    expect(before).toBeGreaterThan(0);
+    const first = liveMapProps[before - 1];
+
+    // RTDB hands over a fresh array on every heartbeat. The slot vector is
+    // compared element-wise, so the graph's snapshot does not change — and the
+    // page's projections must not either. Rebuilding them in the render body
+    // handed LiveMap new arrays every second, re-running setData on five route
+    // sources for geometry that had not moved.
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: roster(),
+    });
+    rerender(<LiveMidpointPage />);
+
+    expect(liveMapProps.length).toBeGreaterThan(before);
+    const second = liveMapProps[liveMapProps.length - 1];
+
+    expect(second.participants).toBe(first.participants);
+    expect(second.routes).toBe(first.routes);
+    expect(second.midpoint).toBe(first.midpoint);
+    expect(second.venues).toBe(first.venues);
+  });
+
+  it("hands LiveMap new projections when the roster actually changes", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: roster(),
+    });
+
+    const { rerender } = render(<LiveMidpointPage />);
+    const first = liveMapProps[liveMapProps.length - 1];
+
+    const moved = roster();
+    moved[0] = { ...moved[0], position: { lat: 32.2, lng: 34.9 } };
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      phase: "connected",
+      participants: moved,
+    });
+    rerender(<LiveMidpointPage />);
+
+    const second = liveMapProps[liveMapProps.length - 1];
+    expect(second.participants).not.toBe(first.participants);
   });
 });

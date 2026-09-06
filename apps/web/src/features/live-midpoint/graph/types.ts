@@ -54,3 +54,27 @@ export interface DestinationResult {
   readonly destination: LatLng | null;
   readonly selectedVenue: RankedVenue | null;
 }
+
+/**
+ * View projections of the slot vector.
+ *
+ * They live beside the graph's own vocabulary rather than inside the
+ * components that consume them, because both are read off the same slot index
+ * space: whoever adds a field has to see that `index` here is the same `i`
+ * that picks the colour, the Mapbox layer id and the route.
+ */
+export interface MapParticipant {
+  readonly position: LatLng;
+  readonly accuracy: number;
+  readonly index: ParticipantIndex;
+  readonly isOwn: boolean;
+  readonly stale: boolean;
+}
+
+export interface OtherParticipantView {
+  readonly index: ParticipantIndex;
+  readonly route: RouteInfo | null;
+  readonly position: LatLng;
+  readonly stale: boolean;
+  readonly name: string | null;
+}
