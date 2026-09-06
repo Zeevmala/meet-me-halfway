@@ -28,17 +28,16 @@ The distinction that shapes everything else: **event streams are inputs to the
 graph, not nodes in it.**
 
 ```
-SOURCES (hooks — push into the runtime)     NODES (pure or policy-governed)
+SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
 
-  useAuth ─────── uid ──┐
-  useLiveSession ───────┼──►  slots  ──┬──►  midpoint  ──┬──►  venues  ──┐
-  useLiveGeolocation ───┘   (SoA,      │                 │              │
-                             stable    │                 └──►  destination
-  ui.selectedVenueId ──────► slots)    │                          │
-  ui.travelProfile ────────────────────┤                          │
-                                       └──────────┬───────────────┘
-                                                  ▼
-                                               routes  ──►  frame
+  useAuth ───────── uid ─┐
+  useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──┬──► venues ─┐
+  useLiveGeolocation ────┤   (clock)      (SoA,    │               │            │
+  ui.selectedVenueId ────┤                 stable) │               └──► destination
+  ui.travelProfile ──────┤                         │                        │
+  ui.ownName ────────────┴──► presence             └──► phase               │
+                             (RTDB write)                                   ▼
+                                                              routes ──► frame
 ```
 
 `useLiveGeolocation`, `useLiveSession`, `useAuth` and `useNetworkStatus` are
@@ -63,12 +62,32 @@ the edges declared, it is a failing test that names both nodes.
 
 | Node | Kind | Input | Output | On failure |
 |---|---|---|---|---|
-| `slots` | pure | sources | `SlotVector` | — |
+| `liveness` | pure | participants, clock | `stale[]` + `nextFlipAtMs` | — |
+| `slots` | pure | sources, `liveness` | `SlotVector` | — |
+| `presence` | effectful | session + own position | RTDB write | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
+| `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `midpoint` | raw `PlaceResult[]` | degrade to empty |
 | `destination` | pure | `midpoint`, `venues`, selection | `LatLng \| null` | — |
 | `routes` | effectful | `slots`, `destination`, profile | slot-keyed `RouteInfo[]` | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
+
+### Liveness holds one timer, not an interval
+
+Staleness is `now - lastSeen >= 30s` — a predicate over a clock, exactly like
+the breaker's cooldown. `liveness` returns the earliest instant at which some
+participant's staleness flips, and the runtime arms a single wake for it.
+
+This replaces a 10s `setInterval` that ran for the life of the session. The
+argument is the one made for the breaker below and applies verbatim: mobile
+browsers throttle `setInterval` to minutes and freeze it under bfcache, so a
+tab resumed after ten minutes reported staleness from before it was
+backgrounded. Recomputing from the clock has no such window.
+
+The boundary is inclusive (`>=`) deliberately. With a strict `>`, a
+participant was still fresh at the instant the wake fired, the node re-derived
+the same target, and the wake re-armed at zero delay — the same livelock the
+breaker had at its half-open boundary.
 
 `slots` is a **structure of arrays** indexed by `ParticipantIndex`, length
 `MAX_PARTICIPANTS`, with `null` for a vacant slot. Routes, accuracy circles,
@@ -86,6 +105,29 @@ Every effectful node is one `createResource` instance. The policy record
 |---|---|---|---|---|---|---|---|---|
 | `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | empty |
 | `routes` | 3 s | 9 s | 200 m | 10 s | 2 | 5 fails / 60 s | 60 s | last-good |
+| `presence` | 3 s | 3 s | 10 m | 10 s | 3 | 5 fails / 60 s | — | report failed |
+
+`presence` is a **write**, and still one `createResource`: everything the
+combinator provides is what the hand-rolled throttle in `useLiveSession` was
+approximating. Its TTL is 0 because a write has no value to serve — there is
+nothing to degrade *to*, so a failure is reported and the UI can say so.
+
+A `Retry-After` on a 429 now floors the retry delay, and one too long to sleep
+through inside a dispatch (> `retryBaseMs × 8`) becomes the breaker's cooldown
+instead: the retry loop owns seconds, the breaker owns the long tail. The
+header was previously parsed into the error and read by nobody.
+
+Every attempt runs under its own `AbortController`, chained to the dispatch
+signal, so a deadline cancels the request rather than merely stopping waiting
+for it. It did not, and the retry went out alongside the request it replaced.
+
+### One bulkhead across all nodes
+
+`core/dag/semaphore.ts` caps total in-flight I/O at 4, applied at the
+composition root rather than inside a policy. A breaker is reactive — it only
+closes the tap after failures are paid for — and nothing bounded simultaneity:
+a route dispatch fans out per occupied slot, against a six-per-host HTTP/1.1
+cap the RTDB socket and map tiles also draw on.
 
 ### Two predicates, deliberately separate
 
@@ -172,6 +214,15 @@ tests.
 | **Pinned stale selection.** Reconciliation only ran when the venue list was non-empty, so a search returning nothing left a deleted venue pinned as the destination. | `LiveMidpointPage` |
 | **Unreachable 429.** `searchNearbyVenues` threw `RATE_LIMITED` and caught it in its own catch block two lines later, returning `[]`. Callers could not tell a rate limit from "no venues here". | `places-api` |
 | **Three failure conventions.** Throw, return-empty, and set-a-state-code, in one codebase — plus two magic error strings no consumer read. | throughout |
+| **Half-open livelock.** `retryAtMs()` returned `openedAt + openMs` whenever the breaker was not closed — while half-open, an instant already in the past. Admission read it as "cooldown over", `allow()` refused the call, and the backstop wake re-armed at `max(0, past − now)` = 0: an unbounded `setTimeout(…, 0)` chain for the whole life of the probe, on exactly the degraded network that opened the breaker. | `core/dag/breaker` |
+| **Discarded `Retry-After`.** Parsed into `RATE_LIMITED` and read by nobody, so a 429 saying 30 s was retried at 1 s and 2 s and counted twice against the breaker — the same class as the magic strings above. | `core/dag/errors` |
+| **Uncancelled timeout.** The per-attempt deadline resolved `TIMEOUT` without aborting, so the retry went out beside the request it replaced: up to `retryAttempts × slots` sockets against a six-per-host cap. | `core/dag/resource` |
+| **Stability discarded at the render boundary.** The graph returned stable `slots` and `routes`; the page rebuilt four projections with `.map()` in the render body and `LiveMap` was not memoised, so every GPS fix re-ran `setData` on five route sources — thousands of coordinate pairs per second for geometry that had not changed. | `LiveMidpointPage` + `LiveMap` |
+| **Positional fit guard.** `fitBounds` jitter suppression compared a vector mixing participants, midpoint and venue by array index, so a joiner arriving as a venue was deselected made it measure a participant against a venue. Same aliasing class as slot identity. | `LiveMap` |
+| **Unhandled join rejection.** `createSession`/`joinSession` threw into an effect with no `.catch()`; every failure raised an unhandled rejection on top of the Sentry event already recorded, and an unmount mid-join left a retry loop running against a dead component. | `useLiveSession` + page |
+| **`setPhase` inside a `setParticipants` updater.** React requires updaters to be pure and StrictMode double-invokes them. `phase` was `useState` written from six sites despite being a total function of status, roster and liveness. | `useLiveSession` |
+| **Polled staleness.** A 10 s `setInterval` drove a clock predicate, so a backgrounded tab reported staleness from before it was suspended — the failure mode the breaker is explicitly designed against, reproduced one module over. | `useLiveSession` |
+| **Config read in eight places.** `ports.ts` claimed to have ended this; the Places key was still read in three modules, so the flag rendering the venue list and the client calling the API were separate reads that could disagree. `validateEnv` checked five of six required variables, omitting the one whose absence silently disables App Check. | throughout |
 
 ---
 
@@ -191,23 +242,32 @@ tests.
 | `frame` | O(N + V) | O(N + V) |
 
 **The binding constraint is route geometry, not compute.** The entire
-per-tick arithmetic budget is roughly one `atan2` per participant. Meanwhile
-`overview=full` returns complete geometry — commonly 1,500–4,000 coordinate
-pairs for a long urban route, so ~150–400 KB per route as parsed GeoJSON, and
-the last-good buffer that buys degradation doubles it.
+per-tick arithmetic budget is roughly one `atan2` per participant. Route
+geometry is four orders of magnitude larger, and it is uploaded to the Mapbox
+worker, not just held.
+
+Two changes act on that, and they compound. Directions now request
+`overview=simplified` rather than `full`, cutting roughly 90% of the
+1,500–4,000 coordinate pairs a long urban route returns — the difference is not
+visible at the zoom `fitBounds` settles on (`maxZoom: 16`, 350 px of bottom
+padding) for a 4 px line. And the page's projections are memoised on the
+graph's stable arrays, so `setData` fires when geometry changes rather than on
+every GPS fix.
 
 This is why "vectorized execution" here means a structure-of-arrays fold and
 not typed arrays or SIMD: at N ≤ 5 a `Float64Array` costs more in allocation
 than the arithmetic it saves. The measurable win is in what the graph *avoids
 fetching*, not in how it multiplies.
 
-**Known follow-up:** `overview=simplified` would cut roughly 90% of that
-memory with no visible difference at the zoom `fitBounds` produces. Not done
-here because it changes rendered output and deserves its own review.
-
 **Scale limits.** `MAX_PARTICIPANTS = 5` is enforced client-side only — RTDB
 rules have no `numChildren()`. Mapbox at 5 participants × 1 request / 3 s is
-~100 req/min against a 300/min free tier.
+~100 req/min against a 300/min free tier; the semaphore caps simultaneity at 4,
+which is the browser's per-host budget rather than the API's.
+
+**Known limitation.** `presence` is driven by geolocation, so a device whose
+`watchPosition` goes quiet stops publishing and peers eventually show it as
+stale. This is unchanged from the hook it replaces. Making the heartbeat
+self-sustaining is a behaviour change, not a refactor, and belongs in its own.
 
 ---
 
@@ -215,13 +275,18 @@ rules have no `numChildren()`. Mapbox at 5 participants × 1 request / 3 s is
 
 `core/dag` and `graph` take their I/O through injected ports (`graph/ports.ts`),
 including `now`, `schedule` and `cancel`. Tests drive a virtual clock and pass
-fake fetchers — no fake timers, no global mocks, no module mocking. The page
-test supplies a fake `Ports` and so exercises the real derivation rather than
-a stub.
+fake fetchers — no fake timers, no global mocks, no module mocking.
+
+Since the composition root landed, that extends to the React tree:
+`LiveMidpointPage.test.tsx` passes ports through `ServicesProvider` instead of
+`vi.mock`-ing `graph/ports`, and `firebase-factory.test.ts` carries the
+persistence-chain and App Check coverage without resetting the module registry
+between cases — which the previous suite needed, because construction happened
+in module state on first import.
 
 ```bash
 cd apps/web
-npm test                              # 344 tests
+npm test                              # 410 tests
 npx eslint src/ --max-warnings=0      # exhaustive-deps and the RTL rule are CI-fatal
 npm run tsc
 ```

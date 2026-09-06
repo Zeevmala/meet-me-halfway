@@ -28,14 +28,15 @@ npx vitest run -t "midpoint"                                      # tests matchi
 
 - **Single-page React 19 app** — one route (`/`), one page component (`LiveMidpointPage`), no router
 - **Vite 6** with manual chunks: react, firebase, mapbox, i18n
-- **Firebase Anonymous Auth** — explicit `initializeAuth` singleton in `useFirebase.ts` with persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once `participantUids` slot
+- **Composition root** — `lib/config.ts` is the only module reading `VITE_*` application config; `lib/services.ts` wires Firebase, the API clients and the graph ports once in `main.tsx` and passes them down via `ServicesProvider`. Nothing below that constructs a Firebase handle or reads a credential
+- **Firebase Anonymous Auth** — `lib/firebase-factory.ts` builds auth with an explicit persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once `participantUids` slot
 - **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation)
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
 - **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
 - **Google Places API (New)** — venue search around midpoint (optional, disabled if `VITE_GOOGLE_PLACES_API_KEY` not set)
 - **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side
-- **Derived pipeline runs as a declared DAG** — `slots → midpoint → venues → destination → routes → frame`, declared in `features/live-midpoint/graph/edges.ts`, executed in topological order by a per-mount runtime exposed through `useSyncExternalStore`. Effectful nodes are `createResource` instances carrying debounce + maxWait, admission control, retry, timeout, a lazy circuit breaker and last-known-good degradation. See `ARCHITECTURE.md`
+- **Derived pipeline runs as a declared DAG** — `liveness → slots → {presence, midpoint} → phase/venues → destination → routes → frame`, declared in `features/live-midpoint/graph/edges.ts`, executed in topological order by a per-mount runtime exposed through `useSyncExternalStore`. Effectful nodes are `createResource` instances carrying debounce + maxWait, admission control, retry, timeout, a lazy circuit breaker and last-known-good degradation, under a shared concurrency bulkhead (`core/dag/semaphore.ts`). Own location is published by the `presence` node — a write expressed as the same combinator. See `ARCHITECTURE.md`
 - **Participant model** — up to 5 participants per session, indexed 0–4 (creator = 0), each with a distinct color
 - **i18next** — en/he with full RTL support via CSS logical properties
 
@@ -60,36 +61,43 @@ apps/web/src/
 │   ├── components/                    # LiveMap, SessionBadge, WaitingCard, MidpointCard, VenueListCard
 │   ├── graph/                         # the derived pipeline — see ARCHITECTURE.md
 │   │   ├── edges.ts                   # EDGES + assertAcyclic (Kahn); TOPO_ORDER drives the runtime
-│   │   ├── nodes.ts                   # pure: buildSlotVector, deriveMidpoint, deriveDestination
-│   │   ├── policies.ts                # venue + route ResourcePolicy (debounce, admit, identity, breaker)
-│   │   ├── ports.ts                   # injected I/O seam (now/schedule/cancel/searchVenues/fetchRoute)
+│   │   ├── nodes.ts                   # pure: deriveLiveness, buildSlotVector, deriveMidpoint, derivePhase, deriveDestination
+│   │   ├── policies.ts                # venue + route + presence ResourcePolicy (debounce, admit, identity, breaker)
+│   │   ├── ports.ts                   # injected I/O seam (now/schedule/cancel/searchVenues/fetchRoute/writePresence)
 │   │   ├── runtime.ts                 # per-mount runtime, atomic GraphSnapshot, setSources(patch)
 │   │   ├── types.ts                   # SlotVector, GraphSources, RouteInfo, TravelProfile
 │   │   └── useGraph.ts                # useSyncExternalStore bindings
 │   ├── hooks/                         # source adapters — event streams, not graph nodes
 │   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
-│   │   └── useLiveSession.ts          # RTDB session CRUD + N-participant location sync
+│   │   └── useLiveSession.ts          # RTDB create/join/listen; returns Result, takes an AbortSignal
 │   └── lib/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
 │       ├── slot-registry.ts           # first-seen-wins uid→ParticipantIndex; slots are stable for the session
 │       ├── participant-config.ts      # MAX_PARTICIPANTS, ParticipantIndex type, PARTICIPANT_COLORS (5-color palette)
 │       ├── session-code.ts            # 6-char code generation/validation
 │       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now
-│       ├── places-api.ts              # Google Places API (New) client → Result<PlaceResult[], ResourceError>
-│       ├── directions-api.ts          # Mapbox Directions client → Result<RouteInfo | null, ResourceError>
+│       ├── places-api.ts              # createPlacesClient(key) → Result<PlaceResult[], ResourceError>
+│       ├── directions-api.ts          # createDirectionsClient(token) → Result<RouteInfo | null, ResourceError>
+│       ├── presence-rtdb.ts           # own-location write + onDisconnect arming, behind the port
+│       ├── fit-bounds.ts              # identity-keyed fitBounds jitter guard
 │       └── nav-links.ts              # Waze/Google Maps deep link generators
 ├── core/dag/                          # framework- and domain-agnostic execution core
 │   ├── result.ts                      # Result<T, E> + ok/err
 │   ├── errors.ts                      # ResourceError union, isRetryableError, countsAgainstBreaker
 │   ├── breaker.ts                     # lazy circuit breaker (no timers — clock-compared)
-│   ├── backoff.ts                     # shared exponential backoff with optional jitter
+│   ├── backoff.ts                     # shared exponential backoff, jitter + Retry-After floor
+│   ├── semaphore.ts                   # FIFO bulkhead bounding total in-flight I/O
 │   └── resource.ts                    # createResource: the one effectful-node combinator
+├── components/
+│   └── ServicesProvider.tsx           # DI boundary; useServices()
 ├── hooks/
 │   ├── useAuth.ts                     # Anonymous sign-in with retry + typed AuthErrorCode classification
-│   ├── useFirebase.ts                 # Firebase app/db/auth/App Check singleton init (persistence fallback chain)
+│   ├── useFirebase.ts                 # thin read of useServices().firebase
 │   └── useNetworkStatus.ts            # Firebase RTDB .info/connected tracking
 ├── lib/
-│   ├── env.ts                         # VITE_* env var validation (throws on missing required vars)
+│   ├── config.ts                      # the ONLY module reading VITE_* app config; validateAppConfig
+│   ├── services.ts                    # composition root: createServices(config)
+│   ├── firebase-factory.ts            # createFirebaseServices(config) — no module state
 │   └── i18n.ts                        # i18next config
 └── i18n/                              # en.json, he.json — namespaces: app, live, common
 ```
@@ -119,14 +127,17 @@ Security rules enforce: auth required for all reads, uid-scoped writes, write-on
 - Session error codes use typed union `SessionErrorCode` (not string matching)
 - i18n keys mapped via typed records (e.g., `SESSION_ERROR_I18N`)
 - Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0). Slots come from `lib/slot-registry.ts` and are **stable for the session** — first-seen-wins, never renumbered when someone leaves. Anything keyed by slot (routes, accuracy circles, colours, Mapbox layer ids) must agree on that one index space
-- Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code
+- Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code. This includes the session handshake: `createSession`/`joinSession` return `Result` and take an `AbortSignal`
+- Derived values are derived, not stored. `SessionPhase` and participant staleness are graph nodes, not `useState` — a predicate over a clock must never be driven by a polling interval (mobile browsers throttle `setInterval` to minutes and freeze it under bfcache)
+- Anything the graph publishes is referentially stable; do not rebuild it with `.map()` in a render body. Project it with `useMemo` keyed on the snapshot array, or the map re-uploads every route geometry per frame
 - New effectful work belongs in a `ResourcePolicy` (`graph/policies.ts`), not a bespoke hook with its own debounce and abort handling
-- I/O reaches the graph through `graph/ports.ts` so tests inject fakes and a virtual clock instead of mocking modules, globals or timers
+- I/O reaches the graph through `graph/ports.ts` so tests inject fakes and a virtual clock instead of mocking modules, globals or timers. React-tree dependencies arrive through `ServicesProvider` for the same reason
+- `import.meta.env.VITE_*` is read in `lib/config.ts` and nowhere else (`DEV`/`PROD`/`MODE` are build flags and stay at their point of use)
 - 5-color palette: green (#00d4aa), blue (#6c8cff), orange (#ff9f43), purple (#a855f7), pink (#f472b6) — CSS classes `--p0` through `--p4`
 
 ## Environment Variables
 
-Required: `VITE_MAPBOX_TOKEN`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID`, `VITE_RECAPTCHA_SITE_KEY`.
+Required: `VITE_MAPBOX_TOKEN`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID`, `VITE_RECAPTCHA_SITE_KEY` — all six enforced by `validateAppConfig`.
 Optional: `VITE_GOOGLE_PLACES_API_KEY` (venue search disabled if not set), `VITE_FIREBASE_APP_ID` (required for App Check — without it the attestation token exchange 400s and App Check init is skipped with a warning).
 
-See `.env.example` at project root. App validates required vars at startup and throws if missing.
+See `.env.example` at project root. `main.tsx` calls `validateAppConfig` before React renders and throws naming every missing variable at once.
