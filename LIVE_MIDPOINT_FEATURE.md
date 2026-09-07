@@ -1,5 +1,24 @@
 # Feature: Live Location Midpoint with Navigation
 
+> **Superseded — historical design document.**
+>
+> This is the original 2-participant specification. It is kept for context, but
+> it no longer describes the shipped system and should not be used as a
+> reference. In particular:
+>
+> | This document says | The app actually does |
+> |---|---|
+> | 2 participants, roles `a` / `b` | Up to 5, keyed by uid with a stable slot registry (`lib/slot-registry.ts`) |
+> | `sessions/{id}/{a\|b}` | `sessions/{code}/participants/{uid}` plus write-once `participantUids` |
+> | `".read": true, ".write": true` — "tighten later" | Auth-required, uid-scoped, write-once metadata, range-validated, `$other: false` (`infra/database.rules.json`). **Do not deploy the rules shown below.** |
+> | `?session=` query parameter | `?code=` |
+> | Debounced route fetch inside a hook | A declared execution graph with admission control, circuit breakers and degradation |
+> | Spherical midpoint of two points | Geographic centroid (Cartesian mean on the unit sphere) over N points |
+>
+> For the current architecture see **[ARCHITECTURE.md](ARCHITECTURE.md)**; for
+> the current schema and conventions see **[CLAUDE.md](CLAUDE.md)**.
+
+
 ## Objective
 
 Extend the Meet Me Halfway project to support **real-time live location sharing** between 2 participants, with automatic geodesic midpoint calculation and turn-by-turn navigation routes from each participant to the midpoint. This mirrors WhatsApp's "Share live location" UX but adds midpoint computation + dual routing.

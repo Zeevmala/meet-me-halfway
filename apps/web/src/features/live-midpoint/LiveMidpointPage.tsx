@@ -1,14 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
-import { useDirections } from "./hooks/useDirections";
-import type { TravelProfile } from "./hooks/useDirections";
-import { useVenueSearch } from "./hooks/useVenueSearch";
+import { useGraph, useGraphRuntime } from "./graph/useGraph";
+import type { TravelProfile } from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
-import { geographicCentroid } from "./lib/geo-math";
 import type { LatLng } from "./lib/geo-math";
 import { normalizeCode, isValidCode } from "./lib/session-code";
 import type { ParticipantIndex } from "./lib/participant-config";
@@ -62,39 +60,47 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();
 
-  // Build ordered positions array: own position first, then others
-  const allPositions: (LatLng | null)[] = useMemo(() => {
-    const others = session.participants.map((p) => p.position);
-    return [session.ownPosition, ...others];
-  }, [session.ownPosition, session.participants]);
+  // ── The derived pipeline ──
+  // slots → midpoint → venues → destination → routes, declared in
+  // graph/edges.ts and executed in topological order. One subscription
+  // replaces the four-hook render cascade, and the snapshot only changes when
+  // a value actually changed, so the memo() on the cards below holds.
+  const runtime = useGraphRuntime();
+  const graph = useGraph(runtime);
 
-  // Compute geographic centroid when 2+ positions available
-  const midpoint = useMemo(() => {
-    const valid = allPositions.filter((p): p is LatLng => p !== null);
-    if (valid.length < 2) return null;
-    return geographicCentroid(valid);
-  }, [allPositions]);
-
-  // Venue search + selection state
-  const [selectedVenue, setSelectedVenue] = useState<RankedVenue | null>(null);
-  const [travelProfile, setTravelProfile] = useState<TravelProfile>("driving");
-  const venueSearch = useVenueSearch(midpoint);
-
-  // Destination: selected venue or midpoint
-  const destination = selectedVenue ? selectedVenue.location : midpoint;
-
-  // Fetch routes for all participants with 3s debounce + 200m movement threshold
-  const { routes } = useDirections(allPositions, destination, travelProfile);
-
-  // ── Clear venue selection if venue disappears from refreshed list ──
+  // Feed session and GPS state in. These are event streams, not graph nodes:
+  // the graph derives from them, never the other way round.
   useEffect(() => {
-    if (selectedVenue && venueSearch.venues.length > 0) {
-      const stillPresent = venueSearch.venues.some(
-        (v) => v.id === selectedVenue.id,
-      );
-      if (!stillPresent) setSelectedVenue(null);
-    }
-  }, [venueSearch.venues, selectedVenue]);
+    runtime.setSources({
+      ownSlot: session.ownIndex,
+      ownPosition: session.ownPosition,
+      ownAccuracy: geo.accuracy,
+      participants: session.participants,
+    });
+  }, [
+    runtime,
+    session.ownIndex,
+    session.ownPosition,
+    session.participants,
+    geo.accuracy,
+  ]);
+
+  // Selection and travel mode live in the graph rather than in React state.
+  // Mirroring them would give two sources of truth: the list would highlight
+  // a venue the graph had already stopped routing to.
+  const handleSelectVenue = useCallback(
+    (venue: RankedVenue | null) => {
+      runtime.setSources({ selectedVenueId: venue?.id ?? null });
+    },
+    [runtime],
+  );
+
+  const handleProfileChange = useCallback(
+    (profile: TravelProfile) => {
+      runtime.setSources({ travelProfile: profile });
+    },
+    [runtime],
+  );
 
   // ── Initialize: start geolocation, then create or join session ──
   const initRef = useRef(false);
@@ -210,54 +216,61 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const isConnected =
     session.phase === "connected" || session.phase === "some_stale";
 
-  // Build map participants array
+  // Everything below reads the one slot-indexed vector, so markers, accuracy
+  // circles, route colours and Mapbox layer ids cannot drift apart.
+  const { slots, routes } = graph;
+
   const mapParticipants: MapParticipant[] = [];
-  if (session.ownPosition) {
+  for (const slot of slots.occupied) {
+    const position = slots.positions[slot];
+    if (!position) continue;
     mapParticipants.push({
-      position: session.ownPosition,
-      accuracy: geo.accuracy ?? 0,
-      index: ownIndex,
-      isOwn: true,
-      stale: false,
-    });
-  }
-  for (const p of session.participants) {
-    mapParticipants.push({
-      position: p.position,
-      accuracy: p.accuracy,
-      index: p.index,
-      isOwn: false,
-      stale: p.stale,
+      position,
+      accuracy: slots.accuracy[slot] ?? 0,
+      index: slot,
+      isOwn: slot === slots.ownSlot,
+      stale: slots.stale[slot] ?? false,
     });
   }
 
-  // Build route geometries array (parallel to allPositions)
+  // Slot-keyed route geometries — LiveMap paints routes[i] on the `route-{i}`
+  // layer in PARTICIPANT_COLORS[i], so this must be indexed by slot.
   const routeGeometries = routes.map((r) => r?.geometry ?? null);
 
-  // Build badge participants
   const badgeParticipants = session.participants.map((p) => ({
     index: p.index,
     connected: true,
     name: p.name,
   }));
 
-  // Build MidpointCard other-participants
-  const otherParticipants = session.participants.map((p, i) => ({
-    index: p.index,
-    route: routes[i + 1] ?? null, // routes[0] is own, others start at 1
-    position: p.position,
-    stale: p.stale,
-    name: p.name,
-  }));
+  const otherParticipants: {
+    index: ParticipantIndex;
+    route: (typeof routes)[number];
+    position: LatLng;
+    stale: boolean;
+    name: string | null;
+  }[] = [];
+  for (const slot of slots.occupied) {
+    if (slot === slots.ownSlot) continue;
+    const position = slots.positions[slot];
+    if (!position) continue;
+    otherParticipants.push({
+      index: slot,
+      route: routes[slot] ?? null,
+      position,
+      stale: slots.stale[slot] ?? false,
+      name: slots.names[slot] ?? null,
+    });
+  }
 
   return (
     <main className="live-page">
       <LiveMap
         participants={mapParticipants}
-        midpoint={midpoint}
+        midpoint={graph.midpoint}
         routes={routeGeometries}
-        venues={venueSearch.venues}
-        selectedVenue={selectedVenue}
+        venues={graph.venues}
+        selectedVenue={graph.selectedVenue}
       />
 
       {session.code && (
@@ -280,28 +293,28 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       )}
 
       {session.code &&
-        (isConnected && midpoint && session.ownPosition ? (
+        (isConnected && graph.midpoint && session.ownPosition ? (
           <div className="live-bottom-panel">
             {placesEnabled && (
               <Suspense fallback={null}>
                 <VenueListCard
-                  venues={venueSearch.venues}
-                  loading={venueSearch.loading}
-                  selectedVenue={selectedVenue}
-                  onSelectVenue={setSelectedVenue}
+                  venues={graph.venues}
+                  loading={graph.venuesLoading}
+                  selectedVenue={graph.selectedVenue}
+                  onSelectVenue={handleSelectVenue}
                 />
               </Suspense>
             )}
             <MidpointCard
-              midpoint={midpoint}
+              midpoint={graph.midpoint}
               ownIndex={ownIndex}
               ownPosition={session.ownPosition}
-              ownRoute={routes[0] ?? null}
+              ownRoute={routes[ownIndex] ?? null}
               otherParticipants={otherParticipants}
-              destination={destination ?? midpoint}
-              travelProfile={travelProfile}
-              onProfileChange={setTravelProfile}
-              selectedVenueName={selectedVenue?.displayName ?? null}
+              destination={graph.destination ?? graph.midpoint}
+              travelProfile={graph.travelProfile}
+              onProfileChange={handleProfileChange}
+              selectedVenueName={graph.selectedVenue?.displayName ?? null}
               code={session.code}
               participantCount={session.participants.length + 1}
             />
