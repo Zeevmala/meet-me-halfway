@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SessionPhase } from "../hooks/useLiveSession";
+import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { firstLetter, isDerivedName } from "../lib/display-name";
 import "../styles/live-midpoint.css";

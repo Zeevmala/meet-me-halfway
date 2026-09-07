@@ -1,14 +1,18 @@
 import mapboxgl from "mapbox-gl";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
-import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
-import type { ParticipantIndex } from "../lib/participant-config";
+import { accuracyCircleGeoJSON } from "../lib/geo-math";
+import { fitSignature, hasSettled } from "../lib/fit-bounds";
+import type { MapParticipant } from "../graph/types";
 import {
   PARTICIPANT_COLORS,
   MAX_PARTICIPANTS,
 } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
+import { APP_CONFIG } from "../../../lib/config";
+export type { MapParticipant };
+
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
 import VenueMarker from "./VenueMarker";
@@ -19,7 +23,10 @@ const DEFAULT_ZOOM = 8;
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string;
+// mapbox-gl exposes one global access token, not a per-instance one, so
+// this cannot be injected. Sourcing it from the config module still keeps
+// the environment read in a single place.
+mapboxgl.accessToken = APP_CONFIG.mapboxToken;
 
 // RTL text plugin for Hebrew map labels
 try {
@@ -28,14 +35,6 @@ try {
   );
 } catch {
   /* already loaded */
-}
-
-export interface MapParticipant {
-  position: LatLng;
-  accuracy: number;
-  index: ParticipantIndex;
-  isOwn: boolean;
-  stale: boolean;
 }
 
 interface LiveMapProps {
@@ -100,7 +99,15 @@ function addSourcesAndLayers(map: mapboxgl.Map): void {
   }
 }
 
-export default function LiveMap({
+/**
+ * memo() is load-bearing, not decoration. The page re-renders on every GPS fix
+ * and every RTDB heartbeat; without it each render re-ran the effects below,
+ * and `GeoJSONSource.setData` re-serialises a whole route geometry — thousands
+ * of coordinate pairs, five sources — for data that had not changed. Paired
+ * with the memoised props on the page, the effects now fire only when the
+ * geometry genuinely differs.
+ */
+function LiveMap({
   participants,
   midpoint,
   routes,
@@ -110,7 +117,7 @@ export default function LiveMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
-  const lastFitRef = useRef<LatLng[]>([]);
+  const lastFitRef = useRef<Map<string, LatLng>>(new Map());
 
   // ── Map initialization ──
   useEffect(() => {
@@ -192,39 +199,27 @@ export default function LiveMap({
   useEffect(() => {
     if (!mapInstance) return;
 
-    const current: LatLng[] = [];
-    for (const p of participants) {
-      current.push(p.position);
-    }
-    if (midpoint) current.push(midpoint);
-    if (selectedVenue) current.push(selectedVenue.location);
-
-    if (current.length === 0) return;
-
-    // Skip refit when point count unchanged and all moved < threshold
-    const prev = lastFitRef.current;
-    if (
-      prev.length === current.length &&
-      prev.length > 0 &&
-      prev.every(
-        (p, i) => haversineDistance(p, current[i]) < FIT_MOVEMENT_THRESHOLD_M,
-      )
-    ) {
+    // Keyed by identity, not by array position — see lib/fit-bounds.ts.
+    const current = fitSignature(participants, midpoint, selectedVenue);
+    if (current.size === 0) return;
+    if (hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)) {
       return;
     }
     lastFitRef.current = current;
 
-    if (current.length === 1) {
+    const points = [...current.values()];
+    const first = points[0];
+    if (points.length === 1 && first !== undefined) {
       mapInstance.easeTo({
-        center: [current[0].lng, current[0].lat],
+        center: [first.lng, first.lat],
         zoom: 14,
         duration: 800,
       });
       return;
     }
 
-    const lngs = current.map((p) => p.lng);
-    const lats = current.map((p) => p.lat);
+    const lngs = points.map((p) => p.lng);
+    const lats = points.map((p) => p.lat);
 
     mapInstance.fitBounds(
       [
@@ -279,3 +274,5 @@ export default function LiveMap({
     </>
   );
 }
+
+export default memo(LiveMap);

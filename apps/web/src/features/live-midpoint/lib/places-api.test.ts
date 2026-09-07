@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { searchNearbyVenues } from "./places-api";
+import { createPlacesClient } from "./places-api";
 import type { LatLng } from "./geo-math";
 
 const mockFetch = vi.fn();
@@ -39,7 +39,6 @@ const ONE_PLACE = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv("VITE_GOOGLE_PLACES_API_KEY", "test-key");
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -47,6 +46,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+/** The key is a constructor argument now, not an environment read. */
+const searchNearbyVenues = createPlacesClient("test-key");
 
 describe("searchNearbyVenues", () => {
   it("returns mapped places on success", async () => {
@@ -61,9 +63,9 @@ describe("searchNearbyVenues", () => {
   });
 
   it("treats an absent API key as a disabled feature, not a failure", async () => {
-    vi.stubEnv("VITE_GOOGLE_PLACES_API_KEY", "");
+    const disabled = createPlacesClient(null);
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await disabled(CENTER, 1000, new AbortController().signal);
 
     expect(result).toEqual({ ok: true, value: [] });
     expect(mockFetch).not.toHaveBeenCalled();
