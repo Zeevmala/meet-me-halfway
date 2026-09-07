@@ -15,13 +15,25 @@ import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { TOPO_ORDER } from "./edges";
-import { buildSlotVector, deriveMidpoint, deriveDestination } from "./nodes";
-import { createVenuePolicy, createRoutePolicy } from "./policies";
-import type { RouteInput, VenueInput } from "./policies";
+import {
+  buildSlotVector,
+  deriveLiveness,
+  deriveMidpoint,
+  deriveDestination,
+  derivePhase,
+} from "./nodes";
+import {
+  createVenuePolicy,
+  createRoutePolicy,
+  createPresencePolicy,
+} from "./policies";
+import type { PresenceInput, RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
 import type {
   GraphSources,
+  LivenessResult,
   RouteInfo,
+  SessionPhase,
   SlotVector,
   TravelProfile,
 } from "./types";
@@ -40,7 +52,16 @@ export const DEFAULT_SOURCES: GraphSources = {
   participants: [],
   selectedVenueId: null,
   travelProfile: "driving",
+  sessionCode: null,
+  ownUid: null,
+  ownName: "",
+  sessionStatus: "idle",
 };
+
+const NO_LIVENESS: LivenessResult = Object.freeze({
+  stale: Object.freeze(new Array<boolean>(MAX_PARTICIPANTS).fill(false)),
+  nextFlipAtMs: null,
+});
 
 export interface GraphSnapshot {
   readonly slots: SlotVector;
@@ -53,6 +74,10 @@ export interface GraphSnapshot {
   /** Routes are being served from cache after a failure. */
   readonly routesDegraded: boolean;
   readonly travelProfile: TravelProfile;
+  /** Derived, never stored — see `derivePhase`. */
+  readonly phase: SessionPhase;
+  /** Own location is not reaching RTDB; peers will start seeing us as stale. */
+  readonly presenceFailed: boolean;
 }
 
 export interface GraphRuntime {
@@ -110,12 +135,23 @@ export function createRuntime(
     createRoutePolicy(ports),
     ports,
   );
+  const presence: Resource<PresenceInput, null> = createResource(
+    createPresencePolicy(ports),
+    ports,
+  );
 
   // Memo cells. Each holds the previous output so an unchanged computation
   // returns the identical reference and the snapshot stays stable — which
   // useSyncExternalStore requires of getSnapshot.
-  let slots: SlotVector = buildSlotVector(sources);
+  let liveness: LivenessResult = NO_LIVENESS;
+  let slots: SlotVector = buildSlotVector(sources, liveness);
   let midpoint: LatLng | null = null;
+  let phase: SessionPhase = "idle";
+  // One timer for the whole liveness concern, armed at the next instant some
+  // participant's staleness flips. Replaces a 10s setInterval that ran for the
+  // life of the session whether or not anything was about to change.
+  let livenessTimer: ReturnType<GraphPorts["schedule"]> | null = null;
+  let livenessArmedFor: number | null = null;
   let ranked: readonly RankedVenue[] = EMPTY_VENUES;
   let rankedFromRaw: PlaceResult[] | null = null;
   let rankedAtCenter: LatLng | null = null;
@@ -130,6 +166,8 @@ export function createRuntime(
     routes: EMPTY_ROUTES,
     routesDegraded: false,
     travelProfile: sources.travelProfile,
+    phase: "idle",
+    presenceFailed: false,
   };
 
   let disposed = false;
@@ -140,6 +178,38 @@ export function createRuntime(
     for (const listener of listeners) listener();
   }
 
+  /**
+   * Arm a single wake for the next staleness transition.
+   *
+   * Re-armed only when the target instant actually changes, so a heartbeat
+   * that does not move the earliest flip costs nothing. Nothing is armed when
+   * every participant is already stale — there is no further transition to
+   * wait for, and the next real event will recompute anyway.
+   */
+  function armLivenessWake(atMs: number | null): void {
+    if (atMs === livenessArmedFor) return;
+    if (livenessTimer !== null) {
+      ports.cancel(livenessTimer);
+      livenessTimer = null;
+    }
+    livenessArmedFor = atMs;
+    if (atMs === null) return;
+    // Defence in depth against the loop above: a target that is not strictly
+    // in the future would schedule at a zero delay and re-derive the same
+    // target. `deriveLiveness` cannot produce one, and this makes it so that a
+    // future change to that predicate degrades to a missed wake — recovered on
+    // the next real event — rather than to a spinning main thread.
+    if (atMs <= ports.now()) return;
+    livenessTimer = ports.schedule(
+      () => {
+        livenessTimer = null;
+        livenessArmedFor = null;
+        tick();
+      },
+      Math.max(0, atMs - ports.now()),
+    );
+  }
+
   function compute(): void {
     let nextDestination: LatLng | null = null;
     let nextSelected: RankedVenue | null = null;
@@ -148,9 +218,39 @@ export function createRuntime(
     // merely documenting it. noFallthroughCasesInSwitch keeps this exhaustive.
     for (const node of TOPO_ORDER) {
       switch (node) {
+        case "liveness": {
+          liveness = deriveLiveness(sources.participants, ports.now());
+          armLivenessWake(liveness.nextFlipAtMs);
+          break;
+        }
         case "slots": {
-          const next = buildSlotVector(sources);
+          const next = buildSlotVector(sources, liveness);
           if (!sameSlots(next, slots)) slots = next;
+          break;
+        }
+        case "presence": {
+          const code = sources.sessionCode;
+          const uid = sources.ownUid;
+          const position = sources.ownPosition;
+          // `null` until every part exists. The old code had an explicit
+          // "flush once the code arrives" effect for exactly this gap, because
+          // a stationary joiner's single GPS fix could land before the async
+          // join resolved and then never be written at all.
+          if (code !== null && uid !== null && position !== null) {
+            presence.request({
+              code,
+              uid,
+              position,
+              accuracy: sources.ownAccuracy ?? 0,
+              name: sources.ownName,
+            });
+          } else {
+            presence.request(null);
+          }
+          break;
+        }
+        case "phase": {
+          phase = derivePhase(sources.sessionStatus, slots, liveness);
           break;
         }
         case "midpoint": {
@@ -207,6 +307,7 @@ export function createRuntime(
         case "frame": {
           const venueState = venues.getState();
           const routeState = routes.getState();
+          const presenceState = presence.getState();
           const next: GraphSnapshot = {
             slots,
             midpoint,
@@ -219,6 +320,8 @@ export function createRuntime(
             routes: routeState.value ?? EMPTY_ROUTES,
             routesDegraded: routeState.status === "degraded",
             travelProfile: sources.travelProfile,
+            phase,
+            presenceFailed: presenceState.status === "failed",
           };
           if (
             next.slots !== snapshot.slots ||
@@ -229,7 +332,9 @@ export function createRuntime(
             next.destination !== snapshot.destination ||
             next.routes !== snapshot.routes ||
             next.routesDegraded !== snapshot.routesDegraded ||
-            next.travelProfile !== snapshot.travelProfile
+            next.travelProfile !== snapshot.travelProfile ||
+            next.phase !== snapshot.phase ||
+            next.presenceFailed !== snapshot.presenceFailed
           ) {
             snapshot = next;
             notify();
@@ -259,6 +364,7 @@ export function createRuntime(
 
   venues.subscribe(tick);
   routes.subscribe(tick);
+  presence.subscribe(tick);
 
   function setSources(patch: Partial<GraphSources>): void {
     if (disposed) return;
@@ -286,8 +392,12 @@ export function createRuntime(
     setSources,
     dispose: () => {
       disposed = true;
+      if (livenessTimer !== null) ports.cancel(livenessTimer);
+      livenessTimer = null;
+      livenessArmedFor = null;
       venues.dispose();
       routes.dispose();
+      presence.dispose();
       listeners.clear();
     },
     isDisposed: () => disposed,

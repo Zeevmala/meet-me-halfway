@@ -98,3 +98,62 @@ describe("createBreaker", () => {
     expect(b.retryAtMs()).toBe(5000);
   });
 });
+
+describe("createBreaker — half-open has nothing to wake for", () => {
+  it("reports no retry instant while a probe is outstanding", () => {
+    const b = createBreaker(CONFIG);
+    for (let i = 0; i < CONFIG.failureThreshold; i++) b.recordFailure(0);
+    expect(b.state()).toBe("open");
+    expect(b.retryAtMs()).toBe(CONFIG.baseOpenMs);
+
+    // Cooldown elapses, the single probe is admitted.
+    expect(b.allow(CONFIG.baseOpenMs)).toBe(true);
+    expect(b.state()).toBe("halfOpen");
+
+    // The probe is in flight: there is no future instant to schedule a wake
+    // for. Returning the elapsed cooldown here armed setTimeout(fire, 0) in a
+    // loop for the probe's whole lifetime.
+    expect(b.retryAtMs()).toBe(0);
+  });
+
+  it("re-reports a retry instant once the probe fails", () => {
+    const b = createBreaker(CONFIG);
+    for (let i = 0; i < CONFIG.failureThreshold; i++) b.recordFailure(0);
+    b.allow(CONFIG.baseOpenMs);
+    b.recordFailure(CONFIG.baseOpenMs);
+
+    expect(b.state()).toBe("open");
+    expect(b.retryAtMs()).toBe(CONFIG.baseOpenMs + CONFIG.baseOpenMs * 2);
+  });
+});
+
+describe("createBreaker — openFor", () => {
+  it("opens for an explicit window and refuses calls until it elapses", () => {
+    const b = createBreaker(CONFIG);
+    b.openFor(100, 5000);
+
+    expect(b.state()).toBe("open");
+    expect(b.retryAtMs()).toBe(5100);
+    expect(b.allow(5099)).toBe(false);
+    expect(b.allow(5100)).toBe(true);
+  });
+
+  it("clamps the window to [baseOpenMs, maxOpenMs]", () => {
+    const short = createBreaker(CONFIG);
+    short.openFor(0, 1);
+    expect(short.retryAtMs()).toBe(CONFIG.baseOpenMs);
+
+    const long = createBreaker(CONFIG);
+    long.openFor(0, 10 * CONFIG.maxOpenMs);
+    expect(long.retryAtMs()).toBe(CONFIG.maxOpenMs);
+  });
+
+  it("still recovers through a successful probe", () => {
+    const b = createBreaker(CONFIG);
+    b.openFor(0, 4000);
+    expect(b.allow(4000)).toBe(true);
+    b.recordSuccess();
+    expect(b.state()).toBe("closed");
+    expect(b.retryAtMs()).toBe(0);
+  });
+});
