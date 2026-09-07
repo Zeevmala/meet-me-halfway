@@ -8,7 +8,18 @@ import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
-import type { DestinationResult, GraphSources, SlotVector } from "./types";
+
+/** A participant whose last write is older than this is shown as stale. */
+export const STALE_THRESHOLD_MS = 30_000;
+import type {
+  DestinationResult,
+  GraphSources,
+  LivenessResult,
+  ParticipantSource,
+  SessionPhase,
+  SessionStatus,
+  SlotVector,
+} from "./types";
 
 /**
  * Fold own position and every participant into slot-indexed parallel arrays
@@ -19,10 +30,12 @@ import type { DestinationResult, GraphSources, SlotVector } from "./types";
  * midpoint to compute — dropping it is preferable to guessing slot 0, which
  * is reserved for the creator and would mis-colour every joiner.
  */
-export function buildSlotVector(sources: GraphSources): SlotVector {
+export function buildSlotVector(
+  sources: GraphSources,
+  liveness: LivenessResult,
+): SlotVector {
   const positions: (LatLng | null)[] = new Array(MAX_PARTICIPANTS).fill(null);
   const accuracy: number[] = new Array(MAX_PARTICIPANTS).fill(0);
-  const stale: boolean[] = new Array(MAX_PARTICIPANTS).fill(false);
   const names: (string | null)[] = new Array(MAX_PARTICIPANTS).fill(null);
   const occupied: ParticipantIndex[] = [];
 
@@ -37,7 +50,6 @@ export function buildSlotVector(sources: GraphSources): SlotVector {
     if (slot < 0 || slot >= MAX_PARTICIPANTS) continue;
     positions[slot] = participant.position;
     accuracy[slot] = participant.accuracy;
-    stale[slot] = participant.stale;
     names[slot] = participant.name;
   }
 
@@ -45,7 +57,92 @@ export function buildSlotVector(sources: GraphSources): SlotVector {
     if (positions[i] !== null) occupied.push(i as ParticipantIndex);
   }
 
-  return { positions, accuracy, stale, names, occupied, ownSlot };
+  return {
+    positions,
+    accuracy,
+    stale: liveness.stale,
+    names,
+    occupied,
+    ownSlot,
+  };
+}
+
+/**
+ * A participant is stale once their last write is older than the threshold.
+ *
+ * The second return value is what makes this cheap: `nextFlipAtMs` is the
+ * earliest instant at which some participant's staleness changes, so the
+ * runtime arms exactly one timer for it instead of polling. Recomputing from
+ * the clock on every tick also means a tab that was backgrounded for ten
+ * minutes reports the truth on its first tick back, which the 10s
+ * `setInterval` this replaces could not: mobile browsers throttle it to
+ * minutes and freeze it entirely under bfcache. That is the same reasoning
+ * `core/dag/breaker.ts` gives for holding no timer of its own.
+ */
+export function deriveLiveness(
+  participants: readonly ParticipantSource[],
+  nowMs: number,
+): LivenessResult {
+  const stale: boolean[] = new Array(MAX_PARTICIPANTS).fill(false);
+  let nextFlipAtMs: number | null = null;
+
+  for (const participant of participants) {
+    const slot = participant.index;
+    if (slot < 0 || slot >= MAX_PARTICIPANTS) continue;
+
+    // `>=`, not `>`. The runtime arms a wake for exactly `flipAtMs`, so the
+    // predicate has to be true when that wake fires. With a strict `>` the
+    // participant was still fresh at that instant, `nextFlipAtMs` came back as
+    // the same now-current timestamp, and the wake re-armed at a zero delay —
+    // the same livelock `core/dag/breaker.ts` has at its half-open boundary.
+    const flipAtMs = participant.lastSeen + STALE_THRESHOLD_MS;
+    if (nowMs >= flipAtMs) {
+      stale[slot] = true;
+      continue;
+    }
+    if (nextFlipAtMs === null || flipAtMs < nextFlipAtMs) {
+      nextFlipAtMs = flipAtMs;
+    }
+  }
+
+  return { stale, nextFlipAtMs };
+}
+
+/**
+ * The phase the UI renders.
+ *
+ * Previously a `useState` written from six places — the RTDB listener, the
+ * stale interval, and the create/join paths — which is how a `setPhase` ended
+ * up being called from inside a `setParticipants` updater, where React
+ * requires purity and StrictMode double-invokes. It is a total function of the
+ * lifecycle status, the roster and liveness, so it is derived.
+ */
+export function derivePhase(
+  status: SessionStatus,
+  slots: SlotVector,
+  liveness: LivenessResult,
+): SessionPhase {
+  switch (status) {
+    case "error":
+      return "error";
+    case "idle":
+      return "idle";
+    case "connecting":
+      return "creating";
+    case "ready":
+      break;
+  }
+
+  let others = 0;
+  let anyStale = false;
+  for (const slot of slots.occupied) {
+    if (slot === slots.ownSlot) continue;
+    others++;
+    if (liveness.stale[slot] === true) anyStale = true;
+  }
+
+  if (others === 0) return "waiting";
+  return anyStale ? "some_stale" : "connected";
 }
 
 /**

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import type { ParticipantIndex } from "./lib/participant-config";
+import { ServicesProvider } from "../../components/ServicesProvider";
+import type { Services } from "../../lib/services";
+import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 
 // ── Mock i18next ──
@@ -41,22 +45,54 @@ vi.mock("./hooks/useLiveSession", () => ({
 // these tests exercise the actual slots → midpoint → destination → routes
 // derivation rather than a stubbed-out pipeline. Nothing is scheduled, so no
 // timers leak between tests.
+//
+// These are *passed in* through ServicesProvider rather than installed with
+// vi.mock, which is the point of the composition root: the page under test is
+// the real one, wired to fakes, not a module graph rewritten underneath it.
 const mockSearchVenues = vi.fn();
 const mockFetchRoute = vi.fn();
-vi.mock("./graph/ports", () => ({
-  createDefaultPorts: () => ({
-    now: () => 0,
-    schedule: () => 0,
-    cancel: () => {},
-    searchVenues: mockSearchVenues,
-    fetchRoute: mockFetchRoute,
-    placesEnabled: false,
-  }),
-}));
+
+const testPorts: GraphPorts = {
+  now: () => 0,
+  schedule: () => 0 as unknown as ReturnType<typeof setTimeout>,
+  cancel: () => {},
+  searchVenues: mockSearchVenues,
+  fetchRoute: mockFetchRoute,
+  placesEnabled: false,
+};
+
+const testServices = {
+  config: {} as Services["config"],
+  firebase: {} as Services["firebase"],
+  graphPorts: testPorts,
+  requestSemaphore: {} as Services["requestSemaphore"],
+} satisfies Services;
+
+/** Render the page inside the injection boundary it now expects. */
+function renderPage() {
+  return render(
+    <ServicesProvider services={testServices}>
+      <LiveMidpointPage />
+    </ServicesProvider>,
+  );
+}
 
 // ── Mock LiveMap (avoid mapbox-gl in jsdom) ──
+// Props are recorded so the referential-stability regression below can assert
+// on exactly what the real LiveMap's effects key off.
+interface RecordedMapProps {
+  participants: unknown;
+  routes: unknown;
+  midpoint: unknown;
+  venues: unknown;
+  selectedVenue: unknown;
+}
+const liveMapProps: RecordedMapProps[] = [];
 vi.mock("./components/LiveMap", () => ({
-  default: () => <div data-testid="live-map">Map</div>,
+  default: (props: RecordedMapProps) => {
+    liveMapProps.push(props);
+    return <div data-testid="live-map">Map</div>;
+  },
 }));
 
 // ── Mock LanguageSwitcher ──
@@ -106,21 +142,25 @@ function defaultGeo() {
 
 function defaultSession() {
   return {
-    phase: "waiting",
+    // Lifecycle only — waiting/connected/some_stale is the graph's to derive.
+    status: "ready",
     code: "ABC123",
     ownIndex: 0,
-    ownPosition: { lat: 32.08, lng: 34.78 },
+    ownName: "Me",
     participants: [],
     error: null,
-    createSession: vi.fn(),
-    joinSession: vi.fn(),
-    updateOwnLocation: vi.fn(),
+    errorDetails: null,
+    creatorUid: "test-uid",
+    createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
+    joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
+    setOwnName: vi.fn(),
     cleanup: vi.fn(),
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  liveMapProps.length = 0;
   mockSearchVenues.mockResolvedValue({ ok: true, value: [] });
   mockFetchRoute.mockResolvedValue({ ok: true, value: null });
   mockAuth.mockReturnValue({ status: "authenticated", uid: "test-uid" });
@@ -139,7 +179,7 @@ describe("LiveMidpointPage", () => {
   it("shows loading state when auth is loading", () => {
     mockAuth.mockReturnValue({ status: "loading" });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.connecting")).toBeTruthy();
   });
@@ -151,7 +191,7 @@ describe("LiveMidpointPage", () => {
       message: "auth/web-storage-unsupported: storage blocked",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.authStorageBlocked")).toBeTruthy();
     expect(screen.getByText("common.retry")).toBeTruthy();
@@ -167,7 +207,7 @@ describe("LiveMidpointPage", () => {
       position: null,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoDenied")).toBeTruthy();
     expect(screen.getByText("live.geoDeniedInstructions")).toBeTruthy();
@@ -180,7 +220,7 @@ describe("LiveMidpointPage", () => {
       position: null,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoUnavailable")).toBeTruthy();
     expect(screen.getByText("live.geoUnavailableInstructions")).toBeTruthy();
@@ -195,7 +235,7 @@ describe("LiveMidpointPage", () => {
       start: startFn,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.geoTimeout")).toBeTruthy();
     expect(screen.getByText("live.geoTimeoutInstructions")).toBeTruthy();
@@ -210,11 +250,11 @@ describe("LiveMidpointPage", () => {
   it("shows session not found error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_NOT_FOUND",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionNotFound")).toBeTruthy();
   });
@@ -222,11 +262,11 @@ describe("LiveMidpointPage", () => {
   it("shows session full error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_FULL",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionFull")).toBeTruthy();
   });
@@ -234,17 +274,17 @@ describe("LiveMidpointPage", () => {
   it("shows session expired error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "error",
+      status: "error",
       error: "SESSION_EXPIRED",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("live.sessionExpired")).toBeTruthy();
   });
 
   it("shows waiting card when session is waiting", () => {
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.getByTestId("session-badge")).toBeTruthy();
@@ -257,7 +297,7 @@ describe("LiveMidpointPage", () => {
       isOnline: false,
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByText("app.offline")).toBeTruthy();
   });
@@ -268,11 +308,11 @@ describe("LiveMidpointPage", () => {
     // the fallback whenever code is set and the connected MidpointCard can't render.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "creating",
+      status: "connecting",
       code: "ABC123",
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
   });
@@ -283,11 +323,11 @@ describe("LiveMidpointPage", () => {
     // still render so the share button is reachable.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: [],
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.queryByTestId("midpoint-card")).toBeNull();
@@ -296,7 +336,7 @@ describe("LiveMidpointPage", () => {
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      phase: "connected",
+      status: "ready",
       participants: [
         {
           uid: "p1",
@@ -304,7 +344,6 @@ describe("LiveMidpointPage", () => {
           accuracy: 15,
           lastSeen: Date.now(),
           index: 1,
-          stale: false,
           name: null,
         },
         {
@@ -313,14 +352,93 @@ describe("LiveMidpointPage", () => {
           accuracy: 20,
           lastSeen: Date.now(),
           index: 2,
-          stale: false,
           name: null,
         },
       ],
     });
 
-    render(<LiveMidpointPage />);
+    renderPage();
 
     expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+  });
+});
+
+describe("LiveMidpointPage — render-path stability", () => {
+  /** One RTDB heartbeat: same roster, brand-new array and objects. */
+  function roster(): ReturnType<typeof defaultSession>["participants"] {
+    return [
+      {
+        uid: "peer-1",
+        index: 1 as ParticipantIndex,
+        position: { lat: 32.09, lng: 34.79 },
+        accuracy: 12,
+        lastSeen: Date.now(),
+        name: "Peer",
+      },
+    ];
+  }
+
+  it("keeps LiveMap's props referentially stable across an unchanged heartbeat", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "ready",
+      participants: roster(),
+    });
+
+    const { rerender } = renderPage();
+    const before = liveMapProps.length;
+    expect(before).toBeGreaterThan(0);
+    const first = liveMapProps[before - 1];
+
+    // RTDB hands over a fresh array on every heartbeat. The slot vector is
+    // compared element-wise, so the graph's snapshot does not change — and the
+    // page's projections must not either. Rebuilding them in the render body
+    // handed LiveMap new arrays every second, re-running setData on five route
+    // sources for geometry that had not moved.
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "ready",
+      participants: roster(),
+    });
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
+
+    expect(liveMapProps.length).toBeGreaterThan(before);
+    const second = liveMapProps[liveMapProps.length - 1];
+
+    expect(second.participants).toBe(first.participants);
+    expect(second.routes).toBe(first.routes);
+    expect(second.midpoint).toBe(first.midpoint);
+    expect(second.venues).toBe(first.venues);
+  });
+
+  it("hands LiveMap new projections when the roster actually changes", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "ready",
+      participants: roster(),
+    });
+
+    const { rerender } = renderPage();
+    const first = liveMapProps[liveMapProps.length - 1];
+
+    const moved = roster();
+    moved[0] = { ...moved[0], position: { lat: 32.2, lng: 34.9 } };
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "ready",
+      participants: moved,
+    });
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
+
+    const second = liveMapProps[liveMapProps.length - 1];
+    expect(second.participants).not.toBe(first.participants);
   });
 });
