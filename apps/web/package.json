@@ -12,7 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "lighthouse": "lhci autorun",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:rules": "vitest run --config vitest.rules.config.ts"
   },
   "dependencies": {
     "@sentry/react": "^10.73.0",
@@ -24,8 +25,10 @@
     "react-i18next": "^17.0.13"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.3.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@types/geojson": "^7946.0.16",
@@ -34,15 +37,14 @@
     "@types/react-dom": "^19.2.5",
     "@typescript-eslint/eslint-plugin": "^7.11.0",
     "@typescript-eslint/parser": "^7.11.0",
-    "eslint-plugin-jsx-a11y": "^6.10.0",
-    "eslint-plugin-react-hooks": "^5.2.0",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.5.2",
     "eslint": "^8.57.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "jsdom": "^30.0.1",
     "postcss": "^8.5.16",
     "prettier": "^3.9.5",
-    "@tailwindcss/vite": "^4.3.2",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.3",
     "vite": "^6.4.1",

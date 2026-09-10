@@ -89,6 +89,24 @@ participant was still fresh at the instant the wake fired, the node re-derived
 the same target, and the wake re-armed at zero delay — the same livelock the
 breaker had at its half-open boundary.
 
+### The slot is a server-arbitrated resource
+
+A slot is claimed by writing `sessions/{code}/slots/{i}` under a write-once
+rule, so the *database* decides who holds it. Exactly five such keys are
+declared; anything else has no `.write` rule anywhere up the tree. That makes
+the participant cap a property of the schema rather than a check a client can
+skip, and it removes the client-side registry entirely — the three historical
+slot bugs below become unrepresentable rather than defended against.
+
+Write-once is also the concurrency control: two clients racing for one index
+are serialised by the server and the loser gets `permission_denied`, so the
+claim loop needs no transaction, only a retry on the next free index.
+
+Claims are not released on disconnect. `onDisconnect` clears
+`participants/{slot}`; the claim stays, so a reconnect returns to the same slot
+and the same colour. A session that churns five distinct uids is therefore full
+permanently — unchanged from the write-once `participantUids` it replaces.
+
 `slots` is a **structure of arrays** indexed by `ParticipantIndex`, length
 `MAX_PARTICIPANTS`, with `null` for a vacant slot. Routes, accuracy circles,
 marker colours and Mapbox layer ids all key off the same `i`. They previously
@@ -205,7 +223,8 @@ tests.
 
 | Defect | Where it lived |
 |---|---|
-| **Slot identity.** Indices were a dense rank over a mutating set, recomputed per snapshot. A departure renumbered everyone after the leaver; own index was ranked over `participantUids` while others were ranked over `participants`, so two participants could share a slot; and a clamp aliased surplus uids onto the last slot. | `useLiveSession.assignIndex` |
+| **Slot identity.** Indices were a dense rank over a mutating set, recomputed per snapshot. A departure renumbered everyone after the leaver; own index was ranked over `participantUids` while others were ranked over `participants`, so two participants could share a slot; and a clamp aliased surplus uids onto the last slot. First fixed by a client-side registry, then made structurally impossible by moving the claim into the database. | `useLiveSession.assignIndex` |
+| **Unenforced participant cap.** `MAX_PARTICIPANTS` was a client-side `if` in `joinSession` and nothing more, so any modified client could register unbounded `participantUids`. Honest clients dropped the surplus, which made it a session-integrity problem rather than an availability one — but the limit was not a limit. | rules + `useLiveSession` |
 | **Route/colour misalignment.** `LiveMap` resolved accuracy circles by participant index but routes by array position, while painting both into slot `i`'s colour. For *any* joiner the two disagreed, so every route rendered under the wrong participant. `MidpointCard` consumed the same array correctly-by-position, so neither could be fixed alone. | `LiveMap` + `useDirections` |
 | **Sticky rate limit.** A 429 doubled the debounce delay, but the movement guard returned before the timer was re-armed. With nobody moving, the failure was permanent. | `useDirections` |
 | **Partial-failure wipeout.** `Promise.all` meant one participant's 429 discarded every route, and the state was never updated — leaving stale routes on screen with no indication. | `useDirections` |
@@ -259,8 +278,9 @@ not typed arrays or SIMD: at N ≤ 5 a `Float64Array` costs more in allocation
 than the arithmetic it saves. The measurable win is in what the graph *avoids
 fetching*, not in how it multiplies.
 
-**Scale limits.** `MAX_PARTICIPANTS = 5` is enforced client-side only — RTDB
-rules have no `numChildren()`. Mapbox at 5 participants × 1 request / 3 s is
+**Scale limits.** `MAX_PARTICIPANTS = 5` is enforced by the database: five
+write-once keys under `sessions/{code}/slots`, and nothing else may be created
+there. Mapbox at 5 participants × 1 request / 3 s is
 ~100 req/min against a 300/min free tier; the semaphore caps simultaneity at 4,
 which is the browser's per-host budget rather than the API's.
 

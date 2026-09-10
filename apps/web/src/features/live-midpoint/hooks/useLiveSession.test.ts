@@ -58,6 +58,23 @@ vi.mock("../lib/session-code", () => ({
   generateCode: () => "ABC234",
 }));
 
+/**
+ * Resolve `get` per path.
+ *
+ * The slot claim reads `sessions/{code}/slots` directly, so a blanket
+ * `mockResolvedValue` would hand it the whole session object and it would read
+ * `created`/`creatorUid` as slot holders. `session` is the payload for the
+ * session root; `slots` is what the claim sees.
+ */
+function mockSession(session: unknown, slots: Record<string, string> = {}) {
+  mockGet.mockImplementation((r: { path?: string }) => {
+    if (r?.path?.endsWith("/slots")) {
+      return Promise.resolve({ val: () => slots });
+    }
+    return Promise.resolve({ val: () => session });
+  });
+}
+
 const TEST_UID = "user-abc-123";
 const PARTNER_UID = "user-xyz-789";
 const PARTNER_UID_2 = "user-def-456";
@@ -92,7 +109,7 @@ describe("useLiveSession", () => {
   });
 
   describe("createSession", () => {
-    it("writes created, creatorUid, and participantUids to RTDB", async () => {
+    it("writes created, creatorUid, and claims slot 0", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
@@ -109,9 +126,9 @@ describe("useLiveSession", () => {
       );
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: `sessions/ABC234/participantUids/${TEST_UID}`,
+          path: "sessions/ABC234/slots/0",
         }),
-        true,
+        TEST_UID,
       );
     });
 
@@ -203,7 +220,7 @@ describe("useLiveSession", () => {
 
   describe("joinSession", () => {
     it("sets phase to error if session doesn't exist", async () => {
-      mockGet.mockResolvedValue({ val: () => null });
+      mockSession(null);
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -216,7 +233,7 @@ describe("useLiveSession", () => {
     });
 
     it("sets phase to error if session has no creatorUid", async () => {
-      mockGet.mockResolvedValue({ val: () => ({ created: Date.now() }) });
+      mockSession({ created: Date.now() });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -228,20 +245,19 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
-    it("sets phase to error if session has 5 participants", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: {
-            "creator-uid": true,
-            [PARTNER_UID]: true,
-            [PARTNER_UID_2]: true,
-            [PARTNER_UID_3]: true,
-            [PARTNER_UID_4]: true,
-          },
-        }),
-      });
+    it("reports SESSION_FULL when all five slots are claimed", async () => {
+      // The cap is now the database's: five write-once keys exist and every
+      // one is taken by somebody else, so claimSlot has nothing to claim.
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        {
+          "0": "creator-uid",
+          "1": PARTNER_UID,
+          "2": PARTNER_UID_2,
+          "3": PARTNER_UID_3,
+          "4": PARTNER_UID_4,
+        },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -253,13 +269,11 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_FULL");
     });
 
-    it("writes participantUids and sets ownIndex on successful join", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
+    it("claims a slot and sets ownIndex on successful join", async () => {
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid" },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -270,9 +284,9 @@ describe("useLiveSession", () => {
 
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: `sessions/XYZ789/participantUids/${TEST_UID}`,
+          path: "sessions/XYZ789/slots/1",
         }),
-        true,
+        TEST_UID,
       );
       expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
       expect(result.current.code).toBe("XYZ789");
@@ -280,20 +294,18 @@ describe("useLiveSession", () => {
 
     it("sets phase to 'connected' if another participant has data", async () => {
       const creatorUid = "creator-uid";
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid,
-          participantUids: { [creatorUid]: true },
-          participants: {
-            [creatorUid]: {
-              lat: 32.08,
-              lng: 34.78,
-              accuracy: 10,
-              ts: Date.now(),
-            },
+      mockSession({
+        created: Date.now(),
+        creatorUid,
+        slots: { "0": creatorUid },
+        participants: {
+          [creatorUid]: {
+            lat: 32.08,
+            lng: 34.78,
+            accuracy: 10,
+            ts: Date.now(),
           },
-        }),
+        },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -307,11 +319,9 @@ describe("useLiveSession", () => {
 
     it("sets phase to error if session is expired (>24h)", async () => {
       const expiredTime = Date.now() - 25 * 60 * 60 * 1000;
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: expiredTime,
-          creatorUid: "creator-uid",
-        }),
+      mockSession({
+        created: expiredTime,
+        creatorUid: "creator-uid",
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -326,12 +336,10 @@ describe("useLiveSession", () => {
 
     it("joins successfully if session is less than 24h old", async () => {
       const recentTime = Date.now() - 23 * 60 * 60 * 1000;
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: recentTime,
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
+      mockSession({
+        created: recentTime,
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid" },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -345,11 +353,9 @@ describe("useLiveSession", () => {
     });
 
     it("joins successfully if session has no created field (graceful)", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
+      mockSession({
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid" },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -364,11 +370,9 @@ describe("useLiveSession", () => {
 
     it("rejects session at exact 24h boundary", async () => {
       const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1;
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: exactBoundary,
-          creatorUid: "creator-uid",
-        }),
+      mockSession({
+        created: exactBoundary,
+        creatorUid: "creator-uid",
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -382,12 +386,10 @@ describe("useLiveSession", () => {
     });
 
     it("sets phase to 'waiting' if no other participant has data", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid" },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -399,14 +401,11 @@ describe("useLiveSession", () => {
       expect(result.current.status).toBe("ready");
     });
 
-    it("allows rejoining when already a participant", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true, [TEST_UID]: true },
-        }),
-      });
+    it("reuses the slot it already holds when rejoining", async () => {
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid", "1": TEST_UID },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -415,6 +414,12 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.status).toBe("ready");
+      expect(result.current.ownIndex).toBe(1);
+      // Idempotent: holding a slot already means claiming nothing.
+      expect(mockSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({ path: "sessions/XYZ789/slots/1" }),
+        TEST_UID,
+      );
     });
   });
 
@@ -466,12 +471,10 @@ describe("useLiveSession", () => {
     });
 
     it("never requests a token when App Check is not configured", async () => {
-      mockGet.mockResolvedValue({
-        val: () => ({
-          created: Date.now(),
-          creatorUid: "creator-uid",
-          participantUids: { "creator-uid": true },
-        }),
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid" },
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -495,8 +498,15 @@ describe("useLiveSession", () => {
       act(() => {
         onValueCallback?.({
           val: () => ({
-            [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: 1000 },
-            [PARTNER_UID]: {
+            "0": {
+              uid: TEST_UID,
+              lat: 32.08,
+              lng: 34.78,
+              accuracy: 10,
+              ts: 1000,
+            },
+            "1": {
+              uid: PARTNER_UID,
               lat: 31.76,
               lng: 35.21,
               accuracy: 15,
@@ -526,10 +536,34 @@ describe("useLiveSession", () => {
       act(() => {
         onValueCallback?.({
           val: () => ({
-            [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: now },
-            [PARTNER_UID]: { lat: 31.76, lng: 35.21, accuracy: 15, ts: now },
-            [PARTNER_UID_2]: { lat: 31.5, lng: 34.9, accuracy: 20, ts: now },
-            [PARTNER_UID_3]: { lat: 32.1, lng: 35.0, accuracy: 12, ts: now },
+            "0": {
+              uid: TEST_UID,
+              lat: 32.08,
+              lng: 34.78,
+              accuracy: 10,
+              ts: now,
+            },
+            "1": {
+              uid: PARTNER_UID,
+              lat: 31.76,
+              lng: 35.21,
+              accuracy: 15,
+              ts: now,
+            },
+            "2": {
+              uid: PARTNER_UID_2,
+              lat: 31.5,
+              lng: 34.9,
+              accuracy: 20,
+              ts: now,
+            },
+            "3": {
+              uid: PARTNER_UID_3,
+              lat: 32.1,
+              lng: 35.0,
+              accuracy: 12,
+              ts: now,
+            },
           }),
         });
       });
@@ -549,8 +583,15 @@ describe("useLiveSession", () => {
       act(() => {
         onValueCallback?.({
           val: () => ({
-            [TEST_UID]: { lat: 32.08, lng: 34.78, accuracy: 10, ts: 1000 },
-            [PARTNER_UID]: {
+            "0": {
+              uid: TEST_UID,
+              lat: 32.08,
+              lng: 34.78,
+              accuracy: 10,
+              ts: 1000,
+            },
+            "1": {
+              uid: PARTNER_UID,
               lat: 31.76,
               lng: 35.21,
               accuracy: 15,
@@ -616,9 +657,9 @@ describe("useLiveSession", () => {
         result.current.cleanup();
       });
 
-      // Removal goes through the injected presence writer now; the *write*
-      // side belongs to the graph's presence node.
-      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", TEST_UID);
+      // Removal goes through the injected presence writer, keyed by the slot
+      // we hold. The `slots/{i}` claim itself is deliberately left in place.
+      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", 0);
     });
 
     it("unsubscribes from onValue listener", async () => {
