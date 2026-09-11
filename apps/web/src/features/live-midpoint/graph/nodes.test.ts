@@ -309,10 +309,14 @@ describe("deriveLiveness", () => {
   });
 
   it("ignores an out-of-range slot rather than writing past the vector", () => {
+    // Deliberately outside ParticipantIndex — the point of the test is that
+    // the node rejects it rather than writing past the vector. `as unknown`
+    // because 9 is not comparable to the union, which is exactly the invariant
+    // being probed.
     const rogue = {
       ...participant(1, JERUSALEM),
       index: 9,
-    } as ParticipantSource;
+    } as unknown as ParticipantSource;
     const result = deriveLiveness([rogue], NOW);
 
     expect(result.stale).toHaveLength(MAX_PARTICIPANTS);

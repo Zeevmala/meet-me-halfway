@@ -13,7 +13,7 @@ vi.mock("react-i18next", () => ({
 vi.mock("../styles/live-midpoint.css", () => ({}));
 
 import SessionBadge from "./SessionBadge";
-import type { SessionPhase } from "../hooks/useLiveSession";
+import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 
 describe("SessionBadge", () => {
