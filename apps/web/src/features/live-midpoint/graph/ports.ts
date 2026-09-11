@@ -14,6 +14,7 @@ import type { PlaceResult } from "../lib/venue-ranking";
 import type { Result } from "../../../core/dag/result";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
+import type { ParticipantIndex } from "../lib/participant-config";
 import type { PresenceValue } from "../lib/presence-rtdb";
 import type { RouteInfo, TravelProfile } from "./types";
 
@@ -33,13 +34,18 @@ export interface GraphPorts {
     signal: AbortSignal,
   ) => Promise<Result<RouteInfo | null, ResourceError>>;
   /**
-   * Publish own location. A write rather than a read, but it reaches the graph
-   * through the same seam so a test can drive the presence node with a fake
-   * and a virtual clock instead of mocking `firebase/database`.
+   * Publish own location at the claimed slot. A write rather than a read, but
+   * it reaches the graph through the same seam so a test can drive the
+   * presence node with a fake and a virtual clock instead of mocking
+   * `firebase/database`.
+   *
+   * Keyed by slot, not uid: the slot is the server-arbitrated claim, so the
+   * rule guarding this path is just "you may write `participants/{i}` iff
+   * `slots/{i}` is your uid".
    */
   readonly writePresence: (
     code: string,
-    uid: string,
+    slot: ParticipantIndex,
     value: PresenceValue,
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;

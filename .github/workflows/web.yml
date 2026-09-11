@@ -64,9 +64,38 @@ jobs:
         working-directory: apps/web
         run: npm test
 
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+      # The RTDB emulator is a Java process.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: npm ci
+        working-directory: apps/web
+      # Security rules are the only place the participant cap is enforced, so
+      # they get tested like code rather than reviewed by eye.
+      #
+      # firebase-tools is invoked here rather than added to devDependencies:
+      # it is 23 MB, `npm ci` runs in every job, and only this one needs it.
+      # Pinned so a CLI release cannot change what the rules are tested with.
+      # Run from the repo root, where firebase.json and infra/ live.
+      - name: rules tests (RTDB emulator)
+        run: >
+          npx -y firebase-tools@15.29.0 emulators:exec
+          --only database --project demo-meet-me-halfway
+          "npm --prefix apps/web run test:rules"
+
   build:
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, rules]
     if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v7

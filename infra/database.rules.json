@@ -11,16 +11,36 @@
           ".write": "auth != null && !data.exists()",
           ".validate": "newData.isString() && newData.val() === auth.uid"
         },
-        "participantUids": {
-          "$uid": {
-            ".write": "auth != null && !data.exists() && $uid === auth.uid",
-            ".validate": "newData.isBoolean() && newData.val() === true"
-          }
+        "slots": {
+          "0": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.val() === root.child('sessions').child($code).child('creatorUid').val()"
+          },
+          "1": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "2": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "3": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "4": {
+            ".write": "auth != null && !data.exists()",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "$other": { ".validate": false }
         },
         "participants": {
-          "$uid": {
-            ".write": "auth != null && $uid === auth.uid && (!newData.exists() || !data.exists() || (newData.child('lat').val() === data.child('lat').val() && newData.child('lng').val() === data.child('lng').val()) || newData.child('ts').val() > data.child('ts').val() + 2000)",
-            ".validate": "newData.hasChildren(['lat', 'lng', 'accuracy', 'ts'])",
+          "$slot": {
+            ".write": "auth != null && root.child('sessions').child($code).child('slots').child($slot).val() === auth.uid && (!newData.exists() || !data.exists() || (newData.child('lat').val() === data.child('lat').val() && newData.child('lng').val() === data.child('lng').val()) || newData.child('ts').val() > data.child('ts').val() + 2000)",
+            ".validate": "newData.hasChildren(['uid', 'lat', 'lng', 'accuracy', 'ts'])",
+            "uid": {
+              ".validate": "newData.isString() && newData.val() === auth.uid"
+            },
             "lat": {
               ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
             },
