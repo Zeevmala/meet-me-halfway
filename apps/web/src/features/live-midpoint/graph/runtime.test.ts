@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRuntime } from "./runtime";
 import type { GraphPorts } from "./ports";
-import type { RouteInfo } from "./types";
+import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
+import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
 import { ok } from "../../../core/dag/result";
 import type { TimerId } from "../../../core/dag/resource";
@@ -16,6 +17,25 @@ function route(distance: number): RouteInfo {
     duration: distance / 10,
     distance,
   };
+}
+
+/**
+ * A peer as the session layer reports them.
+ *
+ * `lastSeen` is the field the graph actually consumes: staleness is derived as
+ * `now - lastSeen > STALE_THRESHOLD_MS` and never stored. These fixtures used
+ * to carry a boolean staleness flag that `ParticipantSource` does not declare
+ * — with `lastSeen` therefore absent, the subtraction was `NaN`, every
+ * comparison was false, and each case silently exercised only the fresh
+ * branch. The harness clock starts at 0, so defaulting `lastSeen` to 0
+ * reproduces that intent, honestly this time.
+ */
+function peer(
+  index: ParticipantIndex,
+  position: LatLng,
+  lastSeen = 0,
+): ParticipantSource {
+  return { index, position, accuracy: 10, lastSeen, name: null };
 }
 
 const PLACES: PlaceResult[] = [
@@ -136,30 +156,14 @@ describe("createRuntime", () => {
 
     const before = r.getSnapshot().slots;
     r.setSources({
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
     const withPeer = r.getSnapshot().slots;
     expect(withPeer).not.toBe(before);
 
     // Same values, brand new array and objects.
     r.setSources({
-      participants: [
-        {
-          index: 1,
-          position: { ...JERUSALEM },
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, { ...JERUSALEM })],
     });
 
     expect(r.getSnapshot().slots).toBe(withPeer);
@@ -172,15 +176,7 @@ describe("createRuntime", () => {
     expect(r.getSnapshot().midpoint).toBeNull();
 
     r.setSources({
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
 
     expect(r.getSnapshot().midpoint).not.toBeNull();
@@ -191,15 +187,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 0,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
 
     await h.advance(15_000);
@@ -213,15 +201,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 0,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
 
     await h.advance(20_000);
@@ -235,15 +215,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 2,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 4,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(4, JERUSALEM)],
     });
 
     await h.advance(10_000);
@@ -261,15 +233,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 0,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
     await h.advance(15_000);
 
@@ -287,15 +251,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 0,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
     await h.advance(15_000);
     r.setSources({ selectedVenueId: "v1" });
@@ -320,15 +276,7 @@ describe("createRuntime", () => {
     const r = createRuntime(h.ports, {
       ownSlot: 0,
       ownPosition: TEL_AVIV,
-      participants: [
-        {
-          index: 1,
-          position: JERUSALEM,
-          accuracy: 10,
-          stale: false,
-          name: null,
-        },
-      ],
+      participants: [peer(1, JERUSALEM)],
     });
 
     r.dispose();

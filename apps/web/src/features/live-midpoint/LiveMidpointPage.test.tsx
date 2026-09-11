@@ -5,6 +5,8 @@ import { ServicesProvider } from "../../components/ServicesProvider";
 import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
+import type { ParticipantInfo } from "./hooks/useLiveSession";
+import { ok } from "../../core/dag/result";
 
 // ── Mock i18next ──
 vi.mock("react-i18next", () => ({
@@ -51,6 +53,8 @@ vi.mock("./hooks/useLiveSession", () => ({
 // the real one, wired to fakes, not a module graph rewritten underneath it.
 const mockSearchVenues = vi.fn();
 const mockFetchRoute = vi.fn();
+const mockWritePresence = vi.fn().mockResolvedValue(ok(undefined));
+const mockPresenceRemove = vi.fn();
 
 const testPorts: GraphPorts = {
   now: () => 0,
@@ -58,6 +62,10 @@ const testPorts: GraphPorts = {
   cancel: () => {},
   searchVenues: mockSearchVenues,
   fetchRoute: mockFetchRoute,
+  // The presence node publishes own location through this seam. Nothing here
+  // schedules, so it is never actually driven — it exists so the fake satisfies
+  // the same contract production does.
+  writePresence: mockWritePresence,
   placesEnabled: false,
 };
 
@@ -65,6 +73,8 @@ const testServices = {
   config: {} as Services["config"],
   firebase: {} as Services["firebase"],
   graphPorts: testPorts,
+  // Session teardown needs the removal side, which is not a graph node.
+  presence: { write: mockWritePresence, remove: mockPresenceRemove },
   requestSemaphore: {} as Services["requestSemaphore"],
 } satisfies Services;
 
@@ -147,7 +157,10 @@ function defaultSession() {
     code: "ABC123",
     ownIndex: 0,
     ownName: "Me",
-    participants: [],
+    // Annotated: an untyped [] infers never[], which silently made every
+    // roster fixture below unassignable — and the spread in the movement test
+    // a spread of `never`.
+    participants: [] as ParticipantInfo[],
     error: null,
     errorDetails: null,
     creatorUid: "test-uid",
