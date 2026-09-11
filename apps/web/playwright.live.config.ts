@@ -13,8 +13,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL:
-      process.env.LIVE_URL ?? "https://meet-me-halfway-4ae79.web.app",
+    baseURL: process.env.LIVE_URL ?? "https://meet-me-halfway-4ae79.web.app",
     trace: "retain-on-failure",
     // Use an installed Chromium-branded browser (real GPU/WebGL) so
     // mapbox-gl initializes like a real device. The bundled Playwright

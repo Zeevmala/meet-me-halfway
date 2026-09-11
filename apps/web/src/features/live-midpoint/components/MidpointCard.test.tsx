@@ -15,7 +15,7 @@ vi.mock("../styles/live-midpoint.css", () => ({}));
 import MidpointCard from "./MidpointCard";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
-import type { RouteInfo } from "../hooks/useDirections";
+import type { RouteInfo } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 
 const ownPosition: LatLng = { lat: 32.08, lng: 34.78 };
@@ -54,6 +54,12 @@ function renderCard(
   overrides: Partial<Parameters<typeof MidpointCard>[0]> = {},
 ) {
   const defaults = {
+    // Both required by MidpointCard and previously omitted: the share-link
+    // assertions below were running against `?code=undefined`, and the
+    // participant count against `undefined`. Nothing caught it because this
+    // file was outside tsc.
+    code: "ABC123",
+    participantCount: 2,
     midpoint,
     ownIndex: 0 as ParticipantIndex,
     ownPosition,

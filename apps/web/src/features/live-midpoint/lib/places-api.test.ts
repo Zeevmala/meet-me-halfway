@@ -47,6 +47,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * `SearchVenues` declares all three parameters, so the one-argument calls these
+ * tests used to make were never valid against the port — the implementation's
+ * `radiusMeters = 1000` default and optional `signal` are unreachable through
+ * that type. Passing them explicitly is runtime-identical (1000 was already
+ * being applied) and is what the graph actually does.
+ */
+const RADIUS_M = 1000;
+const NEVER_ABORTED = new AbortController().signal;
+
 /** The key is a constructor argument now, not an environment read. */
 const searchNearbyVenues = createPlacesClient("test-key");
 
@@ -54,7 +64,7 @@ describe("searchNearbyVenues", () => {
   it("returns mapped places on success", async () => {
     mockFetch.mockResolvedValue(jsonResponse(ONE_PLACE));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -74,7 +84,7 @@ describe("searchNearbyVenues", () => {
   it("returns an empty success when the response carries no places", async () => {
     mockFetch.mockResolvedValue(jsonResponse({}));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result).toEqual({ ok: true, value: [] });
   });
@@ -84,7 +94,7 @@ describe("searchNearbyVenues", () => {
   it("reports a 429 as a distinct RATE_LIMITED failure", async () => {
     mockFetch.mockResolvedValue(errorResponse(429, "30"));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -97,7 +107,7 @@ describe("searchNearbyVenues", () => {
   it("defaults retryAfterMs to 0 when the header is missing", async () => {
     mockFetch.mockResolvedValue(errorResponse(429));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -107,7 +117,7 @@ describe("searchNearbyVenues", () => {
   it("reports other non-OK statuses as HTTP failures", async () => {
     mockFetch.mockResolvedValue(errorResponse(503));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -117,7 +127,7 @@ describe("searchNearbyVenues", () => {
   it("reports a transport throw as a NETWORK failure", async () => {
     mockFetch.mockRejectedValue(new TypeError("Failed to fetch"));
 
-    const result = await searchNearbyVenues(CENTER);
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -132,6 +142,8 @@ describe("searchNearbyVenues", () => {
   it("re-throws AbortError rather than returning it as a failure", async () => {
     mockFetch.mockRejectedValue(new DOMException("aborted", "AbortError"));
 
-    await expect(searchNearbyVenues(CENTER)).rejects.toThrow("aborted");
+    await expect(
+      searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED),
+    ).rejects.toThrow("aborted");
   });
 });

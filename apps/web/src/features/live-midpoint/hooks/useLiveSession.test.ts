@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useLiveSession } from "./useLiveSession";
+import type { SessionFailure } from "./useLiveSession";
+import type { Result } from "../../../core/dag/result";
 
 // ── Mock firebase/database ──
 const mockSet = vi.fn();
@@ -147,7 +149,7 @@ describe("useLiveSession", () => {
     it("returns the generated session code", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
-      let code: string | undefined;
+      let code: Result<string, SessionFailure> | undefined;
       await act(async () => {
         code = await result.current.createSession(live());
       });

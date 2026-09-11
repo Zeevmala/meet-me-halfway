@@ -1,0 +1,28 @@
+{
+  // Node-side project: build/test configs, the RTDB security-rules tests, and
+  // the one src/ test that reads a build artifact off disk. Kept separate from
+  // the browser project so node globals never leak into application code.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // vite/client for import.meta.env, which register-sw.ts reads.
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "rules",
+    "src/lib/register-sw.test.ts",
+    "vite.config.ts",
+    "vitest.rules.config.ts",
+    "playwright.config.ts",
+    "playwright.live.config.ts"
+  ]
+}
