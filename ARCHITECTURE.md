@@ -91,21 +91,46 @@ breaker had at its half-open boundary.
 
 ### The slot is a server-arbitrated resource
 
-A slot is claimed by writing `sessions/{code}/slots/{i}` under a write-once
-rule, so the *database* decides who holds it. Exactly five such keys are
-declared; anything else has no `.write` rule anywhere up the tree. That makes
-the participant cap a property of the schema rather than a check a client can
-skip, and it removes the client-side registry entirely — the three historical
-slot bugs below become unrepresentable rather than defended against.
+A slot is claimed by writing `sessions/{code}/slots/{i}`, so the *database*
+decides who holds it. Exactly five such keys are declared; anything else has no
+`.write` rule anywhere up the tree. That makes the participant cap a property
+of the schema rather than a check a client can skip, and it removes the
+client-side registry entirely — the three historical slot bugs below become
+unrepresentable rather than defended against.
 
-Write-once is also the concurrency control: two clients racing for one index
-are serialised by the server and the loser gets `permission_denied`, so the
-claim loop needs no transaction, only a retry on the next free index.
+The rule is also the concurrency control: two clients racing for one index are
+serialised by the server and the loser gets `permission_denied`, so the claim
+loop needs no transaction, only a retry on the next candidate.
 
-Claims are not released on disconnect. `onDisconnect` clears
-`participants/{slot}`; the claim stays, so a reconnect returns to the same slot
-and the same colour. A session that churns five distinct uids is therefore full
-permanently — unchanged from the write-once `participantUids` it replaces.
+**A claim is held by presence, not by permanence.** `slots/{i}` is writable
+while the index is free *or* while `participants/{i}` does not exist —
+`onDisconnect` clears that node when a socket drops, so its absence is the
+database's own evidence that the holder is gone.
+
+The claim used to be write-once, and that was a resource leak with no
+collector. The uid behind it is not durable: iOS Safari evicts IndexedDB under
+ITP, and `firebase-factory`'s persistence chain falls through to in-memory in
+strict-privacy browsers, where every load mints a fresh anonymous uid. One
+person reloading therefore returned as a stranger, took a second slot, and left
+the first holding a uid that would never write again — a different colour, a
+marker frozen on the map, and after five reloads a session that reported
+`SESSION_FULL` to everybody. Slot 0 was worse: its rule pinned the value to
+`creatorUid`, so once the creator's uid changed, nobody could ever hold slot 0
+again.
+
+Colour stability, which write-once was trying to buy, is now bought where it
+actually belongs. `claimSlot` tries, in order: the slot this device remembers
+holding in this session (`lib/slot-memory.ts`, `localStorage`) if the database
+agrees nobody is in it, then free indices, then vacated ones. Free before
+vacated means a live participant between heartbeats is never displaced while an
+empty slot exists; the memo means a reload under a fresh uid comes back to its
+own slot and its own colour. Both are checked against the database and neither
+can override the rule, so a stale or forged memo buys nothing.
+
+"The creator is green" is consequently a convention rather than a rule: the
+creator claims slot 0 before anybody else has the code, and `claimSlot` tries
+it last. Trading that for a slot that can be recovered is the right way round —
+the colour is cosmetic, the stranded slot was not.
 
 `slots` is a **structure of arrays** indexed by `ParticipantIndex`, length
 `MAX_PARTICIPANTS`, with `null` for a vacant slot. Routes, accuracy circles,
@@ -279,8 +304,10 @@ than the arithmetic it saves. The measurable win is in what the graph *avoids
 fetching*, not in how it multiplies.
 
 **Scale limits.** `MAX_PARTICIPANTS = 5` is enforced by the database: five
-write-once keys under `sessions/{code}/slots`, and nothing else may be created
-there. Mapbox at 5 participants × 1 request / 3 s is
+declared keys under `sessions/{code}/slots`, and nothing else may be created
+there. "Full" means five slots whose holders are present — a claim with no
+`participants/{i}` behind it is reclaimable, so a session cannot be exhausted
+by people who have already left. Mapbox at 5 participants × 1 request / 3 s is
 ~100 req/min against a 300/min free tier; the semaphore caps simultaneity at 4,
 which is the browser's per-host budget rather than the API's.
 

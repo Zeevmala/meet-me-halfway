@@ -4,8 +4,9 @@
       "$code": {
         ".read": "auth != null && data.child('created').val() > now - 86400000",
         "created": {
+          ".read": "auth != null",
           ".write": "auth != null && !data.exists()",
-          ".validate": "newData.isNumber()"
+          ".validate": "newData.isNumber() && newData.val() <= now && newData.val() > now - 60000"
         },
         "creatorUid": {
           ".write": "auth != null && !data.exists()",
@@ -13,23 +14,23 @@
         },
         "slots": {
           "0": {
-            ".write": "auth != null && !data.exists()",
-            ".validate": "newData.isString() && newData.val() === auth.uid && newData.val() === root.child('sessions').child($code).child('creatorUid').val()"
+            ".write": "auth != null && (!data.exists() || !root.child('sessions').child($code).child('participants').child('0').exists())",
+            ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "1": {
-            ".write": "auth != null && !data.exists()",
+            ".write": "auth != null && (!data.exists() || !root.child('sessions').child($code).child('participants').child('1').exists())",
             ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "2": {
-            ".write": "auth != null && !data.exists()",
+            ".write": "auth != null && (!data.exists() || !root.child('sessions').child($code).child('participants').child('2').exists())",
             ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "3": {
-            ".write": "auth != null && !data.exists()",
+            ".write": "auth != null && (!data.exists() || !root.child('sessions').child($code).child('participants').child('3').exists())",
             ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "4": {
-            ".write": "auth != null && !data.exists()",
+            ".write": "auth != null && (!data.exists() || !root.child('sessions').child($code).child('participants').child('4').exists())",
             ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "$other": { ".validate": false }

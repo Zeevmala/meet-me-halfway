@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — session handshake
+
+- **A reload took a new slot and stranded the old one.** The `slots/{i}` claim
+  was write-once and keyed by `auth.uid`, which is not durable: iOS Safari
+  evicts IndexedDB under ITP, and the auth persistence chain falls through to
+  in-memory in strict-privacy browsers, where every load mints a fresh
+  anonymous uid. The same person came back as a stranger — a new slot, a new
+  colour, and their previous marker frozen on the map holding a uid that would
+  never write again. Five reloads exhausted the session for everybody in it,
+  and slot 0, pinned to `creatorUid` by the rule, could never be held again at
+  all. A claim is now released by evidence of absence: `slots/{i}` is writable
+  while it is free *or* while `participants/{i}` is gone, which `onDisconnect`
+  guarantees when a socket drops. `claimSlot` prefers the slot this device
+  remembers holding (`lib/slot-memory.ts`), then free indices, then vacated
+  ones — so a reconnect keeps its colour and a live participant between
+  heartbeats is never displaced
+- **Every bad link blamed the user's browser.** The `.read` rule on
+  `sessions/{code}` denies a session that does not exist *and* one past its 24h
+  TTL, and `permission_denied` is `permission_denied` — so a mistyped code, a
+  day-old link, and a link opened before the creator's writes landed all
+  surfaced as *"We couldn't access the session. Your browser may be blocking
+  storage or attestation."* `SESSION_NOT_FOUND` and `SESSION_EXPIRED` were
+  unreachable code. `created` now carries its own `.read`, and the join probes
+  it first: absent is not-found, readable-but-session-refused is expired, and
+  only a refusal of `created` itself is a real attestation or storage problem
+- **A wrong device clock created an unjoinable session.** `created` was
+  `Date.now()` from the creator, compared by the rule against the *server's*
+  `now`. A device a day slow produced a session the very next read rejected —
+  for every joiner and for the creator's own listener. It is now written with
+  `serverTimestamp()` and validated server-side to be the server's clock
+- **The create retry re-issued writes that had already landed.** `created` and
+  `creatorUid` are write-once, so retrying the three-write block after a
+  transient failure on the third write was rejected by the rule — turning a
+  recoverable hiccup into a terminal `CREATE_FAILED` over a session that was
+  two-thirds written and, from then on, unjoinable by anyone holding the link.
+  Each write is retried on its own
+
 ### P3 — Declared Execution Graph
 
 - **DAG pipeline** — `slots → midpoint → venues → destination → routes → frame`

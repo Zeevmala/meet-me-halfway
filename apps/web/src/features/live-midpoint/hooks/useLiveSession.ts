@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onValue, ref, set, get } from "firebase/database";
+import { onValue, ref, set, get, serverTimestamp } from "firebase/database";
 import type { Database } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { getToken, type AppCheck } from "firebase/app-check";
@@ -21,6 +21,7 @@ import { backoffDelayMs } from "../../../core/dag/backoff";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { classifyJoinError, describeError } from "../lib/error-classification";
 import { detectInAppBrowser } from "../lib/in-app-browser";
+import { recallSlot, rememberSlot } from "../lib/slot-memory";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
@@ -102,10 +103,11 @@ export interface LiveSessionState {
   cleanup: () => void;
 }
 
-// Note: TTL is only enforced on join. A creator with the page open
-// beyond 24h will continue operating — acceptable for MVP since RTDB
-// security rules can enforce server-side TTL in a future iteration.
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Note: the 24h TTL is enforced by the `.read` rule on `sessions/{code}`,
+// against the server's clock and a server-stamped `created`. There is
+// deliberately no client-side comparison: `Date.now()` on the joiner's device
+// is not the clock the rule uses, so a second opinion here could only ever
+// disagree with the one that decides.
 
 // Max time to wait for the initial App Check token before proceeding
 // anyway. In-app browsers can hang the reCAPTCHA fetch indefinitely.
@@ -221,50 +223,92 @@ function sessionContext(code: string | null, hasAppCheck: boolean) {
 type SlotMap = Partial<Record<string, string>>;
 
 /**
+ * Slot 0 is tried last in both passes, so "the creator is green" survives as
+ * the normal outcome without being a rule that can strand the slot.
+ */
+const CLAIM_ORDER: readonly ParticipantIndex[] = [1, 2, 3, 4, 0];
+
+/**
  * Claim a slot, letting the database arbitrate.
  *
- * The write-once rule *is* the arbitration: two clients racing for the same
- * index are serialised by the server, and the loser's `set` is rejected with
+ * The rule *is* the arbitration: two clients racing for the same index are
+ * serialised by the server, and the loser's `set` is rejected with
  * permission_denied. So there is no transaction and no client-side registry —
- * we simply try the free indices in order and re-read on a rejection.
+ * we try the indices in order and re-read on a rejection.
  *
- * Slot 0 is the creator's: the rule additionally requires the value to equal
- * `creatorUid`, which makes "the creator is green" a server invariant rather
- * than a convention every client has to honour.
+ * A claim is no longer permanent. It is writable while the index is free
+ * **or** while its `participants/{i}` node is absent, which is the database's
+ * own evidence that whoever held it is gone — `onDisconnect` clears that node
+ * when their socket drops. Without this an anonymous uid that changes between
+ * loads (iOS Safari evicts IndexedDB under ITP, and the in-memory persistence
+ * fallback mints a fresh uid on every load) burned a slot per reload: the old
+ * claim survived forever holding a uid that would never write again, so the
+ * same person came back a different colour, their previous marker never
+ * updated, and five reloads exhausted a session for everybody in it.
  *
- * @returns the claimed slot, or `null` when all five are taken — which is now
- *   a truthful answer from the database rather than a client-side guess.
+ * Free indices are tried before vacated ones, so a live participant who is
+ * merely between heartbeats is never displaced while an empty slot exists.
+ * The one exception is the slot this device remembers holding in this session:
+ * a reload under a fresh uid asks for that one back first, which is what keeps
+ * somebody the same colour across the identity change that caused the problem.
+ *
+ * @returns the claimed slot, or `null` when all five are held by participants
+ *   who are actually present — a fact about the session, not a guess.
  */
 async function claimSlot(
   db: Database,
   sessionCode: string,
   uid: string,
-  isCreator: boolean,
 ): Promise<ParticipantIndex | null> {
-  const slotsRef = ref(db, `sessions/${sessionCode}/slots`);
-  const candidates: ParticipantIndex[] = isCreator
-    ? [0]
-    : [1, 2, 3, 4].map((i) => i as ParticipantIndex);
+  const sessionRef = ref(db, `sessions/${sessionCode}`);
+  const remembered = recallSlot(sessionCode);
 
   // At most one attempt per slot: every rejection means somebody else took
   // that index, so the loop strictly makes progress.
   for (let attempt = 0; attempt < MAX_PARTICIPANTS; attempt++) {
-    const snap = await get(slotsRef);
-    const slots = (snap.val() ?? {}) as SlotMap;
+    const snap = await get(sessionRef);
+    const data = (snap.val() ?? {}) as {
+      slots?: SlotMap;
+      participants?: Partial<Record<string, unknown>>;
+    };
+    const slots = data.slots ?? {};
+    const participants = data.participants ?? {};
 
     // Idempotent rejoin: we may already hold one from a previous mount.
     for (const [key, holder] of Object.entries(slots)) {
-      if (holder === uid) return Number(key) as ParticipantIndex;
+      if (holder === uid) {
+        rememberSlot(sessionCode, Number(key) as ParticipantIndex);
+        return Number(key) as ParticipantIndex;
+      }
     }
 
-    const free = candidates.find((slot) => slots[String(slot)] === undefined);
-    if (free === undefined) return null;
+    const isFree = (slot: ParticipantIndex) =>
+      slots[String(slot)] === undefined;
+    const isVacated = (slot: ParticipantIndex) =>
+      !isFree(slot) && participants[String(slot)] === undefined;
+
+    const candidates = [
+      // Our own previous slot, if the database agrees nobody is in it. Only on
+      // the first attempt: a rejection means somebody else now holds it, and
+      // asking again would be a loop rather than progress.
+      ...(attempt === 0 &&
+      remembered !== null &&
+      (isFree(remembered) || isVacated(remembered))
+        ? [remembered]
+        : []),
+      ...CLAIM_ORDER.filter(isFree),
+      ...CLAIM_ORDER.filter(isVacated),
+    ];
+
+    const target = candidates[0];
+    if (target === undefined) return null;
 
     try {
-      await set(ref(db, `sessions/${sessionCode}/slots/${free}`), uid);
-      return free;
+      await set(ref(db, `sessions/${sessionCode}/slots/${target}`), uid);
+      rememberSlot(sessionCode, target);
+      return target;
     } catch {
-      // Lost the race — re-read and try the next free index.
+      // Lost the race — re-read and try the next candidate.
     }
   }
   return null;
@@ -274,15 +318,16 @@ async function claimSlot(
  * Manages a live session backed by Firebase RTDB.
  *
  * RTDB schema:
- *   sessions/{code}/created        — timestamp
+ *   sessions/{code}/created        — server timestamp (write-once)
  *   sessions/{code}/creatorUid     — uid of session creator (write-once)
- *   sessions/{code}/slots/{0..4}   — uid (write-once; exactly five keys exist)
+ *   sessions/{code}/slots/{0..4}   — uid (exactly five keys; see claimSlot)
  *   sessions/{code}/participants/{slot} — { uid, lat, lng, accuracy, ts, name }
  *
  * The five fixed slot keys are what enforces MAX_PARTICIPANTS. The rules
- * reject any key outside 0..4 and any write to an occupied one, so the cap is
- * a property of the schema rather than a client-side check that a modified
- * client could simply skip.
+ * reject any key outside 0..4, so the cap is a property of the schema rather
+ * than a client-side check that a modified client could simply skip. A slot is
+ * writable only while it is free or its `participants/{i}` node is gone, so a
+ * claim is released by evidence of absence rather than never.
  *
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
@@ -401,6 +446,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       creatorUidRef.current = uid;
       setCreatorUid(uid);
       ownSlotRef.current = 0;
+      // Remembered before the write lands: a reload mid-handshake still comes
+      // back to slot 0 rather than taking a second one.
+      rememberSlot(sessionCode, 0);
       setCode(sessionCode);
       setOwnIndex(0);
       setStatus("ready");
@@ -411,14 +459,32 @@ export function useLiveSession(uid: string): LiveSessionState {
 
       try {
         await waitForAppCheckToken(appCheck);
+        // Retried per write, not as a block. `created` and `creatorUid` are
+        // write-once, so a block retry re-issued a write that had already
+        // landed and the rule rejected it with permission_denied — turning a
+        // transient failure on the third write into a terminal CREATE_FAILED
+        // over a session that was two-thirds written and, from then on,
+        // unjoinable by anyone holding the link.
+        //
+        // `created` is stamped by the server. It used to be `Date.now()`,
+        // which the `.read` rule then compared against the server's clock: a
+        // device a day slow created a session the very next read rejected —
+        // for every joiner and for the creator's own listener.
         await withRetry(
-          async () => {
-            await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
-            await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-            // Slot 0 must be written after creatorUid: its rule validates the
-            // value against it, so claiming first would be rejected.
-            await set(ref(db, `sessions/${sessionCode}/slots/0`), uid);
-          },
+          () =>
+            set(ref(db, `sessions/${sessionCode}/created`), serverTimestamp()),
+          signal,
+          3,
+          isTransientError,
+        );
+        await withRetry(
+          () => set(ref(db, `sessions/${sessionCode}/creatorUid`), uid),
+          signal,
+          3,
+          isTransientError,
+        );
+        await withRetry(
+          () => set(ref(db, `sessions/${sessionCode}/slots/0`), uid),
           signal,
           3,
           isTransientError,
@@ -461,13 +527,43 @@ export function useLiveSession(uid: string): LiveSessionState {
       try {
         appCheckOk = await waitForAppCheckToken(appCheck);
 
-        const sessionRef = ref(db, `sessions/${sessionCode}`);
-        const snap = await withRetry(
-          () => get(sessionRef),
+        // Probe `created` on its own first. The `.read` rule on the session
+        // node requires it to exist *and* be inside the TTL, so a session that
+        // was never created, one that has expired, and a client the server
+        // genuinely refuses were all one indistinguishable permission_denied —
+        // reported to the user as "your browser may be blocking storage or
+        // attestation" for what is usually a mistyped or stale link. `created`
+        // carries its own `.read: auth != null`, so these are now three
+        // answers rather than one.
+        const createdSnap = await withRetry(
+          () => get(ref(db, `sessions/${sessionCode}/created`)),
           signal,
           3,
           isTransientError,
         );
+        if (typeof createdSnap.val() !== "number") {
+          return err(fail("SESSION_NOT_FOUND", null));
+        }
+
+        const sessionRef = ref(db, `sessions/${sessionCode}`);
+        let snap;
+        try {
+          snap = await withRetry(
+            () => get(sessionRef),
+            signal,
+            3,
+            isTransientError,
+          );
+        } catch (thrown) {
+          // `created` read fine a moment ago, so auth and attestation are
+          // working and the session exists. The TTL clause is the only term of
+          // the session's `.read` rule left that can have failed.
+          if (classifyJoinError(thrown) === "JOIN_PERMISSION_DENIED") {
+            return err(fail("SESSION_EXPIRED", null));
+          }
+          throw thrown;
+        }
+
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
@@ -479,15 +575,12 @@ export function useLiveSession(uid: string): LiveSessionState {
           return err(fail("SESSION_NOT_FOUND", null));
         }
 
-        if (data.created && Date.now() - data.created > SESSION_TTL_MS) {
-          return err(fail("SESSION_EXPIRED", null));
-        }
-
         // No client-side count: the database decides. `claimSlot` returns null
-        // only when all five write-once keys are genuinely taken, which is a
-        // fact about the session rather than this client's view of it.
+        // only when all five slots are held by participants who are actually
+        // present, which is a fact about the session rather than this client's
+        // view of it.
         const slot = await withRetry(
-          () => claimSlot(db, sessionCode, uid, false),
+          () => claimSlot(db, sessionCode, uid),
           signal,
           3,
           isTransientError,

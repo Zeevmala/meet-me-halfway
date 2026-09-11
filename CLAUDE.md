@@ -29,7 +29,7 @@ npx vitest run -t "midpoint"                                      # tests matchi
 - **Single-page React 19 app** — one route (`/`), one page component (`LiveMidpointPage`), no router
 - **Vite 6** with manual chunks: react, firebase, mapbox, i18n
 - **Composition root** — `lib/config.ts` is the only module reading `VITE_*` application config; `lib/services.ts` wires Firebase, the API clients and the graph ports once in `main.tsx` and passes them down via `ServicesProvider`. Nothing below that constructs a Firebase handle or reads a credential
-- **Firebase Anonymous Auth** — `lib/firebase-factory.ts` builds auth with an explicit persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once slot claim
+- **Firebase Anonymous Auth** — `lib/firebase-factory.ts` builds auth with an explicit persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID. That used to consume a fresh slot permanently; slot claims are now released by absence and `lib/slot-memory.ts` asks for the previous one back, so a reload keeps its slot and colour
 - **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation)
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
@@ -46,7 +46,7 @@ No backend, no database server, no Docker, no Python.
 
 1. App init → `signInAnonymously()` with retry (3 attempts, exponential backoff)
 2. **Creator** opens `/` → geolocation prompt → 6-char session code → URL becomes `/?code=XXXXX`
-3. **Joiners** (up to 4) open `/?code=XXXXX` → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
+3. **Joiners** (up to 4) open `/?code=XXXXX` → each claims a slot under `slots/{0..4}`; the database arbitrates, a loser retries the next candidate, and five slots whose holders are all *present* means a genuine `SESSION_FULL`
 4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node)
 5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
 6. Optional venue search around midpoint (Google Places, ranked by rating/proximity/popularity/open_now)
@@ -74,6 +74,7 @@ apps/web/src/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
 │       ├── participant-config.ts      # MAX_PARTICIPANTS, ParticipantIndex type, PARTICIPANT_COLORS (5-color palette)
 │       ├── session-code.ts            # 6-char code generation/validation
+│       ├── slot-memory.ts             # per-device memo of the slot held in a session
 │       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now
 │       ├── places-api.ts              # createPlacesClient(key) → Result<PlaceResult[], ResourceError>
 │       ├── directions-api.ts          # createDirectionsClient(token) → Result<RouteInfo | null, ResourceError>
@@ -110,16 +111,21 @@ Security-rules tests are the exception: they live in `apps/web/rules/`, run in a
 ```
 /sessions/{6charCode}/
   created: number (timestamp)
+  created: number (write-once, server-stamped; readable even when expired)
   creatorUid: string (write-once, must match auth.uid)
-  slots/{0..4}: uid (write-once; exactly five keys may ever exist)
+  slots/{0..4}: uid (exactly five keys may ever exist; released by absence)
   participants/{slot}: { uid, lat, lng, accuracy, ts, name }
 ```
 
 Security rules enforce: auth required for all reads, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`) — and **the participant cap**.
 
-The cap is a property of the schema, not a client-side check. Exactly five keys are declared under `slots`, each write-once and each validated to equal the writer's `auth.uid`; any other key has no `.write` rule anywhere up the tree and is rejected. `participants/{slot}` is then writable only by whoever holds `slots/{slot}`, which needs no key-pattern matching: since only 0–4 can exist under `slots`, any other participant key resolves to a null holder and is denied for free. Slot 0 additionally validates against `creatorUid`, making "the creator is green" a server invariant.
+The cap is a property of the schema, not a client-side check. Exactly five keys are declared under `slots`, each write-once and each validated to equal the writer's `auth.uid`; any other key has no `.write` rule anywhere up the tree and is rejected. `participants/{slot}` is then writable only by whoever holds `slots/{slot}`, which needs no key-pattern matching: since only 0–4 can exist under `slots`, any other participant key resolves to a null holder and is denied for free. Slot 0 is an ordinary slot: pinning it to `creatorUid` made "the creator is green" a server invariant, and made the slot unrecoverable the moment the creator's anonymous UID changed. The creator still gets it, by claiming it before anyone else has the code.
 
-Claiming is arbitrated by the database rather than by a client registry: two clients racing for one index are serialised, and the loser's `set` is rejected with `permission_denied`, so `claimSlot` in `useLiveSession` simply retries the next free index. `SESSION_FULL` is therefore a fact about the session rather than a guess. Slot claims are deliberately **not** released on disconnect — `onDisconnect` clears `participants/{slot}` only — so a reconnect returns to the same slot and colour.
+Claiming is arbitrated by the database rather than by a client registry: two clients racing for one index are serialised, and the loser's `set` is rejected with `permission_denied`, so `claimSlot` in `useLiveSession` simply retries the next candidate. `SESSION_FULL` is therefore a fact about the session rather than a guess.
+
+A claim is **held by presence, not by permanence**: `slots/{i}` is writable while it is free *or* while `participants/{i}` does not exist. `onDisconnect` clears that node when a socket drops, so its absence is the database's own evidence the holder is gone. Write-once claims leaked — an anonymous UID that changes between loads (ITP eviction, in-memory persistence) stranded one per reload, and five reloads by one person made the session full for everybody. `claimSlot` tries the slot this device remembers (`lib/slot-memory.ts`) if nobody is in it, then free indices, then vacated ones: free-before-vacated means a live participant between heartbeats is never displaced, and the memo is what returns a reconnecting device to its own slot and colour.
+
+The 24h TTL is likewise the server's. `created` is written with `serverTimestamp()` and validated against the server clock, and it carries its own `.read` so a joiner can tell an absent session from an expired one from a genuinely refused request — all three used to arrive as one `permission_denied` and be reported as "your browser may be blocking storage or attestation".
 
 Rules are tested against the RTDB emulator (see `rules/database.rules.test.ts`), wired into CI as its own job. Run locally from the repo root:
 
@@ -139,7 +145,7 @@ npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet
 - `LatLng` type uses `{ lat, lng }` (not arrays) for internal representation
 - Session error codes use typed union `SessionErrorCode` (not string matching)
 - i18n keys mapped via typed records (e.g., `SESSION_ERROR_I18N`)
-- Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0). Slots are **claimed from the database** (`sessions/{code}/slots/{i}`, write-once) and are stable for the session — never renumbered when someone leaves. Anything keyed by slot (routes, accuracy circles, colours, Mapbox layer ids, the RTDB participant key) must agree on that one index space
+- Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0). Slots are **claimed from the database** (`sessions/{code}/slots/{i}`) and are stable for the session — never renumbered when someone leaves. Anything keyed by slot (routes, accuracy circles, colours, Mapbox layer ids, the RTDB participant key) must agree on that one index space
 - Enforce invariants where they cannot be bypassed. A limit a client checks is a limit a modified client ignores: if a rule can express it, the rule owns it
 - Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code. This includes the session handshake: `createSession`/`joinSession` return `Result` and take an `AbortSignal`
 - Derived values are derived, not stored. `SessionPhase` and participant staleness are graph nodes, not `useState` — a predicate over a clock must never be driven by a polling interval (mobile browsers throttle `setInterval` to minutes and freeze it under bfcache)

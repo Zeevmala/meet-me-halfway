@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useLiveSession } from "./useLiveSession";
+import { rememberSlot } from "../lib/slot-memory";
 
 // ── Mock firebase/database ──
 const mockSet = vi.fn();
@@ -27,7 +28,12 @@ vi.mock("firebase/database", () => ({
   onDisconnect: (r: unknown) => ({ remove: () => mockOnDisconnectRemove(r) }),
   set: (r: unknown, v: unknown) => mockSet(r, v),
   get: (r: unknown) => mockGet(r),
+  // The RTDB sentinel, resolved server-side. `created` is stamped with it so
+  // the TTL rule compares the server's clock against itself.
+  serverTimestamp: () => SERVER_TIMESTAMP,
 }));
+
+const SERVER_TIMESTAMP = { ".sv": "timestamp" };
 
 // ── Mock firebase/app-check ──
 const mockGetToken = vi.fn();
@@ -58,20 +64,55 @@ vi.mock("../lib/session-code", () => ({
   generateCode: () => "ABC234",
 }));
 
+interface SessionPayload {
+  created?: number;
+  creatorUid?: string;
+  slots?: Record<string, string>;
+  participants?: Record<string, unknown>;
+}
+
 /**
  * Resolve `get` per path.
  *
- * The slot claim reads `sessions/{code}/slots` directly, so a blanket
- * `mockResolvedValue` would hand it the whole session object and it would read
- * `created`/`creatorUid` as slot holders. `session` is the payload for the
- * session root; `slots` is what the claim sees.
+ * Three paths matter. `sessions/{code}/created` is probed on its own — it
+ * carries its own `.read` rule so the join can tell "no such session" from
+ * "expired" from "actually refused". The session root is what the join and the
+ * slot claim read. `sessions/{code}/slots` is kept for the callers that only
+ * care about the claim; `slots` is merged into the root payload so the claim,
+ * which reads slots *and* participants together, sees both.
  */
-function mockSession(session: unknown, slots: Record<string, string> = {}) {
+function mockSession(
+  session: SessionPayload | null,
+  slots: Record<string, string> = {},
+) {
   mockGet.mockImplementation((r: { path?: string }) => {
-    if (r?.path?.endsWith("/slots")) {
+    const path = r?.path ?? "";
+    if (path.endsWith("/created")) {
+      return Promise.resolve({ val: () => session?.created ?? null });
+    }
+    if (path.endsWith("/slots")) {
       return Promise.resolve({ val: () => slots });
     }
-    return Promise.resolve({ val: () => session });
+    return Promise.resolve({
+      val: () =>
+        session === null
+          ? null
+          : { ...session, slots: { ...session.slots, ...slots } },
+    });
+  });
+}
+
+/**
+ * A session whose `created` reads fine but whose root read is refused — what
+ * the TTL clause of the `.read` rule produces for an expired session, and the
+ * only shape from which the client may infer SESSION_EXPIRED.
+ */
+function mockExpiredSession(created = Date.now() - 25 * 60 * 60 * 1000) {
+  mockGet.mockImplementation((r: { path?: string }) => {
+    if (r?.path?.endsWith("/created")) {
+      return Promise.resolve({ val: () => created });
+    }
+    return Promise.reject(new Error("Permission denied"));
   });
 }
 
@@ -83,6 +124,9 @@ const PARTNER_UID_4 = "user-jkl-345";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The slot memo is per-device state that outlives a render; without this a
+  // slot remembered by one test steers the allocation in the next.
+  localStorage.clear();
   onValueCallback = null;
   onValueErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
@@ -118,7 +162,7 @@ describe("useLiveSession", () => {
 
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/ABC234/created" }),
-        expect.any(Number),
+        SERVER_TIMESTAMP,
       );
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
@@ -245,9 +289,10 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
     });
 
-    it("reports SESSION_FULL when all five slots are claimed", async () => {
-      // The cap is now the database's: five write-once keys exist and every
-      // one is taken by somebody else, so claimSlot has nothing to claim.
+    // Regression: five claims with nobody behind them is exactly what one
+    // person reloading five times produced, and it locked everybody out with
+    // SESSION_FULL. Claims are now released by evidence of absence.
+    it("does not report SESSION_FULL when all five claims are abandoned", async () => {
       mockSession(
         { created: Date.now(), creatorUid: "creator-uid" },
         {
@@ -265,8 +310,9 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_FULL");
+      expect(result.current.error).toBeNull();
+      expect(result.current.status).toBe("ready");
+      expect(result.current.ownIndex).toBe(1);
     });
 
     it("claims a slot and sets ownIndex on successful join", async () => {
@@ -317,12 +363,13 @@ describe("useLiveSession", () => {
       expect(result.current.status).toBe("ready");
     });
 
-    it("sets phase to error if session is expired (>24h)", async () => {
-      const expiredTime = Date.now() - 25 * 60 * 60 * 1000;
-      mockSession({
-        created: expiredTime,
-        creatorUid: "creator-uid",
-      });
+    // Regression: every one of these used to surface as
+    // JOIN_PERMISSION_DENIED — "your browser may be blocking storage or
+    // attestation" — because the `.read` rule on the session node denies a
+    // session that is absent *or* expired, and a denial is a denial. The
+    // separately readable `created` is what tells them apart.
+    it("reports SESSION_EXPIRED when created reads but the session does not", async () => {
+      mockExpiredSession();
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -334,7 +381,21 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("SESSION_EXPIRED");
     });
 
-    it("joins successfully if session is less than 24h old", async () => {
+    it("reports SESSION_NOT_FOUND when created does not exist", async () => {
+      // The share race: the link is live before the creator's writes land.
+      mockSession(null);
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("SESSION_NOT_FOUND");
+    });
+
+    it("joins successfully when created is readable and the session is not refused", async () => {
       const recentTime = Date.now() - 23 * 60 * 60 * 1000;
       mockSession({
         created: recentTime,
@@ -352,10 +413,12 @@ describe("useLiveSession", () => {
       expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
     });
 
-    it("joins successfully if session has no created field (graceful)", async () => {
-      mockSession({
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
+    it("keeps JOIN_NETWORK_ERROR distinct from expiry when the session read fails offline", async () => {
+      mockGet.mockImplementation((r: { path?: string }) => {
+        if (r?.path?.endsWith("/created")) {
+          return Promise.resolve({ val: () => Date.now() });
+        }
+        return Promise.reject(new Error("network request failed"));
       });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -364,25 +427,7 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
-    });
-
-    it("rejects session at exact 24h boundary", async () => {
-      const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1;
-      mockSession({
-        created: exactBoundary,
-        creatorUid: "creator-uid",
-      });
-
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        await result.current.joinSession("XYZ789", live());
-      });
-
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_EXPIRED");
+      expect(result.current.error).toBe("JOIN_NETWORK_ERROR");
     });
 
     it("sets phase to 'waiting' if no other participant has data", async () => {
@@ -420,6 +465,131 @@ describe("useLiveSession", () => {
         expect.objectContaining({ path: "sessions/XYZ789/slots/1" }),
         TEST_UID,
       );
+    });
+
+    // Regression: a claim used to be permanent. An anonymous uid that changes
+    // between loads — iOS Safari evicting IndexedDB under ITP, or the
+    // in-memory persistence fallback — therefore burned a slot per reload, and
+    // five reloads by one person exhausted the session for everybody.
+    it("reclaims a slot whose holder has no participant node", async () => {
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: {
+          "0": "creator-uid",
+          "1": "ghost-1",
+          "2": "ghost-2",
+          "3": "ghost-3",
+          "4": "ghost-4",
+        },
+        participants: {
+          "0": { uid: "creator-uid", lat: 32, lng: 34, accuracy: 5, ts: 1 },
+          "2": { uid: "ghost-2", lat: 32, lng: 34, accuracy: 5, ts: 1 },
+        },
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      // Slots 1, 3 and 4 are claimed but nobody is in them; 1 is lowest.
+      expect(result.current.ownIndex).toBe(1);
+      expect(result.current.status).toBe("ready");
+    });
+
+    it("asks for the slot this device remembered, even though 1 is free", async () => {
+      rememberSlot("XYZ789", 3);
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        // Slot 3 is still claimed by the uid this device had before its
+        // anonymous identity was evicted; nobody is in it.
+        slots: { "0": "creator-uid", "3": "my-previous-uid" },
+        participants: {
+          "0": { uid: "creator-uid", lat: 32, lng: 34, accuracy: 5, ts: 1 },
+        },
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.ownIndex).toBe(3);
+    });
+
+    it("ignores a remembered slot somebody else is actually in", async () => {
+      rememberSlot("XYZ789", 3);
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: { "0": "creator-uid", "3": PARTNER_UID },
+        participants: {
+          "0": { uid: "creator-uid", lat: 32, lng: 34, accuracy: 5, ts: 1 },
+          "3": { uid: PARTNER_UID, lat: 32, lng: 34, accuracy: 5, ts: 1 },
+        },
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.ownIndex).toBe(1);
+    });
+
+    it("prefers a free slot over one that is merely vacated", async () => {
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        // Slot 1 is claimed but its holder has not written a position yet —
+        // a joiner arriving in that window must not displace them.
+        slots: { "0": "creator-uid", "1": "just-joined" },
+        participants: {
+          "0": { uid: "creator-uid", lat: 32, lng: 34, accuracy: 5, ts: 1 },
+        },
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.ownIndex).toBe(2);
+    });
+
+    it("still reports SESSION_FULL when every slot holder is present", async () => {
+      const held = {
+        "0": "creator-uid",
+        "1": PARTNER_UID,
+        "2": PARTNER_UID_2,
+        "3": PARTNER_UID_3,
+        "4": PARTNER_UID_4,
+      };
+      mockSession({
+        created: Date.now(),
+        creatorUid: "creator-uid",
+        slots: held,
+        participants: Object.fromEntries(
+          Object.entries(held).map(([slot, uid]) => [
+            slot,
+            { uid, lat: 32, lng: 34, accuracy: 5, ts: 1 },
+          ]),
+        ),
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.error).toBe("SESSION_FULL");
     });
   });
 
