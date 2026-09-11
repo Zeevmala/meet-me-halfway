@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { onValue, ref, set, get } from "firebase/database";
+import type { Database } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import { getToken, type AppCheck } from "firebase/app-check";
 import * as Sentry from "@sentry/react";
@@ -17,8 +18,6 @@ import type { SessionStatus } from "../graph/types";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
 import { backoffDelayMs } from "../../../core/dag/backoff";
-import { createSlotRegistry } from "../lib/slot-registry";
-import type { SlotRegistry } from "../lib/slot-registry";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { classifyJoinError, describeError } from "../lib/error-classification";
 import { detectInAppBrowser } from "../lib/in-app-browser";
@@ -35,6 +34,7 @@ export type SessionErrorCode =
   | "CONNECTION_ERROR";
 
 interface ParticipantData {
+  uid: string;
   lat: number;
   lng: number;
   accuracy: number;
@@ -217,14 +217,72 @@ function sessionContext(code: string | null, hasAppCheck: boolean) {
   };
 }
 
+/** `sessions/{code}/slots` as RTDB stores it: slot key → holder uid. */
+type SlotMap = Partial<Record<string, string>>;
+
+/**
+ * Claim a slot, letting the database arbitrate.
+ *
+ * The write-once rule *is* the arbitration: two clients racing for the same
+ * index are serialised by the server, and the loser's `set` is rejected with
+ * permission_denied. So there is no transaction and no client-side registry —
+ * we simply try the free indices in order and re-read on a rejection.
+ *
+ * Slot 0 is the creator's: the rule additionally requires the value to equal
+ * `creatorUid`, which makes "the creator is green" a server invariant rather
+ * than a convention every client has to honour.
+ *
+ * @returns the claimed slot, or `null` when all five are taken — which is now
+ *   a truthful answer from the database rather than a client-side guess.
+ */
+async function claimSlot(
+  db: Database,
+  sessionCode: string,
+  uid: string,
+  isCreator: boolean,
+): Promise<ParticipantIndex | null> {
+  const slotsRef = ref(db, `sessions/${sessionCode}/slots`);
+  const candidates: ParticipantIndex[] = isCreator
+    ? [0]
+    : [1, 2, 3, 4].map((i) => i as ParticipantIndex);
+
+  // At most one attempt per slot: every rejection means somebody else took
+  // that index, so the loop strictly makes progress.
+  for (let attempt = 0; attempt < MAX_PARTICIPANTS; attempt++) {
+    const snap = await get(slotsRef);
+    const slots = (snap.val() ?? {}) as SlotMap;
+
+    // Idempotent rejoin: we may already hold one from a previous mount.
+    for (const [key, holder] of Object.entries(slots)) {
+      if (holder === uid) return Number(key) as ParticipantIndex;
+    }
+
+    const free = candidates.find((slot) => slots[String(slot)] === undefined);
+    if (free === undefined) return null;
+
+    try {
+      await set(ref(db, `sessions/${sessionCode}/slots/${free}`), uid);
+      return free;
+    } catch {
+      // Lost the race — re-read and try the next free index.
+    }
+  }
+  return null;
+}
+
 /**
  * Manages a live session backed by Firebase RTDB.
  *
  * RTDB schema:
- *   sessions/{code}/created            — timestamp
- *   sessions/{code}/creatorUid         — uid of session creator
- *   sessions/{code}/participantUids/{uid} — true (write-once per participant)
- *   sessions/{code}/participants/{uid} — { lat, lng, accuracy, ts }
+ *   sessions/{code}/created        — timestamp
+ *   sessions/{code}/creatorUid     — uid of session creator (write-once)
+ *   sessions/{code}/slots/{0..4}   — uid (write-once; exactly five keys exist)
+ *   sessions/{code}/participants/{slot} — { uid, lat, lng, accuracy, ts, name }
+ *
+ * The five fixed slot keys are what enforces MAX_PARTICIPANTS. The rules
+ * reject any key outside 0..4 and any write to an occupied one, so the cap is
+ * a property of the schema rather than a client-side check that a modified
+ * client could simply skip.
  *
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
@@ -246,9 +304,9 @@ export function useLiveSession(uid: string): LiveSessionState {
   const unsubRef = useRef<Unsubscribe | null>(null);
   const codeRef = useRef<string | null>(null);
   const creatorUidRef = useRef<string | null>(null);
-  // Slot allocation is first-seen-wins and lasts the whole session, so it must
-  // survive re-renders. See lib/slot-registry.ts.
-  const slotRegistryRef = useRef<SlotRegistry | null>(null);
+  // The slot we hold, kept in a ref so cleanup can remove the right node
+  // after the component has stopped rendering.
+  const ownSlotRef = useRef<ParticipantIndex | null>(null);
 
   // Keep code ref in sync with state for cleanup
   useEffect(() => {
@@ -269,29 +327,29 @@ export function useLiveSession(uid: string): LiveSessionState {
             return;
           }
 
-          let registry = slotRegistryRef.current;
-          if (!registry) {
-            registry = createSlotRegistry(creatorUidRef.current ?? "");
-            slotRegistryRef.current = registry;
-          }
-          // Allocate over the whole snapshot, own uid included, so a slot
-          // never depends on who happens to be present in this frame.
-          registry.assignAll(Object.keys(data));
-
-          // Build participant list excluding self
+          // Keyed by slot now, so there is no allocation to do here at all:
+          // the key *is* the index, arbitrated by the database when the slot
+          // was claimed. The registry this replaces derived an index from
+          // whatever snapshot each client happened to hold.
           const others: ParticipantInfo[] = [];
-          for (const [participantUid, participant] of Object.entries(data)) {
-            if (participantUid === uid) continue;
-            const slot = registry.slotOf(participantUid);
-            // Every slot taken: drop rather than alias onto an occupied one
-            // (the old out-of-range clamp silently collided here).
-            if (slot === null) continue;
+          for (const [slotKey, participant] of Object.entries(data)) {
+            if (participant.uid === uid) continue;
+            const slot = Number(slotKey);
+            // The rules cannot produce a key outside 0..4, but a snapshot is
+            // still untrusted input to this process.
+            if (
+              !Number.isInteger(slot) ||
+              slot < 0 ||
+              slot >= MAX_PARTICIPANTS
+            ) {
+              continue;
+            }
             others.push({
-              uid: participantUid,
+              uid: participant.uid,
               position: { lat: participant.lat, lng: participant.lng },
               accuracy: participant.accuracy,
               lastSeen: participant.ts,
-              index: slot,
+              index: slot as ParticipantIndex,
               name: sanitizeName(participant.name),
             });
           }
@@ -342,9 +400,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       // sync when the server is reachable.
       creatorUidRef.current = uid;
       setCreatorUid(uid);
-      const creatorRegistry = createSlotRegistry(uid);
-      slotRegistryRef.current = creatorRegistry;
-      creatorRegistry.assign(uid);
+      ownSlotRef.current = 0;
       setCode(sessionCode);
       setOwnIndex(0);
       setStatus("ready");
@@ -359,10 +415,9 @@ export function useLiveSession(uid: string): LiveSessionState {
           async () => {
             await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
             await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-            await set(
-              ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-              true,
-            );
+            // Slot 0 must be written after creatorUid: its rule validates the
+            // value against it, so claiming first would be rejected.
+            await set(ref(db, `sessions/${sessionCode}/slots/0`), uid);
           },
           signal,
           3,
@@ -416,7 +471,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
-          participantUids?: Record<string, boolean>;
+          slots?: Record<string, string>;
           participants?: Record<string, ParticipantData>;
         } | null;
 
@@ -428,42 +483,25 @@ export function useLiveSession(uid: string): LiveSessionState {
           return err(fail("SESSION_EXPIRED", null));
         }
 
-        const existingUids = data.participantUids
-          ? Object.keys(data.participantUids)
-          : [];
-        if (
-          existingUids.length >= MAX_PARTICIPANTS &&
-          !existingUids.includes(uid)
-        ) {
+        // No client-side count: the database decides. `claimSlot` returns null
+        // only when all five write-once keys are genuinely taken, which is a
+        // fact about the session rather than this client's view of it.
+        const slot = await withRetry(
+          () => claimSlot(db, sessionCode, uid, false),
+          signal,
+          3,
+          isTransientError,
+        );
+        if (slot === null) {
           return err(fail("SESSION_FULL", null));
-        }
-
-        if (!existingUids.includes(uid)) {
-          await withRetry(
-            () =>
-              set(
-                ref(db, `sessions/${sessionCode}/participantUids/${uid}`),
-                true,
-              ),
-            signal,
-            3,
-            isTransientError,
-          );
         }
 
         creatorUidRef.current = data.creatorUid;
         setCreatorUid(data.creatorUid);
-        const registry = createSlotRegistry(data.creatorUid);
-        slotRegistryRef.current = registry;
-        // Seed from participantUids (the write-once registration set) rather
-        // than from participants (only those who have reported a position).
-        // The two diverge while somebody is registered but has no fix yet, and
-        // ranking own over one set while ranking others over the other is
-        // exactly how two participants used to end up sharing a slot.
-        registry.assignAll([...new Set([...existingUids, uid])]);
+        ownSlotRef.current = slot;
 
         setCode(sessionCode);
-        setOwnIndex(registry.slotOf(uid));
+        setOwnIndex(slot);
         setStatus("ready");
 
         listenForParticipants(sessionCode);
@@ -508,15 +546,22 @@ export function useLiveSession(uid: string): LiveSessionState {
       unsubRef.current();
       unsubRef.current = null;
     }
-    slotRegistryRef.current = null;
+    // Read, never clear. Clearing here and then gating the removal on it made
+    // cleanup non-idempotent: a second call — which React will make whenever
+    // this callback's identity changes — found a null slot and skipped the
+    // removal, leaving our participant node behind to drag the midpoint.
+    // `remove` is itself idempotent, so running twice costs nothing.
+    const slot = ownSlotRef.current;
 
-    if (codeRef.current) {
+    if (codeRef.current !== null && slot !== null) {
       // The write side is the graph's; removal is not a derivation, so it
-      // stays here. `onDisconnect` remains armed server-side as the backstop
-      // if this does not complete during unload.
-      presence.remove(codeRef.current, uid);
+      // stays here. Only `participants/{slot}` goes — the `slots/{i}` claim is
+      // write-once and stays, so a reconnect comes back to the same slot and
+      // the same colour. `onDisconnect` is the backstop if this does not
+      // complete during unload.
+      presence.remove(codeRef.current, slot);
     }
-  }, [presence, uid]);
+  }, [presence]);
 
   // Cleanup on unmount
   useEffect(() => {

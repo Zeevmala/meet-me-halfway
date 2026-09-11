@@ -1,10 +1,12 @@
 /**
  * The RTDB side of the presence write, behind the graph's port interface.
  *
- * The write itself used to live in `useLiveSession` with a hand-rolled
- * leading/trailing throttle, its own retry helper and no cancellation. All of
- * that is now the `presence` resource's job; what is left here is the part
- * that genuinely knows about Firebase.
+ * Participants are keyed by **slot**, not by uid. The slot is claimed under
+ * `sessions/{code}/slots/{i}` with a write-once rule, so the database — not a
+ * client-side `if` — decides who holds it, and the security rule for this path
+ * is simply "you may write `participants/{i}` iff `slots/{i}` is your uid".
+ * The uid still travels inside the payload: peers need it to tell themselves
+ * apart from everyone else, and the rules validate it against `auth.uid`.
  */
 import { onDisconnect, ref, remove, set } from "firebase/database";
 import type { Database } from "firebase/database";
@@ -12,8 +14,11 @@ import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
 import { classifyThrown } from "../../../core/dag/errors";
 import type { ResourceError } from "../../../core/dag/errors";
+import type { ParticipantIndex } from "./participant-config";
 
 export interface PresenceValue {
+  /** Validated against `auth.uid` by the rules; identifies self to peers. */
+  readonly uid: string;
   readonly lat: number;
   readonly lng: number;
   readonly accuracy: number;
@@ -24,11 +29,15 @@ export interface PresenceValue {
 export interface PresenceWriter {
   readonly write: (
     code: string,
-    uid: string,
+    slot: ParticipantIndex,
     value: PresenceValue,
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
-  readonly remove: (code: string, uid: string) => void;
+  readonly remove: (code: string, slot: ParticipantIndex) => void;
+}
+
+export function presencePath(code: string, slot: ParticipantIndex): string {
+  return `sessions/${code}/participants/${slot}`;
 }
 
 export function createPresenceWriter(db: Database): PresenceWriter {
@@ -36,25 +45,26 @@ export function createPresenceWriter(db: Database): PresenceWriter {
   // Keyed by path so a rejoin under a different code re-arms.
   const armed = new Set<string>();
 
-  function path(code: string, uid: string): string {
-    return `sessions/${code}/participants/${uid}`;
-  }
-
   return {
-    write: async (code, uid, value, signal) => {
-      const ownRef = ref(db, path(code, uid));
+    write: async (code, slot, value, signal) => {
+      const path = presencePath(code, slot);
+      const ownRef = ref(db, path);
 
       // When this client's socket drops — tab close, crash, network loss, none
-      // of which reliably fire beforeunload on mobile — Firebase removes our
+      // of which reliably fire beforeunload on mobile — Firebase clears our
       // participant node. Without it a departed participant lingers and keeps
       // dragging the computed midpoint.
-      const key = path(code, uid);
-      if (!armed.has(key)) {
-        armed.add(key);
+      //
+      // Only `participants/{slot}` is cleared, never the `slots/{i}` claim:
+      // the claim is write-once, so releasing it would both break that rule's
+      // guarantee and let a reconnecting participant come back a different
+      // colour.
+      if (!armed.has(path)) {
+        armed.add(path);
         onDisconnect(ownRef)
           .remove()
           .catch(() => {
-            armed.delete(key); // allow a retry on the next write
+            armed.delete(path); // allow a retry on the next write
           });
       }
 
@@ -75,11 +85,12 @@ export function createPresenceWriter(db: Database): PresenceWriter {
       }
     },
 
-    remove: (code, uid) => {
-      armed.delete(path(code, uid));
+    remove: (code, slot) => {
+      const path = presencePath(code, slot);
+      armed.delete(path);
       // RTDB sends this over the open WebSocket immediately; it completes even
       // while the page is unloading.
-      remove(ref(db, path(code, uid))).catch(() => {
+      remove(ref(db, path)).catch(() => {
         /* best effort on unload — onDisconnect is the backstop */
       });
     },

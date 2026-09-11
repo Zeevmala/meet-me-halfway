@@ -232,13 +232,22 @@ export function createRuntime(
           const code = sources.sessionCode;
           const uid = sources.ownUid;
           const position = sources.ownPosition;
-          // `null` until every part exists. The old code had an explicit
+          const slot = sources.ownSlot;
+          // `null` until every part exists — the slot included, since it is
+          // the RTDB key this write lands on and the server will refuse a
+          // write to a slot we do not hold. The old code had an explicit
           // "flush once the code arrives" effect for exactly this gap, because
           // a stationary joiner's single GPS fix could land before the async
           // join resolved and then never be written at all.
-          if (code !== null && uid !== null && position !== null) {
+          if (
+            code !== null &&
+            uid !== null &&
+            position !== null &&
+            slot !== null
+          ) {
             presence.request({
               code,
+              slot,
               uid,
               position,
               accuracy: sources.ownAccuracy ?? 0,

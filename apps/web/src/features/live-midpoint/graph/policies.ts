@@ -14,6 +14,7 @@ import type { Result } from "../../../core/dag/result";
 import { classifyThrown } from "../../../core/dag/errors";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
+import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
 import type { RouteInfo, TravelProfile } from "./types";
 
@@ -89,6 +90,9 @@ export function createVenuePolicy(
 
 export interface PresenceInput {
   readonly code: string;
+  /** The claimed slot — the RTDB key this write lands on. */
+  readonly slot: ParticipantIndex;
+  /** Travels in the payload so peers can tell themselves apart. */
   readonly uid: string;
   readonly position: LatLng;
   readonly accuracy: number;
@@ -144,6 +148,7 @@ export function createPresencePolicy(
     },
     admits: (previous, next, previousAtMs, nowMs) =>
       previous.code !== next.code ||
+      previous.slot !== next.slot ||
       previous.uid !== next.uid ||
       previous.name !== next.name ||
       haversineDistance(previous.position, next.position) >= PRESENCE_ADMIT_M ||
@@ -151,13 +156,14 @@ export function createPresencePolicy(
       // has to keep landing even for someone standing still.
       nowMs - previousAtMs >= PRESENCE_WRITE_MS,
     identity: (input) =>
-      `pr:${input.code}:${input.uid}:${input.name}:` +
+      `pr:${input.code}:${input.slot}:${input.uid}:${input.name}:` +
       cellKey(input.position, PRESENCE_ADMIT_M),
     run: async (input, signal) => {
       const result = await ports.writePresence(
         input.code,
-        input.uid,
+        input.slot,
         {
+          uid: input.uid,
           lat: input.position.lat,
           lng: input.position.lng,
           accuracy: input.accuracy,

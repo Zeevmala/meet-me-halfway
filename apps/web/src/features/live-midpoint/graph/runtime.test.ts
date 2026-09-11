@@ -383,10 +383,13 @@ describe("createRuntime — presence", () => {
     r.setSources({ sessionCode: "ABC234", ownUid: "own-uid" });
     await h.advance(10_000);
 
+    // Keyed by the claimed slot; the uid rides in the payload, where the
+    // rules validate it against auth.uid.
     expect(h.ports.writePresence).toHaveBeenCalledWith(
       "ABC234",
-      "own-uid",
+      0,
       expect.objectContaining({
+        uid: "own-uid",
         lat: TEL_AVIV.lat,
         lng: TEL_AVIV.lng,
         accuracy: 12,
