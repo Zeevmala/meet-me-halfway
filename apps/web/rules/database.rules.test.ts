@@ -269,6 +269,24 @@ describe("session metadata", () => {
     await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}`).get());
   });
 
+  it("refuses reads of a session that does not exist", async () => {
+    // Deliberate, and load-bearing in two directions.
+    //
+    // `.read` gates on `created > now - 24h`. For a code nobody ever created,
+    // `created` is null, and RTDB compares null to a number as false — so the
+    // read is denied rather than resolving empty. That is what keeps the code
+    // space opaque: without it, any signed-in client could probe 31^6 codes and
+    // learn which sessions are live, and a live session is the real-time
+    // location of real people. Anonymous auth is free, so the probe is cheap.
+    //
+    // The cost is that "no such session", "expired" and "forbidden" are one
+    // observable. `joinSession` pays it on the client by classifying a denied
+    // session read as SESSION_NOT_FOUND instead of blaming the browser. Relax
+    // this rule and that trade — privacy over message fidelity — is reversed.
+    await testEnv.clearDatabase();
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}`).get());
+  });
+
   it("refuses unauthenticated reads", async () => {
     await assertFails(
       testEnv.unauthenticatedContext().database().ref(`sessions/${CODE}`).get(),
@@ -281,5 +299,65 @@ describe("session metadata", () => {
         .ref(`sessions/${CODE}/participantUids/${JOINERS[0]}`)
         .set(true),
     );
+  });
+});
+
+describe("the handshake the deployed client actually performs", () => {
+  // The test the 2026-09-11 outage needed and did not have.
+  //
+  // Every other case here probes one rule in isolation, which is why a rules
+  // file that rejected the client outright still passed CI: nothing replayed
+  // the client's real sequence end to end. This does. If `useLiveSession`
+  // changes what it writes, or the rules change what they accept, one of these
+  // fails here instead of in production. Keep it in step with useLiveSession.ts.
+
+  it("accepts createSession's writes in order, then a joiner's claim", async () => {
+    await testEnv.clearDatabase();
+    const creator = as(CREATOR);
+
+    // createSession: created → creatorUid → slots/0, in that order.
+    await assertSucceeds(
+      creator.ref(`sessions/${CODE}/created`).set(Date.now()),
+    );
+    await assertSucceeds(
+      creator.ref(`sessions/${CODE}/creatorUid`).set(CREATOR),
+    );
+    await assertSucceeds(creator.ref(`sessions/${CODE}/slots/0`).set(CREATOR));
+    await assertSucceeds(
+      creator.ref(`sessions/${CODE}/participants/0`).set(position(CREATOR)),
+    );
+
+    // joinSession: read the session, read the slot map, claim the lowest free
+    // index, then publish a position under it.
+    const joiner = as(JOINERS[0]);
+    await assertSucceeds(joiner.ref(`sessions/${CODE}`).get());
+    await assertSucceeds(joiner.ref(`sessions/${CODE}/slots`).get());
+    await assertSucceeds(
+      joiner.ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]),
+    );
+    await assertSucceeds(
+      joiner.ref(`sessions/${CODE}/participants/1`).set(position(JOINERS[0])),
+    );
+  });
+
+  it("refuses slot 0 until creatorUid exists, which is why the order is fixed", async () => {
+    await testEnv.clearDatabase();
+    const creator = as(CREATOR);
+
+    await assertSucceeds(
+      creator.ref(`sessions/${CODE}/created`).set(Date.now()),
+    );
+    // slots/0 validates its value against creatorUid, so claiming before that
+    // write lands can never pass. This pins the ordering comment in
+    // createSession to something executable.
+    await assertFails(creator.ref(`sessions/${CODE}/slots/0`).set(CREATOR));
+  });
+
+  it("lets claimSlot tell a lost race from a structural denial", async () => {
+    // claimSlot re-reads the index it was refused: a holder means a lost race,
+    // null means the write was denied for another reason. Both reads have to be
+    // permitted for that distinction to be drawable at all.
+    await assertSucceeds(as(JOINERS[0]).ref(`sessions/${CODE}/slots/0`).get());
+    await assertSucceeds(as(JOINERS[0]).ref(`sessions/${CODE}/slots/3`).get());
   });
 });

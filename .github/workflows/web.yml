@@ -2,8 +2,15 @@ name: Web CI
 
 on:
   push:
+    # infra/ and firebase.json are deployable artifacts, not documentation:
+    # database.rules.json is published by the deploy job and firebase.json
+    # carries the hosting headers (CSP among them). Leaving them out of this
+    # filter meant a rules-only or header-only change pushed to main did not
+    # even start a run, so it could never reach production.
     paths:
       - "apps/web/**"
+      - "infra/**"
+      - "firebase.json"
       - ".github/workflows/web.yml"
   pull_request:
   # Manual trigger: lets us rebuild and redeploy main without a code change —
@@ -180,9 +187,20 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report/
 
+  # Deploys BOTH halves of the app: the bundle and the security rules.
+  #
+  # These must ship together. The client's RTDB schema and database.rules.json
+  # are two encodings of one contract, and a change to one without the other
+  # takes production down — which is exactly what happened on 2026-09-11, when
+  # the slot-schema client deployed here while the matching rules sat in the
+  # repo undeployed for three days. Hosting-only deploys are how that skew
+  # became possible, so the rules deploy lives in this job rather than in a
+  # runbook nobody runs.
   deploy:
     runs-on: ubuntu-latest
-    needs: [build, lighthouse, e2e]
+    # `rules` gates this job now that the job publishes them: the emulator
+    # suite is the only thing standing between a malformed rule and prod.
+    needs: [build, lighthouse, e2e, rules]
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -195,7 +213,25 @@ jobs:
       - name: Strip sourcemaps from dist
         working-directory: apps/web
         run: rm -f dist/assets/*.js.map
+      # Hosting first, then rules. A breaking schema change leaves an
+      # unavoidable window somewhere; this ordering picks the shorter one.
+      # Rules-first would break every already-loaded client the instant the
+      # rules land and keep them broken until they pick up a bundle that has
+      # not been published yet — the window spans both deploys plus every
+      # client's service-worker rollover. Hosting-first only strands clients
+      # that fetch the new bundle inside the ~30s gap, and that population is
+      # fresh rather than lingering, so it drains as soon as the next step
+      # lands. Pinned to match the rules job: a CLI release must not be able
+      # to change what gets published.
       - name: Deploy to Firebase Hosting
-        run: npx firebase-tools deploy --only hosting --project meet-me-halfway-4ae79
+        run: >
+          npx -y firebase-tools@15.29.0 deploy
+          --only hosting --project meet-me-halfway-4ae79
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      - name: Deploy RTDB security rules
+        run: >
+          npx -y firebase-tools@15.29.0 deploy
+          --only database --project meet-me-halfway-4ae79
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
