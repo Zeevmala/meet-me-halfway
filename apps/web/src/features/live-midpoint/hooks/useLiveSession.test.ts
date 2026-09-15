@@ -68,8 +68,17 @@ vi.mock("../lib/session-code", () => ({
  */
 function mockSession(session: unknown, slots: Record<string, string> = {}) {
   mockGet.mockImplementation((r: { path?: string }) => {
-    if (r?.path?.endsWith("/slots")) {
+    const path = r?.path ?? "";
+    if (path.endsWith("/slots")) {
       return Promise.resolve({ val: () => slots });
+    }
+    // A single index. `claimSlot` re-reads the one it was refused to tell a
+    // lost race from a structural denial, and RTDB answers null for an
+    // unclaimed index — so the mock has to as well, or every refusal looks
+    // like a lost race and the distinction under test disappears.
+    const index = /\/slots\/(\d+)$/.exec(path);
+    if (index) {
+      return Promise.resolve({ val: () => slots[index[1]] ?? null });
     }
     return Promise.resolve({ val: () => session });
   });
@@ -219,6 +228,10 @@ describe("useLiveSession", () => {
   });
 
   describe("joinSession", () => {
+    // These two drive an empty snapshot, which the live rules never produce —
+    // they deny the read first (see "session read is denied" below). They cover
+    // the defensive branch, which is kept because it is what a future relaxed
+    // `.read` would hit; they are not the production path.
     it("sets phase to error if session doesn't exist", async () => {
       mockSession(null);
 
@@ -243,6 +256,82 @@ describe("useLiveSession", () => {
 
       expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
+    });
+
+    it("reports SESSION_NOT_FOUND when the session read is denied", async () => {
+      // The production shape, and the one the other two tests cannot reach.
+      // `.read` is `created > now - 24h`; for a session that was never written
+      // `created` is null and RTDB compares null to a number as false, so the
+      // read is DENIED rather than resolving empty. Until this was classified
+      // at the read itself, a mistyped code or a day-old link fell through to
+      // the shared catch and told the user their browser was blocking storage.
+      mockGet.mockRejectedValue(
+        Object.assign(new Error("Permission denied"), {
+          code: "PERMISSION_DENIED",
+        }),
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("SESSION_NOT_FOUND");
+    });
+
+    it("does not claim SESSION_FULL when a refused slot stays empty", async () => {
+      // The 2026-09-11 outage in miniature: the deployed rules had no `.write`
+      // under `slots`, so every claim was denied while the session sat nearly
+      // empty. claimSlot swallowed each rejection as a lost race, exhausted its
+      // attempts and returned null — which joinSession reported as "session is
+      // full (5 participants max)" about a session holding one person. A
+      // refusal that leaves the index unheld is an error, not a race.
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
+      mockSet.mockRejectedValue(
+        Object.assign(new Error("Permission denied"), {
+          code: "PERMISSION_DENIED",
+        }),
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).not.toBe("SESSION_FULL");
+      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
+    });
+
+    it("advances to the next index when a claim genuinely loses the race", async () => {
+      // The other side of the same distinction: refused, but somebody is in
+      // the index afterwards. That one really is a lost race, and the claim
+      // must move on rather than surface an error.
+      const slots: Record<string, string> = { "0": "creator-uid" };
+      mockSession({ created: Date.now(), creatorUid: "creator-uid" }, slots);
+      mockSet.mockImplementationOnce(() => {
+        slots["1"] = PARTNER_UID; // the winner's write lands first
+        return Promise.reject(
+          Object.assign(new Error("Permission denied"), {
+            code: "PERMISSION_DENIED",
+          }),
+        );
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.status).toBe("ready");
+      expect(result.current.ownIndex).toBe(2);
     });
 
     it("reports SESSION_FULL when all five slots are claimed", async () => {
@@ -424,7 +513,13 @@ describe("useLiveSession", () => {
   });
 
   describe("App Check attestation classification", () => {
-    it("promotes an opaque join failure to JOIN_PERMISSION_DENIED when the token fetch fails", async () => {
+    it("does NOT relabel an opaque join failure when the token fetch fails", async () => {
+      // Regression: this used to promote to JOIN_PERMISSION_DENIED, telling
+      // the user their browser was blocking storage or attestation. With App
+      // Check reporting ~89% of RTDB requests unverified, that promotion fired
+      // on nearly every device and hid the real cause — it took a three-day
+      // outage to notice the rules were simply stale. A failed attestation is
+      // telemetry, not a verdict about the user's browser.
       vi.useFakeTimers({ shouldAdvanceTime: true });
       mockAppCheck = { _appCheck: true };
       mockGetToken.mockRejectedValue(new Error("recaptcha blocked"));
@@ -443,7 +538,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
+      expect(result.current.error).toBe("JOIN_FAILED");
       expect(mockGetToken).toHaveBeenCalledWith(mockAppCheck, false);
 
       vi.useRealTimers();

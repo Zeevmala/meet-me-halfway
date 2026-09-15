@@ -232,8 +232,18 @@ type SlotMap = Partial<Record<string, string>>;
  * `creatorUid`, which makes "the creator is green" a server invariant rather
  * than a convention every client has to honour.
  *
- * @returns the claimed slot, or `null` when all five are taken — which is now
- *   a truthful answer from the database rather than a client-side guess.
+ * A rejection is only evidence of a lost race if the index is *held* once the
+ * dust settles. This used to be assumed rather than checked, and the assumption
+ * silently inverted the meaning of the return value: when the deployed rules
+ * did not match the deployed client — the 2026-09-11 outage — every `set` was
+ * denied structurally, the loop burned its attempts against an index nobody
+ * held, and `null` was reported to the user as "session is full" about a
+ * session with nobody in it. So we re-read the index we were refused and only
+ * treat it as a lost race if somebody is actually in it; anything else is a
+ * real error and is rethrown for `withRetry` to classify.
+ *
+ * @returns the claimed slot, or `null` when all five are genuinely held.
+ * @throws if a claim is refused for any reason other than losing the race.
  */
 async function claimSlot(
   db: Database,
@@ -246,8 +256,8 @@ async function claimSlot(
     ? [0]
     : [1, 2, 3, 4].map((i) => i as ParticipantIndex);
 
-  // At most one attempt per slot: every rejection means somebody else took
-  // that index, so the loop strictly makes progress.
+  // At most one attempt per slot: a rejection we accept is one we have proven
+  // left the index occupied, so the loop strictly makes progress.
   for (let attempt = 0; attempt < MAX_PARTICIPANTS; attempt++) {
     const snap = await get(slotsRef);
     const slots = (snap.val() ?? {}) as SlotMap;
@@ -260,11 +270,19 @@ async function claimSlot(
     const free = candidates.find((slot) => slots[String(slot)] === undefined);
     if (free === undefined) return null;
 
+    const slotRef = ref(db, `sessions/${sessionCode}/slots/${free}`);
     try {
-      await set(ref(db, `sessions/${sessionCode}/slots/${free}`), uid);
+      await set(slotRef, uid);
       return free;
-    } catch {
-      // Lost the race — re-read and try the next free index.
+    } catch (refused) {
+      // Re-read the one index rather than the whole map: this is the narrowest
+      // question we can ask, and it is the question that distinguishes the two
+      // causes. A read denial here propagates, which is correct — it means we
+      // cannot see the session at all.
+      const holder = (await get(slotRef)).val() as string | null;
+      if (holder === uid) return free; // write landed, ack lost
+      if (holder === null) throw refused; // nobody took it: not a race
+      // Somebody holds it — a genuine lost race. Try the next free index.
     }
   }
   return null;
@@ -462,12 +480,32 @@ export function useLiveSession(uid: string): LiveSessionState {
         appCheckOk = await waitForAppCheckToken(appCheck);
 
         const sessionRef = ref(db, `sessions/${sessionCode}`);
-        const snap = await withRetry(
-          () => get(sessionRef),
-          signal,
-          3,
-          isTransientError,
-        );
+        // The `.read` rule is `created > now - 24h`. For a session that was
+        // never written, `created` is null and RTDB compares null to a number
+        // as false — so a missing session is *denied*, not returned empty. A
+        // permission denial on this one read is therefore a statement about
+        // the session, not about the caller: it means the code is wrong or the
+        // session has aged out. Classifying it here rather than in the shared
+        // catch is what makes SESSION_NOT_FOUND reachable at all; the branch
+        // below could never fire against real rules, because `get` throws
+        // before it can return a null snapshot.
+        let snap;
+        try {
+          snap = await withRetry(
+            () => get(sessionRef),
+            signal,
+            3,
+            isTransientError,
+          );
+        } catch (readRefused) {
+          if (
+            !signal.aborted &&
+            classifyJoinError(readRefused) === "JOIN_PERMISSION_DENIED"
+          ) {
+            return err(fail("SESSION_NOT_FOUND", describeError(readRefused)));
+          }
+          throw readRefused;
+        }
         const data = snap.val() as {
           created?: number;
           creatorUid?: string;
@@ -510,13 +548,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         if (signal.aborted) {
           return err({ code: "JOIN_FAILED", details: "aborted" });
         }
-        let classified = classifyJoinError(thrown);
-        // App Check enforced + no token → the RTDB rejection is an attestation
-        // block (HTTP 401) the SDK reports with an opaque message. Promote the
-        // generic failure so the user gets actionable guidance instead.
-        if (classified === "JOIN_FAILED" && !appCheckOk) {
-          classified = "JOIN_PERMISSION_DENIED";
-        }
+        // No promotion on `!appCheckOk`. It used to relabel any opaque failure
+        // as an attestation block, written when a failed attestation was the
+        // rare suspected cause. It is not rare: App Check reports ~89% of RTDB
+        // requests unverified while enforcement is off, so the promotion fired
+        // on nearly every device and buried whatever actually went wrong under
+        // "your browser may be blocking storage or attestation". The tag below
+        // keeps the signal where it belongs — in telemetry, not in a verdict
+        // handed to the user.
+        const classified = classifyJoinError(thrown);
         console.error("[session] join failed:", thrown, "→", classified);
         Sentry.captureException(thrown, {
           tags: { phase: "join", classified, appCheckOk: String(appCheckOk) },

@@ -18,8 +18,9 @@
       backoff per node (see `ARCHITECTURE.md`)
 - [x] E2E tests with Playwright — smoke coverage in `e2e/`, run in CI
 - [x] Performance audit — Lighthouse runs in CI, accessibility gated at 0.9
-- [ ] Firebase RTDB security rules: deploy via `firebase deploy --only database`
-      (CI deploys hosting only)
+- [x] Firebase RTDB security rules — published by the `deploy` job in
+      `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
+      the rules can no longer reach production independently
 - [ ] Custom domain + SSL
 - [ ] Route geometry: request `overview=simplified` for non-local slots — the
       last-known-good buffer doubles retained geometry, and full overview is

@@ -119,7 +119,7 @@ Security rules enforce: auth required for all reads, write-once session metadata
 
 The cap is a property of the schema, not a client-side check. Exactly five keys are declared under `slots`, each write-once and each validated to equal the writer's `auth.uid`; any other key has no `.write` rule anywhere up the tree and is rejected. `participants/{slot}` is then writable only by whoever holds `slots/{slot}`, which needs no key-pattern matching: since only 0–4 can exist under `slots`, any other participant key resolves to a null holder and is denied for free. Slot 0 additionally validates against `creatorUid`, making "the creator is green" a server invariant.
 
-Claiming is arbitrated by the database rather than by a client registry: two clients racing for one index are serialised, and the loser's `set` is rejected with `permission_denied`, so `claimSlot` in `useLiveSession` simply retries the next free index. `SESSION_FULL` is therefore a fact about the session rather than a guess. Slot claims are deliberately **not** released on disconnect — `onDisconnect` clears `participants/{slot}` only — so a reconnect returns to the same slot and colour.
+Claiming is arbitrated by the database rather than by a client registry: two clients racing for one index are serialised, and the loser's `set` is rejected with `permission_denied`, so `claimSlot` in `useLiveSession` retries the next free index. But a rejection is only evidence of a lost race if the index actually ends up held — a rejection with the index still free means the write was denied structurally (stale rules, a revoked token), not that somebody beat us to it. `claimSlot` re-reads to tell those apart and rethrows the second case, because reporting it as `SESSION_FULL` is a lie about an empty session and it is what made the 2026-09-11 outage read as a capacity problem. `SESSION_FULL` is a fact about the session only because that distinction is drawn. Slot claims are deliberately **not** released on disconnect — `onDisconnect` clears `participants/{slot}` only — so a reconnect returns to the same slot and colour.
 
 Rules are tested against the RTDB emulator (see `rules/database.rules.test.ts`), wired into CI as its own job. Run locally from the repo root:
 
@@ -127,7 +127,15 @@ Rules are tested against the RTDB emulator (see `rules/database.rules.test.ts`),
 npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet-me-halfway "npm --prefix apps/web run test:rules"
 ```
 
-`firebase-tools` is deliberately not a devDependency — it is 23 MB and `npm ci` runs in every CI job, so it is invoked pinned at the one call site that needs it.
+`firebase-tools` is deliberately not a devDependency — it is 23 MB and `npm ci` runs in every CI job, so it is invoked pinned at the call sites that need it.
+
+### Rules and client deploy together, or not at all
+
+The `deploy` job publishes hosting **and** `--only database`, in that order. The client's schema and `infra/database.rules.json` are two encodings of one contract; shipping either alone takes production down. That is not hypothetical — on 2026-09-11 the slot-schema client deployed while its rules stayed in the repo, and every slot claim was denied for three days. `infra/**` and `firebase.json` are in the workflow's `paths` filter for the same reason: they are deployable artifacts, and a rules-only change that starts no run can never reach production.
+
+Hosting deploys before rules deliberately. Either order leaves a window during a breaking schema change, but rules-first breaks every already-loaded client the moment the rules land and keeps them broken until they fetch a bundle that has not been published yet; hosting-first only strands clients that load inside the ~30s gap.
+
+**For the next breaking schema change, use expand/contract instead of relying on that ordering:** publish rules that accept both the old and new shapes, deploy, migrate the client, then drop the old shape in a later release. The window becomes zero. `2daf708` should have been shaped that way.
 
 ## Code Conventions
 
