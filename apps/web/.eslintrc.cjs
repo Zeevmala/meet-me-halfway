@@ -8,9 +8,27 @@ module.exports = {
     "plugin:react-hooks/recommended",
     "plugin:jsx-a11y/recommended",
   ],
-  ignorePatterns: ["dist", ".eslintrc.cjs"],
+  // CI lints the whole package now, not just src/, so the generated and
+  // vendored trees have to be named here rather than implied by the glob.
+  ignorePatterns: [
+    "dist",
+    "node_modules",
+    "coverage",
+    "playwright-report",
+    "test-results",
+    ".eslintrc.cjs",
+  ],
   parser: "@typescript-eslint/parser",
   plugins: ["@typescript-eslint", "react-hooks", "jsx-a11y"],
+  overrides: [
+    {
+      // Build, lint and test tooling runs in Node, not the browser. Scoped
+      // rather than global: application code under src/ must not see `module`
+      // or `process` as defined — this is a zero-backend PWA.
+      files: ["*.cjs", "*.js", "*.config.ts", "rules/**/*.ts"],
+      env: { node: true },
+    },
+  ],
   rules: {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     // RTL safety: warn on hardcoded physical margin/padding directional properties.

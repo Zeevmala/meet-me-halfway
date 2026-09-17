@@ -20,6 +20,7 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     cancel: () => {},
     searchVenues: vi.fn().mockResolvedValue(ok([])),
     fetchRoute: vi.fn().mockResolvedValue(ok(null)),
+    writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     ...overrides,
   };

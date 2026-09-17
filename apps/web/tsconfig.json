@@ -1,4 +1,8 @@
 {
+  // Browser project. Deliberately no "node" in `types`: this is a zero-backend
+  // PWA, and admitting @types/node here would let `process.env`, `Buffer` or
+  // `__dirname` typecheck inside a React component and fail only at runtime.
+  // Node-side files live in tsconfig.node.json.
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
@@ -11,8 +15,14 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["vite/client"]
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+  // Tests are NOT excluded — that exclusion had let 29 files drift out of sync
+  // with the API they claim to test. This one file is the exception: it asserts
+  // against the built public/sw.js on disk, so it needs node globals and is
+  // compiled by tsconfig.node.json instead.
+  "exclude": ["src/lib/register-sw.test.ts"]
 }
