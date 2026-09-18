@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createFirebaseServices } from "./firebase-factory";
+import {
+  APP_CHECK_TIMEOUT_MS,
+  createFirebaseServices,
+  primeAppCheck,
+} from "./firebase-factory";
 import type { AppConfig } from "./config";
 
 // ── Mock firebase/app (stateful: getApps reflects prior initializeApp) ──
@@ -27,13 +31,18 @@ vi.mock("firebase/auth", () => ({
   inMemoryPersistence: { type: "inMemory" },
 }));
 
+// A spy, not a literal: the ordering test below compares when this ran
+// against when App Check was initialized.
+const mockGetDatabase = vi.fn(() => ({ _db: true }));
 vi.mock("firebase/database", () => ({
-  getDatabase: () => ({ _db: true }),
+  getDatabase: () => mockGetDatabase(),
 }));
 
 const mockInitializeAppCheck = vi.fn();
+const mockGetToken = vi.fn();
 vi.mock("firebase/app-check", () => ({
   initializeAppCheck: (...args: unknown[]) => mockInitializeAppCheck(...args),
+  getToken: (...args: unknown[]) => mockGetToken(...args),
   ReCaptchaEnterpriseProvider: class {
     siteKey: string;
     constructor(siteKey: string) {
@@ -82,6 +91,7 @@ beforeEach(() => {
   mockInitializeAuth.mockImplementation(() => ({ kind: "auth-persistent" }));
   mockGetAuth.mockReturnValue({ kind: "auth-existing" });
   mockInitializeAppCheck.mockReturnValue({ kind: "app-check" });
+  mockGetToken.mockResolvedValue({ token: "attestation-token" });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -179,6 +189,34 @@ describe("createFirebaseServices", () => {
     expect(services.appCheck).toEqual({ kind: "app-check" });
   });
 
+  it("initializes App Check before it builds the Database handle", () => {
+    // Ordering, not decoration. RTDB sends the App Check token when it
+    // establishes its socket, so anything that can lead to a connection must
+    // be constructed after attestation is registered on the app. The previous
+    // object literal evaluated `db: getDatabase(app)` first, because property
+    // initialisers run in source order.
+    createFirebaseServices(withAppCheck("1:123:web:abc", "test-site-key"));
+
+    expect(mockInitializeAppCheck.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGetDatabase.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("primes attestation without waiting for it", async () => {
+    // The fetch is in flight when the factory returns — that is what keeps it
+    // off the first-paint path — and the promise carries the outcome.
+    const services = createFirebaseServices(
+      withAppCheck("1:123:web:abc", "test-site-key"),
+    );
+
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
+    await expect(services.appCheckReady).resolves.toEqual({
+      ok: true,
+      reason: "token",
+      latencyMs: expect.any(Number),
+    });
+  });
+
   it("continues with null appCheck when App Check init throws", () => {
     mockInitializeAppCheck.mockImplementation(() => {
       throw new Error("reCAPTCHA script blocked");
@@ -192,5 +230,64 @@ describe("createFirebaseServices", () => {
     expect(services.appCheck).toBeNull();
     expect(services.db).toEqual({ _db: true });
     expect(services.auth).toEqual({ kind: "auth-persistent" });
+  });
+});
+
+/**
+ * The invariant every case here shares: **it never rejects.**
+ *
+ * Attestation sits in front of the first RTDB subscription, so a rejection
+ * would not merely lose a token — it would leave the app never connecting at
+ * all. Degrade, never block.
+ */
+describe("primeAppCheck", () => {
+  it("resolves no-appcheck immediately when attestation is unconfigured", async () => {
+    await expect(primeAppCheck(null)).resolves.toEqual({
+      ok: false,
+      reason: "no-appcheck",
+    });
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it("reports the token and how long it took", async () => {
+    const outcome = await primeAppCheck({ kind: "app-check" } as never);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.reason).toBe("token");
+    if (outcome.ok) expect(outcome.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports error rather than rejecting when reCAPTCHA is blocked", async () => {
+    mockGetToken.mockRejectedValue(new Error("reCAPTCHA script blocked"));
+
+    await expect(
+      primeAppCheck({ kind: "app-check" } as never),
+    ).resolves.toEqual({ ok: false, reason: "error" });
+  });
+
+  it("gives up at the budget when the token never arrives", async () => {
+    vi.useFakeTimers();
+    // A hang, not a rejection: the in-app-browser case, where the reCAPTCHA
+    // fetch neither resolves nor fails.
+    mockGetToken.mockReturnValue(new Promise(() => {}));
+
+    const pending = primeAppCheck({ kind: "app-check" } as never);
+    await vi.advanceTimersByTimeAsync(APP_CHECK_TIMEOUT_MS);
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "timeout" });
+    vi.useRealTimers();
+  });
+
+  it("does not fire the timeout once a token has arrived", async () => {
+    vi.useFakeTimers();
+
+    const outcome = await primeAppCheck({ kind: "app-check" } as never);
+    // Past the budget: a live timer here would mean a dangling handle, and in
+    // a shorter-lived context an unhandled resolve after teardown.
+    await vi.advanceTimersByTimeAsync(APP_CHECK_TIMEOUT_MS * 2);
+
+    expect(outcome.reason).toBe("token");
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
   });
 });

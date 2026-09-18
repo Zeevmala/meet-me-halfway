@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { onValue, ref, set, get } from "firebase/database";
 import type { Database } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
-import { getToken, type AppCheck } from "firebase/app-check";
 import * as Sentry from "@sentry/react";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { useServices } from "../../../components/ServicesProvider";
@@ -107,10 +106,6 @@ export interface LiveSessionState {
 // security rules can enforce server-side TTL in a future iteration.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Max time to wait for the initial App Check token before proceeding
-// anyway. In-app browsers can hang the reCAPTCHA fetch indefinitely.
-const APP_CHECK_TIMEOUT_MS = 5_000;
-
 // Retry transient Firebase failures with exponential backoff (1s, 2s)
 // before surfacing the error. Most flake on iOS Safari resolves within
 // ~3s; this means users rarely see the error screen at all.
@@ -155,45 +150,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /** Permission errors won't recover via retry — bail immediately. */
 function isTransientError(err: unknown): boolean {
   return classifyJoinError(err) !== "JOIN_PERMISSION_DENIED";
-}
-
-/**
- * Best-effort wait for the first App Check token. If App Check is not
- * configured, resolves immediately. If reCAPTCHA hangs, times out so we
- * don't block the join forever.
- *
- * Returns `true` if a token was obtained (or App Check isn't configured),
- * `false` if attestation failed/timed out. The caller uses this to
- * disambiguate an otherwise-opaque RTDB failure: when App Check is enforced
- * server-side and our token never arrived, the database rejects the request
- * with an HTTP 401 the SDK surfaces with an unhelpful message — so a token
- * failure is a strong signal the downstream error is an attestation block.
- */
-async function waitForAppCheckToken(
-  appCheck: AppCheck | null,
-): Promise<boolean> {
-  if (!appCheck) return true;
-  try {
-    await Promise.race([
-      getToken(appCheck, /* forceRefresh */ false),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("appcheck_timeout")),
-          APP_CHECK_TIMEOUT_MS,
-        ),
-      ),
-    ]);
-    return true;
-  } catch (err) {
-    console.warn("[session] App Check token wait failed:", err);
-    Sentry.captureMessage("appcheck_token_wait_failed", {
-      level: "warning",
-      extra: { error: describeError(err) },
-    });
-    // Proceed anyway — server may still accept the request if App Check is
-    // unenforced. If it is enforced, the caller reclassifies the failure.
-    return false;
-  }
 }
 
 /**
@@ -305,7 +261,7 @@ async function claimSlot(
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
 export function useLiveSession(uid: string): LiveSessionState {
-  const { db, appCheck } = useFirebase();
+  const { db, appCheck, appCheckReady } = useFirebase();
   const { presence } = useServices();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
@@ -428,7 +384,10 @@ export function useLiveSession(uid: string): LiveSessionState {
       history.replaceState(null, "", url.toString());
 
       try {
-        await waitForAppCheckToken(appCheck);
+        // Shared with every other RTDB consumer and already in flight since
+        // app start, so this is normally already settled — it is a barrier,
+        // not a fetch. It never rejects; an unattested outcome still proceeds.
+        await appCheckReady;
         await withRetry(
           async () => {
             await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
@@ -462,7 +421,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         return err(fail("CREATE_FAILED", describeError(thrown)));
       }
     },
-    [db, uid, appCheck, listenForParticipants, fail],
+    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
   );
 
   /** Join an existing session. */
@@ -475,9 +434,9 @@ export function useLiveSession(uid: string): LiveSessionState {
       setError(null);
       setErrorDetails(null);
 
-      let appCheckOk = true;
+      let attestation = "pending";
       try {
-        appCheckOk = await waitForAppCheckToken(appCheck);
+        attestation = (await appCheckReady).reason;
 
         const sessionRef = ref(db, `sessions/${sessionCode}`);
         // The `.read` rule is `created > now - 24h`. For a session that was
@@ -548,7 +507,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         if (signal.aborted) {
           return err({ code: "JOIN_FAILED", details: "aborted" });
         }
-        // No promotion on `!appCheckOk`. It used to relabel any opaque failure
+        // No promotion on a failed attestation. It used to relabel any opaque failure
         // as an attestation block, written when a failed attestation was the
         // rare suspected cause. It is not rare: App Check reports ~89% of RTDB
         // requests unverified while enforcement is off, so the promotion fired
@@ -559,13 +518,13 @@ export function useLiveSession(uid: string): LiveSessionState {
         const classified = classifyJoinError(thrown);
         console.error("[session] join failed:", thrown, "→", classified);
         Sentry.captureException(thrown, {
-          tags: { phase: "join", classified, appCheckOk: String(appCheckOk) },
+          tags: { phase: "join", classified, attestation },
           contexts: sessionContext(sessionCode, appCheck !== null),
         });
         return err(fail(classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, listenForParticipants, fail],
+    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
   );
 
   /**

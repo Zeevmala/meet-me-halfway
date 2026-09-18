@@ -26,7 +26,7 @@ const FIREBASE_OFFLINE_GRACE_MS = 6_000;
  *    misleading "offline" banner).
  */
 export function useNetworkStatus(): NetworkStatus {
-  const { db } = useFirebase();
+  const { db, appCheckReady } = useFirebase();
   const [browserOnline, setBrowserOnline] = useState(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
@@ -44,25 +44,47 @@ export function useNetworkStatus(): NetworkStatus {
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
-    const connectedRef = ref(db, ".info/connected");
-    unsubRef.current = onValue(connectedRef, (snap) => {
-      const connected = snap.val() === true;
-      setFirebaseConnected(connected);
-      if (connected) {
-        if (offlineTimerRef.current) {
-          clearTimeout(offlineTimerRef.current);
-          offlineTimerRef.current = null;
+    // `getDatabase` does not connect; RTDB dials lazily on its first
+    // subscription. This listener is therefore what opens the socket — the
+    // earliest RTDB touch in the whole app, mounted before any session exists.
+    //
+    // RTDB attaches the App Check token when it establishes that socket, so
+    // subscribing before the first token is minted leaves the connection
+    // unattested for its lifetime. That is the race that left 89% of requests
+    // unverified while attestation itself was working.
+    //
+    // `appCheckReady` always settles and never rejects, so a blocked or slow
+    // reCAPTCHA delays this by at most the attestation budget and then
+    // proceeds unattested — degrade, never block. The offline banner this
+    // feeds already waits FIREBASE_OFFLINE_GRACE_MS before it will say
+    // anything, so the delay is not observable.
+    let cancelled = false;
+    void appCheckReady.then(() => {
+      if (cancelled) return;
+      const connectedRef = ref(db, ".info/connected");
+      unsubRef.current = onValue(connectedRef, (snap) => {
+        const connected = snap.val() === true;
+        setFirebaseConnected(connected);
+        if (connected) {
+          if (offlineTimerRef.current) {
+            clearTimeout(offlineTimerRef.current);
+            offlineTimerRef.current = null;
+          }
+          setFirebaseStableOffline(false);
+        } else if (!offlineTimerRef.current) {
+          offlineTimerRef.current = setTimeout(() => {
+            offlineTimerRef.current = null;
+            setFirebaseStableOffline(true);
+          }, FIREBASE_OFFLINE_GRACE_MS);
         }
-        setFirebaseStableOffline(false);
-      } else if (!offlineTimerRef.current) {
-        offlineTimerRef.current = setTimeout(() => {
-          offlineTimerRef.current = null;
-          setFirebaseStableOffline(true);
-        }, FIREBASE_OFFLINE_GRACE_MS);
-      }
+      });
     });
 
     return () => {
+      // Guards an unmount that lands while attestation is still in flight —
+      // without it the `.then` above would attach a listener to a dead hook
+      // and leak it, since cleanup has already run by then.
+      cancelled = true;
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
       if (unsubRef.current) {
@@ -74,7 +96,7 @@ export function useNetworkStatus(): NetworkStatus {
         offlineTimerRef.current = null;
       }
     };
-  }, [db, handleOnline, handleOffline]);
+  }, [db, appCheckReady, handleOnline, handleOffline]);
 
   return {
     browserOnline,
