@@ -20,9 +20,38 @@ npm test                 # vitest run (all tests)
 npm run test:coverage    # vitest with coverage
 npx vitest run src/features/live-midpoint/lib/geo-math.test.ts   # single test file
 npx vitest run -t "midpoint"                                      # tests matching name pattern
+
+npm run dev:local        # RTDB emulator + Vite, offline, zero credentials
+npm run test:e2e:local   # build + emulator + Playwright (the e2e job, locally)
 ```
 
+**Local loop.** `dev:local` and `test:e2e:local` build with `--mode emulator`,
+which loads the committed `apps/web/.env.emulator`: fake Mapbox token, fake
+Firebase project, `VITE_FIREBASE_DATABASE_URL` pointed at `127.0.0.1:9000`, and
+`VITE_FIREBASE_APP_ID` deliberately unset so `createAppCheck` returns `null` and
+`primeAppCheck` resolves `no-appcheck` immediately instead of spending
+`APP_CHECK_TIMEOUT_MS` on a reCAPTCHA that cannot load offline. The SDK enters
+emulator mode from the `http://` localhost `databaseURL` alone — there is no
+`connectDatabaseEmulator` call and none is needed. Two participants means two
+browser **profiles**: anonymous auth persists in IndexedDB, so a second tab
+reuses the uid and claims the same slot.
+
 **CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check) and `typecheck` run in parallel → `test` (vitest) → `build` → `lighthouse` + `e2e` → `deploy` (main only). All must pass. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
+
+The `e2e` job runs the browser suite **against the RTDB emulator loading
+`infra/database.rules.json`**, so it needs Java like the `rules` job does. This
+is what makes it able to fail: the suite it replaced asserted only that
+`.live-page` was visible — a class the app also renders on the error boundary,
+the connecting state, `SessionErrorPanel` and all three geolocation error
+screens — so it stayed green through the 2026-09-11 outage while every slot
+claim in production was denied. A client/rules skew now fails here instead. The
+old `e2e/helpers/mock-firebase.ts` is deleted: it encoded the pre-`2daf708`
+`participantUids` schema and stubbed RTDB over HTTP, a transport RTDB does not
+use (it dials a WebSocket, which `page.route` cannot intercept). Auth is the one
+thing still faked — `e2e/helpers/fake-auth.ts` serves an **unsigned** JWT
+(`alg: none`), which the emulator accepts as `auth.uid`, the same mechanism
+`@firebase/rules-unit-testing` uses. Each browser context needs its own uid or
+both land in one slot.
 
 ## Architecture
 

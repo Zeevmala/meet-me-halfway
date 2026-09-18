@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { setupFirebaseMocks } from "./helpers/mock-firebase";
+import { setupEmulatorAuth } from "./helpers/fake-auth";
 import { setupMapboxMocks } from "./helpers/mock-mapbox";
+import { uid } from "./helpers/session";
 
 test.beforeEach(async ({ page }) => {
-  await setupFirebaseMocks(page);
+  await setupEmulatorAuth(page, uid("pwa"));
   await setupMapboxMocks(page);
 });
 

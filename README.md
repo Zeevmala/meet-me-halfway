@@ -100,19 +100,19 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 
 ## Tech Stack
 
-| Layer | Tech |
-|-------|------|
-| UI | React 19 + Vite 6 + Tailwind CSS 4 |
-| Maps | Mapbox GL JS 3.x (dark-v11 basemap) |
-| Auth | Firebase Anonymous Auth (silent sign-in) |
-| Security | Firebase App Check (reCAPTCHA Enterprise) |
-| Real-time | Firebase 12 Realtime Database |
-| Routing | Mapbox Directions API (client-side) |
-| Venues | Google Places API (New) — optional |
-| Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
-| i18n | i18next — English, Hebrew (full RTL) |
-| Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
-| Tests | Vitest + React Testing Library (344 tests) |
+| Layer     | Tech                                                           |
+| --------- | -------------------------------------------------------------- |
+| UI        | React 19 + Vite 6 + Tailwind CSS 4                             |
+| Maps      | Mapbox GL JS 3.x (dark-v11 basemap)                            |
+| Auth      | Firebase Anonymous Auth (silent sign-in)                       |
+| Security  | Firebase App Check (reCAPTCHA Enterprise)                      |
+| Real-time | Firebase 12 Realtime Database                                  |
+| Routing   | Mapbox Directions API (client-side)                            |
+| Venues    | Google Places API (New) — optional                             |
+| Midpoint  | Geographic centroid (Cartesian mean on unit sphere)            |
+| i18n      | i18next — English, Hebrew (full RTL)                           |
+| Pipeline  | Declared DAG + resource combinator (retry / breaker / degrade) |
+| Tests     | Vitest + React Testing Library (344 tests)                     |
 
 ---
 
@@ -142,16 +142,16 @@ npm run dev
 
 Create a `.env` file at the project root:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VITE_MAPBOX_TOKEN` | Yes | Mapbox public token (`pk.*`) for map rendering + Directions API |
-| `VITE_FIREBASE_API_KEY` | Yes | Firebase Web API key |
-| `VITE_FIREBASE_AUTH_DOMAIN` | Yes | Firebase Auth domain (`*.firebaseapp.com`) |
-| `VITE_FIREBASE_DATABASE_URL` | Yes | Firebase RTDB URL (`https://*.firebaseio.com`) |
-| `VITE_FIREBASE_PROJECT_ID` | Yes | Firebase project ID |
-| `VITE_RECAPTCHA_SITE_KEY` | Yes | reCAPTCHA Enterprise site key for App Check |
-| `VITE_FIREBASE_APP_ID` | For App Check | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so App Check is skipped with a warning when it is unset — the app runs, entirely unattested |
-| `VITE_GOOGLE_PLACES_API_KEY` | No | Google Places API key — venue search disabled if not set |
+| Variable                     | Required      | Description                                                                                                                                                                 |
+| ---------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_MAPBOX_TOKEN`          | Yes           | Mapbox public token (`pk.*`) for map rendering + Directions API                                                                                                             |
+| `VITE_FIREBASE_API_KEY`      | Yes           | Firebase Web API key                                                                                                                                                        |
+| `VITE_FIREBASE_AUTH_DOMAIN`  | Yes           | Firebase Auth domain (`*.firebaseapp.com`)                                                                                                                                  |
+| `VITE_FIREBASE_DATABASE_URL` | Yes           | Firebase RTDB URL (`https://*.firebaseio.com`)                                                                                                                              |
+| `VITE_FIREBASE_PROJECT_ID`   | Yes           | Firebase project ID                                                                                                                                                         |
+| `VITE_RECAPTCHA_SITE_KEY`    | Yes           | reCAPTCHA Enterprise site key for App Check                                                                                                                                 |
+| `VITE_FIREBASE_APP_ID`       | For App Check | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so App Check is skipped with a warning when it is unset — the app runs, entirely unattested |
+| `VITE_GOOGLE_PLACES_API_KEY` | No            | Google Places API key — venue search disabled if not set                                                                                                                    |
 
 ---
 
@@ -202,9 +202,33 @@ meet-me-halfway/
 
 ```bash
 cd apps/web
-npx vitest run     # 344 unit + integration tests
-npm run tsc        # TypeScript strict mode check
+npx vitest run       # 416 unit + integration tests
+npm run tsc          # TypeScript strict mode check
+npm run test:rules   # security rules, against the RTDB emulator
+npm run test:e2e:local   # full browser flow, against the RTDB emulator
 ```
+
+### Running it locally, with no credentials
+
+`npm run dev:local` boots the Realtime Database emulator and Vite together
+against `apps/web/.env.emulator` — fake Mapbox token, fake Firebase project, no
+App Check. Create, join, slot claim, midpoint and the `onDisconnect` snap-back
+all work offline, against the **real** `infra/database.rules.json`.
+
+### Testing a two-person session by yourself
+
+You do not need a second person, but you do need a second **browser profile**:
+anonymous auth persists in IndexedDB, so a second tab — or a second ordinary
+window — reuses the same uid, claims the same slot, and never appears as a
+second participant.
+
+1. Window A: open the app, allow location, note the 6-char code.
+2. Window B: **incognito**, or a separate browser profile → `/?code=XXXXXX`.
+3. Give each window its own position, or the midpoint is degenerate:
+   DevTools (F12) → ⋮ → More tools → **Sensors** → Location → _Other…_
+
+`npm run test:e2e:local` automates exactly this, including the five-participant
+cap and the sixth participant's `SESSION_FULL`.
 
 ---
 
@@ -216,6 +240,7 @@ npm run build      # Output in dist/
 ```
 
 Deploy `dist/` to any static host:
+
 - **Firebase Hosting:** `firebase deploy`
 - **Vercel:** connect repo, set root to `apps/web`
 - **Netlify:** set build dir to `apps/web/dist`

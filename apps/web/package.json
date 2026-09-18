@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "cd ../.. && npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet-me-halfway \"npm --prefix apps/web run dev -- --mode emulator\"",
     "build": "vite build",
     "preview": "vite preview",
     "tsc": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
@@ -12,6 +13,7 @@
     "test:coverage": "vitest run --coverage",
     "lighthouse": "lhci autorun",
     "test:e2e": "playwright test",
+    "test:e2e:local": "npm run build -- --mode emulator && cd ../.. && npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet-me-halfway \"npm --prefix apps/web run test:e2e\"",
     "test:e2e:ui": "playwright test --ui",
     "test:rules": "vitest run --config vitest.rules.config.ts"
   },

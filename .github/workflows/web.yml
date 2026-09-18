@@ -40,11 +40,13 @@ jobs:
       - name: eslint
         working-directory: apps/web
         run: npx eslint . --ext .ts,.tsx,.cjs,.js --max-warnings=0
+      # e2e/ is linted by the eslint step above but was outside this glob, so
+      # the browser suite was the one unformatted corner of the package.
       - name: prettier check
         working-directory: apps/web
         run: >
           npx prettier --check "src/**/*.{ts,tsx,css,json}"
-          "rules/**/*.ts" "*.{ts,cjs,json}"
+          "rules/**/*.ts" "e2e/**/*.ts" "e2e-live/**/*.ts" "*.{ts,cjs,json}"
 
   typecheck:
     runs-on: ubuntu-latest
@@ -161,8 +163,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    # Deliberately not `needs: [build]`. This job builds its own dist from the
-    # fake env vars below and never downloads the `web-dist` artifact, so that
+    # Deliberately not `needs: [build]`. This job builds its own dist from
+    # .env.emulator and never downloads the `web-dist` artifact, so that
     # edge carried no data — it only propagated `build`'s
     # `github.actor != 'dependabot[bot]'` skip into e2e, which is exactly when
     # e2e is most worth running. Dependency bumps were merging with no e2e and
@@ -176,24 +178,30 @@ jobs:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: apps/web/package-lock.json
+      # Same reason as the `rules` job: the RTDB emulator is a Java process.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - run: npm ci
         working-directory: apps/web
       - name: Install Playwright browsers
         working-directory: apps/web
         run: npx playwright install --with-deps chromium firefox
+      # `--mode emulator` reads apps/web/.env.emulator, which points the SDK at
+      # the local emulator and leaves VITE_FIREBASE_APP_ID unset so App Check is
+      # skipped instead of spending its timeout on a reCAPTCHA that cannot load.
       - name: Build for E2E
         working-directory: apps/web
-        run: npm run build
-        env:
-          VITE_MAPBOX_TOKEN: "pk.fake_for_e2e"
-          VITE_FIREBASE_API_KEY: "fake-key"
-          VITE_FIREBASE_AUTH_DOMAIN: "fake.firebaseapp.com"
-          VITE_FIREBASE_DATABASE_URL: "https://fake-rtdb.firebaseio.com"
-          VITE_FIREBASE_PROJECT_ID: "fake-project"
-          VITE_RECAPTCHA_SITE_KEY: "fake-recaptcha"
-      - name: Run E2E tests
-        working-directory: apps/web
-        run: npx playwright test
+        run: npm run build -- --mode emulator
+      # The suite drives a real database running infra/database.rules.json, so a
+      # client/rules skew like 2026-09-11 fails here instead of in production.
+      # Pinned to match the `rules` and `deploy` jobs.
+      - name: Run E2E tests (RTDB emulator)
+        run: >
+          npx -y firebase-tools@15.29.0 emulators:exec
+          --only database --project demo-meet-me-halfway
+          "npm --prefix apps/web run test:e2e"
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

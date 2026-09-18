@@ -64,3 +64,6 @@ apps/api/
 firebase-debug.log
 database-debug.log
 ui-debug.log
+
+# Playwright HTML report
+apps/web/playwright-report/
