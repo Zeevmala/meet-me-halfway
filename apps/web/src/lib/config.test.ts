@@ -28,13 +28,24 @@ describe("validateAppConfig", () => {
     expect(() => validateAppConfig(complete({ places: null }))).not.toThrow();
   });
 
-  it("requires the reCAPTCHA site key", () => {
-    // The previous validateEnv checked five of the six documented variables
-    // and let this one through, so a deployment missing it looked healthy
-    // while silently running unattested.
-    expect(() =>
-      validateAppConfig(complete({ recaptchaSiteKey: null })),
-    ).toThrow(/VITE_RECAPTCHA_SITE_KEY/);
+  it("accepts every App Check configuration, including broken ones", () => {
+    // App Check is optional and must never stop the app loading. Whether its
+    // two variables agree is a deployment property, checked while the bundle is
+    // built (build/app-check-pairing.ts) so a misconfiguration fails CI rather
+    // than blanking the page for every user. A rule here could not do that:
+    // this runs in the browser, and `vite build` never executes it.
+    const off = complete({
+      recaptchaSiteKey: null,
+      firebase: { ...complete().firebase, appId: undefined },
+    });
+    const halfConfigured = complete({
+      firebase: { ...complete().firebase, appId: undefined },
+    });
+    const idOnly = complete({ recaptchaSiteKey: null });
+
+    for (const config of [off, halfConfigured, idOnly]) {
+      expect(() => validateAppConfig(config)).not.toThrow();
+    }
   });
 
   it("names every missing variable at once", () => {
@@ -54,16 +65,7 @@ describe("validateAppConfig", () => {
     expect(message).toContain("VITE_MAPBOX_TOKEN");
     expect(message).toContain("VITE_FIREBASE_API_KEY");
     expect(message).toContain("VITE_FIREBASE_PROJECT_ID");
-    expect(message).toContain("VITE_RECAPTCHA_SITE_KEY");
     expect(message).not.toContain("VITE_FIREBASE_AUTH_DOMAIN");
-  });
-
-  it("does not require the optional appId", () => {
-    expect(() =>
-      validateAppConfig(
-        complete({ firebase: { ...complete().firebase, appId: undefined } }),
-      ),
-    ).not.toThrow();
   });
 });
 

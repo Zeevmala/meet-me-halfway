@@ -45,8 +45,8 @@ jobs:
       - name: prettier check
         working-directory: apps/web
         run: >
-          npx prettier --check "src/**/*.{ts,tsx,css,json}"
-          "rules/**/*.ts" "e2e/**/*.ts" "e2e-live/**/*.ts" "*.{ts,cjs,json}"
+          npx prettier --check "src/**/*.{ts,tsx,css,json}" "rules/**/*.ts"
+          "e2e/**/*.ts" "e2e-live/**/*.ts" "tooling/**/*.ts" "*.{ts,cjs,json}"
 
   typecheck:
     runs-on: ubuntu-latest
@@ -121,6 +121,20 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
         working-directory: apps/web
+      # App Check is deliberately not configured here as of 2026-09-18.
+      #
+      # Enforcement is off in the Firebase console and only 11% of RTDB requests
+      # verify, so attestation is currently changing no access decision — while
+      # it has caused or masked four join incidents (#54, #62, #85, #88) and
+      # gates the first RTDB socket for up to APP_CHECK_TIMEOUT_MS. Access
+      # control is the security rules, which are unchanged and tested.
+      #
+      # To re-enable: restore `VITE_RECAPTCHA_SITE_KEY` below (the secret is
+      # still set), redeploy, and watch the `appcheck_outcome` Sentry tag until
+      # the verified share is high enough to turn enforcement on. Leaving
+      # VITE_FIREBASE_APP_ID set keeps that a one-line change; on its own it is
+      # inert. Removing it while the site key is set fails this step — see
+      # apps/web/tooling/app-check-pairing.ts.
       - name: vite build
         working-directory: apps/web
         run: npm run build
@@ -132,7 +146,6 @@ jobs:
           VITE_FIREBASE_DATABASE_URL: ${{ secrets.VITE_FIREBASE_DATABASE_URL }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
           VITE_GOOGLE_PLACES_API_KEY: ${{ secrets.VITE_GOOGLE_PLACES_API_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
       - uses: actions/upload-artifact@v7
@@ -189,7 +202,7 @@ jobs:
         working-directory: apps/web
         run: npx playwright install --with-deps chromium firefox
       # `--mode emulator` reads apps/web/.env.emulator, which points the SDK at
-      # the local emulator and leaves VITE_FIREBASE_APP_ID unset so App Check is
+      # the local emulator and configures no App Check at all, so attestation is
       # skipped instead of spending its timeout on a reCAPTCHA that cannot load.
       - name: Build for E2E
         working-directory: apps/web

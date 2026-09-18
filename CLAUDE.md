@@ -28,9 +28,9 @@ npm run test:e2e:local   # build + emulator + Playwright (the e2e job, locally)
 **Local loop.** `dev:local` and `test:e2e:local` build with `--mode emulator`,
 which loads the committed `apps/web/.env.emulator`: fake Mapbox token, fake
 Firebase project, `VITE_FIREBASE_DATABASE_URL` pointed at `127.0.0.1:9000`, and
-`VITE_FIREBASE_APP_ID` deliberately unset so `createAppCheck` returns `null` and
-`primeAppCheck` resolves `no-appcheck` immediately instead of spending
-`APP_CHECK_TIMEOUT_MS` on a reCAPTCHA that cannot load offline. The SDK enters
+no App Check at all, so `createAppCheck` returns `null` and `primeAppCheck`
+resolves `no-appcheck` immediately instead of spending `APP_CHECK_TIMEOUT_MS`
+on a reCAPTCHA that cannot load offline. The SDK enters
 emulator mode from the `http://` localhost `databaseURL` alone — there is no
 `connectDatabaseEmulator` call and none is needed. Two participants means two
 browser **profiles**: anonymous auth persists in IndexedDB, so a second tab
@@ -59,7 +59,7 @@ both land in one slot.
 - **Vite 6** with manual chunks: react, firebase, mapbox, i18n
 - **Composition root** — `lib/config.ts` is the only module reading `VITE_*` application config; `lib/services.ts` wires Firebase, the API clients and the graph ports once in `main.tsx` and passes them down via `ServicesProvider`. Nothing below that constructs a Firebase handle or reads a credential
 - **Firebase Anonymous Auth** — `lib/firebase-factory.ts` builds auth with an explicit persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once slot claim
-- **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation). Primed at the composition root and exposed as `appCheckReady`, a promise that never rejects. **Anything that can open the RTDB connection awaits it first**: `getDatabase` does not connect, RTDB dials on its first subscription and attaches the token when it establishes the socket, so a subscription that beats the first token leaves that connection unattested for its lifetime. That race — not a misconfiguration — is what held attestation at 11% verified. `useNetworkStatus`'s `.info/connected` listener is the earliest such subscription and is gated accordingly; the wait is bounded by `APP_CHECK_TIMEOUT_MS` and then proceeds unattested, because degrading beats blocking the app on a blocked reCAPTCHA. The outcome (`token` / `timeout` / `error` / `no-appcheck`, plus token latency) is tagged on Sentry, since the console's verified/unverified split cannot tell those apart
+- **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation). **Off in production since 2026-09-18**: enforcement was never enabled and only 11% of requests verified, so it changed no access decision while causing or masking four join incidents (`#54`, `#62`, `#85`, `#88`) and gating the first RTDB socket. The code below is unchanged and dormant — re-enabling is restoring one secret in the `build` job. Access control is, and always was, `infra/database.rules.json`. What follows describes the mechanism for when it is switched back on. Primed at the composition root and exposed as `appCheckReady`, a promise that never rejects. **Anything that can open the RTDB connection awaits it first**: `getDatabase` does not connect, RTDB dials on its first subscription and attaches the token when it establishes the socket, so a subscription that beats the first token leaves that connection unattested for its lifetime. That race — not a misconfiguration — is what held attestation at 11% verified. `useNetworkStatus`'s `.info/connected` listener is the earliest such subscription and is gated accordingly; the wait is bounded by `APP_CHECK_TIMEOUT_MS` and then proceeds unattested, because degrading beats blocking the app on a blocked reCAPTCHA. The outcome (`token` / `timeout` / `error` / `no-appcheck`, plus token latency) is tagged on Sentry, since the console's verified/unverified split cannot tell those apart
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
 - **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
@@ -188,7 +188,11 @@ Hosting deploys before rules deliberately. Either order leaves a window during a
 
 ## Environment Variables
 
-Required: `VITE_MAPBOX_TOKEN`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID`, `VITE_RECAPTCHA_SITE_KEY` — all six enforced by `validateAppConfig`.
-Optional: `VITE_GOOGLE_PLACES_API_KEY` (venue search disabled if not set), `VITE_FIREBASE_APP_ID` (required for App Check — without it the attestation token exchange 400s and App Check init is skipped with a warning).
+Required: `VITE_MAPBOX_TOKEN`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID` — all five enforced by `validateAppConfig`.
+Optional: `VITE_GOOGLE_PLACES_API_KEY` (venue search disabled if not set), `VITE_SENTRY_DSN`.
+
+App Check is optional and **all-or-nothing**: `VITE_RECAPTCHA_SITE_KEY` turns it on and requires `VITE_FIREBASE_APP_ID`, because attestation posts to `/apps/{appId}/…` and can only 400 without it — the configuration that shipped in `#62` and made every client fail while the deploy looked healthy. The reverse (`appId` alone) is allowed: without a site key App Check never initialises and the id is inert, which is what keeps re-enabling a one-secret change.
+
+That pairing is enforced in `tooling/app-check-pairing.ts`, called from `vite.config.ts`, **not** in `validateAppConfig`. The distinction matters: `validateAppConfig` runs in the browser during `main.tsx` module evaluation, so a rule there would sail through CI — `vite build` never executes it — and then blank the page for every user of a misconfigured deploy, which is worse than the `console.warn` it would replace. A deployment invariant that is knowable when the bundle is produced is settled there, where it stops a release instead of a user. Anything genuinely load-bearing still belongs in `validateAppConfig`.
 
 See `.env.example` at project root. `main.tsx` calls `validateAppConfig` before React renders and throws naming every missing variable at once.

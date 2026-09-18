@@ -66,10 +66,21 @@ export function createAppConfig(): AppConfig {
 /**
  * Fail fast, before React renders, on anything the app cannot run without.
  *
- * `VITE_RECAPTCHA_SITE_KEY` is included: the README and CLAUDE.md both list it
- * as required, and its absence silently disables App Check, so a deployment
- * missing it looks healthy while being unattested. The previous `validateEnv`
- * omitted it.
+ * Everything listed here is load-bearing: without it there is no app to show, so
+ * throwing and rendering nothing loses nothing. **App Check is deliberately not
+ * listed**, in either direction. It is optional — unset, `createAppCheck`
+ * returns `null` and the app runs unattested — and a misconfiguration of it must
+ * never blank the page for a user. Whether the two variables agree is a property
+ * of the deployment rather than of the running app, so it is checked while the
+ * bundle is built (`vite.config.ts`, `appCheckPairing`) where it stops a release
+ * instead of stopping a user.
+ *
+ * The site key used to be required on its own, on the reasoning that its absence
+ * would let a deployment look healthy while running unattested. That was never
+ * something this check could deliver: with App Check enforcement off, attested
+ * and unattested deployments behave identically. What it did do was make "run
+ * this app without App Check" impossible to express, which is why there was no
+ * credential-free local loop until `.env.emulator`.
  *
  * @throws with every missing variable named at once — finding them one build
  *   at a time is the worse experience.
@@ -86,9 +97,6 @@ export function validateAppConfig(config: AppConfig): void {
   }
   if (config.firebase.projectId === "") {
     missing.push("VITE_FIREBASE_PROJECT_ID");
-  }
-  if (config.recaptchaSiteKey === null) {
-    missing.push("VITE_RECAPTCHA_SITE_KEY");
   }
 
   if (missing.length > 0) {

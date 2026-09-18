@@ -149,8 +149,8 @@ Create a `.env` file at the project root:
 | `VITE_FIREBASE_AUTH_DOMAIN`  | Yes           | Firebase Auth domain (`*.firebaseapp.com`)                                                                                                                                  |
 | `VITE_FIREBASE_DATABASE_URL` | Yes           | Firebase RTDB URL (`https://*.firebaseio.com`)                                                                                                                              |
 | `VITE_FIREBASE_PROJECT_ID`   | Yes           | Firebase project ID                                                                                                                                                         |
-| `VITE_RECAPTCHA_SITE_KEY`    | Yes           | reCAPTCHA Enterprise site key for App Check                                                                                                                                 |
-| `VITE_FIREBASE_APP_ID`       | For App Check | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so App Check is skipped with a warning when it is unset — the app runs, entirely unattested |
+| `VITE_RECAPTCHA_SITE_KEY`    | No            | reCAPTCHA Enterprise site key. Setting it turns App Check on and **requires** `VITE_FIREBASE_APP_ID`; leaving it unset turns App Check off. Unset in production since 2026-09-18 |
+| `VITE_FIREBASE_APP_ID`       | With site key | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so a site key without this one fails the build rather than shipping unattested               |
 | `VITE_GOOGLE_PLACES_API_KEY` | No            | Google Places API key — venue search disabled if not set                                                                                                                    |
 
 ---

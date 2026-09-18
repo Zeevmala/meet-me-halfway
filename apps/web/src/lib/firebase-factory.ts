@@ -92,6 +92,14 @@ function createApp(config: AppConfig): FirebaseApp {
  * App Check needs **both** the reCAPTCHA site key and the Firebase appId —
  * attestation can only 400 without the app resource, so initialising with one
  * of the two produces a failure on every client rather than a degraded mode.
+ *
+ * That pairing is rejected while the bundle is built (`tooling/app-check-pairing.ts`),
+ * so the warning below is unreachable from a bundle that exists. It stays as
+ * defense in depth, and because the guard cannot cover `npm run dev` started
+ * with a stray shell variable.
+ *
+ * A `null` return is the ordinary off state, not a failure — no site key means
+ * App Check was not configured, which is how production ships as of 2026-09-18.
  */
 function createAppCheck(app: FirebaseApp, config: AppConfig): AppCheck | null {
   const siteKey = config.recaptchaSiteKey;
