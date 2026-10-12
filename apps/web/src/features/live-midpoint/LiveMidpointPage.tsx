@@ -1,4 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
@@ -179,20 +187,33 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return out;
   }, [slots, routes]);
 
-  // ── Initialize: start geolocation, then create or join session ──
+  // ── Initialize: stream GPS, and create or join the session ──
+  // Both effects are plain start/stop pairs with no run-once guard. They used
+  // to share one effect behind an `initRef` guard, which StrictMode — on in
+  // every `npm run dev` — defeats: its mount → unmount → mount cycle ran the
+  // geolocation hook's cleanup (clearWatch) and aborted the handshake, and the
+  // guard then stopped the second mount restarting either. Local dev has
+  // never streamed a position since 05365d9 for exactly that reason.
+  const { start: startGeo, stop: stopGeo } = geo;
+  useEffect(() => {
+    startGeo();
+    return stopGeo;
+  }, [startGeo, stopGeo]);
+
+  // Read once per mount, not inside the effect: createSession rewrites the URL
+  // to ?code=<new code>, so a re-run that read it again would try to *join*
+  // the session its aborted predecessor never wrote.
+  const [urlCode] = useState(getCodeFromURL);
+
   // The handshake returns a Result rather than throwing. It used to throw into
   // this effect with no `.catch()`, so every failed join raised an unhandled
   // rejection on top of the Sentry event the hook already recorded. The
-  // controller cancels the retry loop if we unmount mid-handshake.
-  const initRef = useRef(false);
+  // controller cancels the retry loop if we unmount mid-handshake; both
+  // handshakes check it before their first write, so an aborted run leaves
+  // nothing behind for the next one to trip over.
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
     const controller = new AbortController();
-    geo.start();
 
-    const urlCode = getCodeFromURL();
     void (async () => {
       const result =
         urlCode !== null
@@ -200,13 +221,13 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           : await session.createSession(controller.signal);
       // The failure is already reflected in session state, which drives the
       // error panel below; nothing further to do but leave a breadcrumb.
-      if (!result.ok) {
+      if (!result.ok && !controller.signal.aborted) {
         console.warn("[live] session handshake failed:", result.error.code);
       }
     })();
 
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one handshake per mount
   }, []);
 
   // Own location no longer needs piping to Firebase from here: the graph's
@@ -262,6 +283,22 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           <div className="live-error-message">
             {t("live.geoUnavailableInstructions")}
           </div>
+          {/* Retry from a tap as well as the background backoff: browsers
+              act more readily on a request made inside a user gesture (Chrome
+              on Android may only offer its "turn on location" dialog then). */}
+          <button
+            type="button"
+            className="live-btn live-retry-btn"
+            onClick={() => geo.start()}
+          >
+            {t("common.retry")}
+          </button>
+          {geo.error && (
+            <details className="live-error-details">
+              <summary>{t("live.errorDetails")}</summary>
+              <code>{geo.error}</code>
+            </details>
+          )}
         </div>
       </div>
     );

@@ -51,7 +51,7 @@
     "authStorageBlocked": "Your browser is blocking sign-in storage. Try opening this link in your default browser, or relax strict privacy protection for this site.",
     "authFailed": "Couldn't connect. Please try again.",
     "geoUnavailable": "Location services unavailable",
-    "geoUnavailableInstructions": "Your device cannot determine your location. Please check that GPS is enabled.",
+    "geoUnavailableInstructions": "Your device couldn't determine your location yet. Check that Location is on and that your browser is allowed to use it. We'll keep trying, or tap Try again.",
     "geoTimeout": "Location request timed out",
     "geoTimeoutInstructions": "We couldn't get your location in time. Please check your GPS signal and try again.",
     "searchingVenues": "Searching nearby...",

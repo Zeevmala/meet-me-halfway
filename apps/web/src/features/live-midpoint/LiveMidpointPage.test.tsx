@@ -239,6 +239,28 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByText("live.geoUnavailableInstructions")).toBeTruthy();
   });
 
+  it("geo unavailable is not a dead end: retry restarts GPS", () => {
+    const startFn = vi.fn();
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "unavailable",
+      position: null,
+      error: "Failed to start Geolocation service",
+      start: startFn,
+    });
+
+    renderPage();
+    // The mount effect starts GPS once; the button must start it again.
+    startFn.mockClear();
+    fireEvent.click(screen.getByText("common.retry"));
+
+    expect(startFn).toHaveBeenCalledTimes(1);
+    // The browser's own message, so a screenshot says what actually failed.
+    expect(
+      screen.getByText("Failed to start Geolocation service"),
+    ).toBeTruthy();
+  });
+
   it("shows geo timeout error with retry button", () => {
     const startFn = vi.fn();
     mockGeo.mockReturnValue({
