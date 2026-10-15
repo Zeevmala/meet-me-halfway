@@ -239,6 +239,37 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByText("live.geoUnavailableInstructions")).toBeTruthy();
   });
 
+  // No location failure may be a dead end. Denied matters most: a phone with
+  // its Location toggle off lands there, and only a request made inside a tap
+  // lets Chrome offer to turn Location on.
+  it.each([
+    ["denied", "PERMISSION_DENIED: User denied Geolocation"],
+    ["unavailable", "POSITION_UNAVAILABLE: Failed to request location updates"],
+    ["error", "TIMEOUT: Timeout expired"],
+  ] as const)(
+    "geo %s screen: Try again restarts GPS, and the reason is visible",
+    (status, error) => {
+      const startFn = vi.fn();
+      mockGeo.mockReturnValue({
+        ...defaultGeo(),
+        status,
+        position: null,
+        error,
+        start: startFn,
+      });
+
+      renderPage();
+      // The mount effect starts GPS once; the button must start it again.
+      startFn.mockClear();
+      fireEvent.click(screen.getByText("common.retry"));
+
+      expect(startFn).toHaveBeenCalledTimes(1);
+      // Open by default, so a screenshot says what actually failed.
+      const reason = screen.getByText(error);
+      expect(reason.closest("details")?.open).toBe(true);
+    },
+  );
+
   it("shows geo timeout error with retry button", () => {
     const startFn = vi.fn();
     mockGeo.mockReturnValue({
