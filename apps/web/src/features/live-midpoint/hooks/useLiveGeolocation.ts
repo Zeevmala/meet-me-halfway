@@ -21,23 +21,34 @@ const GEO_OPTIONS: PositionOptions = {
   maximumAge: 3_000,
 };
 
-/** Watch restart backoff after POSITION_UNAVAILABLE / TIMEOUT: 2s → 30s. */
+/** Watch restart backoff after POSITION_UNAVAILABLE: 2s → 30s. */
 const RETRY_BACKOFF = { baseMs: 2_000, maxMs: 30_000, jitter: true } as const;
 
 /**
  * Continuous geolocation streaming via `watchPosition`.
  * Keeps streaming until explicitly stopped or the component unmounts.
  *
- * Only PERMISSION_DENIED is terminal. POSITION_UNAVAILABLE and TIMEOUT mean
- * the provider had no fix *this time* — a cold GPS, a location service that
- * was still starting, a moment indoors — so the watch is restarted with
- * backoff rather than abandoned. The page used to treat POSITION_UNAVAILABLE
- * as final: the whole app became "Location services unavailable", with no
- * retry, no explanation and no telemetry, and it cleared only if that same
- * watch later got a fix — which on a device whose provider stays down never
- * happens. Once a fix has been seen, a transient error does not change the
- * status at all; the last position stands, and the graph's staleness rules
- * decide what it is worth.
+ * The three error codes mean different things, and Chrome on Android (read
+ * from Chromium's source) draws the lines sharply:
+ *
+ * - PERMISSION_DENIED: the site is blocked, *or* the phone's Location toggle
+ *   is off, *or* Chrome lacks the Android permission. Fatal: Blink drops every
+ *   watch. Only a new request made inside a tap can recover, because that is
+ *   the only time Chrome will offer its "turn on location" dialog — so the
+ *   page puts a Try again button on that screen.
+ * - TIMEOUT: no fix yet. The watch stays registered and keeps acquiring, so it
+ *   is left alone; tearing it down would throw that progress away.
+ * - POSITION_UNAVAILABLE: the platform request itself failed (Play services
+ *   rejected it, or an OS permission layer threw). Chrome never re-issues that
+ *   request while the watch lives, so the watch is restarted with backoff:
+ *   clearing it drops Chrome's last subscriber and the new one makes a fresh
+ *   request.
+ *
+ * The page used to treat POSITION_UNAVAILABLE as final: the whole app became
+ * "Location services unavailable", with no retry, no explanation and no
+ * telemetry. Once a fix has been seen, an error does not change the status;
+ * the last position stands, and the graph's staleness rules decide what it is
+ * worth.
  */
 export function useLiveGeolocation(): LiveGeoState {
   const [status, setStatus] = useState<GeoStatus>("idle");
@@ -51,6 +62,7 @@ export function useLiveGeolocation(): LiveGeoState {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failuresRef = useRef(0);
   const hasFixRef = useRef(false);
+  const sawUnavailableRef = useRef(false);
   const reportedRef = useRef(new Set<number>());
 
   /** Cancel both the active watch and any pending restart. Idempotent. */
@@ -79,12 +91,21 @@ export function useLiveGeolocation(): LiveGeoState {
 
     teardown();
     failuresRef.current = 0;
+    sawUnavailableRef.current = false;
     setStatus("requesting");
     setError(null);
 
     const watch = () => {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
+          // A fix means this watch works. A restart still pending from an
+          // earlier error would tear it down, and on Chrome the replacement
+          // watch is first handed that same error again from the provider's
+          // cache — which schedules another restart, indefinitely.
+          if (retryTimerRef.current !== null) {
+            clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
+          }
           failuresRef.current = 0;
           hasFixRef.current = true;
           setStatus("watching");
@@ -105,15 +126,22 @@ export function useLiveGeolocation(): LiveGeoState {
             return;
           }
 
-          if (!hasFixRef.current) {
-            setStatus(err.code === err.TIMEOUT ? "error" : "unavailable");
+          const timedOut = err.code === err.TIMEOUT;
+          if (!timedOut) sawUnavailableRef.current = true;
+
+          // Before the first fix, say what failed — but a TIMEOUT never
+          // replaces an earlier POSITION_UNAVAILABLE. Restarted watches time
+          // out too, and the screen would otherwise flip between two titles,
+          // hiding the message that names the actual failure.
+          if (!hasFixRef.current && !(timedOut && sawUnavailableRef.current)) {
+            setStatus(timedOut ? "error" : "unavailable");
             setError(describeGeoError(err));
           }
 
-          // Chrome keeps a watch alive across this error (checked against
-          // CDP's emulated outage), but the spec does not promise it, so the
-          // watch is restarted rather than trusted. One restart pending at a
-          // time, however many errors arrive.
+          // The timed-out watch is still acquiring; leave it be.
+          if (timedOut) return;
+
+          // One restart pending at a time, however many errors arrive.
           if (retryTimerRef.current !== null) return;
           const delay = backoffDelayMs(failuresRef.current, RETRY_BACKOFF);
           failuresRef.current += 1;
@@ -146,9 +174,11 @@ const GEO_ERROR_NAMES: Record<number, string> = {
 };
 
 /**
- * The code's name, plus the browser's message when it gave one. Chrome
- * reports POSITION_UNAVAILABLE with an empty message, so the message alone
- * would leave the details panel blank on exactly the failure it is for.
+ * The code's name, plus the browser's message when it gave one. On Android,
+ * Chrome's POSITION_UNAVAILABLE carries the platform's reason ("Failed to
+ * request location updates: …"), which is what tells the failures apart; other
+ * paths, DevTools' emulated outage among them, send an empty message, and the
+ * name keeps the details panel from going blank then.
  */
 function describeGeoError(err: GeolocationPositionError): string {
   const name = GEO_ERROR_NAMES[err.code] ?? `code ${err.code}`;
@@ -180,6 +210,10 @@ function reportOnce(
         geo_permission: permission,
         geo_had_fix: String(hadFix),
         secure_context: String(window.isSecureContext),
+        // Tagged, not just attached: the message is what separates a Play
+        // services failure from an OS permission block, and Sentry can only
+        // group and search on tags. Tag values are capped at 200 characters.
+        geo_msg: err.message.slice(0, 200) || "(empty)",
       },
       extra: { message: err.message },
     });
