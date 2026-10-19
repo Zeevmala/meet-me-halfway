@@ -35,22 +35,28 @@ type GeoErrorStatus = Extract<GeoStatus, "denied" | "unavailable" | "error">;
 /** The location failures that replace the page, and what each one says. */
 const GEO_ERROR_SCREENS: Record<
   GeoErrorStatus,
-  { icon: string; title: string; instructions: string }
+  { icon: string; title: string; instructions: string; offerReload: boolean }
 > = {
+  // Reload as well as Try again: WebKit (every iOS browser) fixes a page's
+  // denial for the page's lifetime, so there only a reload asks again — and an
+  // installed PWA has no reload control of its own.
   denied: {
     icon: "\u{1F4CD}",
     title: "live.geoDenied",
     instructions: "live.geoDeniedInstructions",
+    offerReload: true,
   },
   unavailable: {
     icon: "\u{1F4CD}",
     title: "live.geoUnavailable",
     instructions: "live.geoUnavailableInstructions",
+    offerReload: false,
   },
   error: {
     icon: "\u23F2",
     title: "live.geoTimeout",
     instructions: "live.geoTimeoutInstructions",
+    offerReload: false,
   },
 };
 
@@ -308,6 +314,15 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           >
             {t("common.retry")}
           </button>
+          {screen.offerReload && (
+            <button
+              type="button"
+              className="live-btn live-btn-secondary"
+              onClick={() => window.location.reload()}
+            >
+              {t("app.reload")}
+            </button>
+          )}
           {/* Open, so a screenshot of this screen carries the reason. */}
           {geo.error && (
             <details className="live-error-details" open>

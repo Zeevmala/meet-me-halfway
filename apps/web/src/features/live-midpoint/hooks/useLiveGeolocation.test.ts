@@ -274,6 +274,66 @@ describe("useLiveGeolocation", () => {
       expect(result.current.status).toBe("watching");
     });
 
+    it("a restarted watch is not torn down by the replay of its cause", () => {
+      // The provider recovered, but this fresh request needs 35s to a fix —
+      // longer than any backoff delay. Restarting on the replayed error would
+      // kill each replacement before it could answer.
+      vi.useFakeTimers();
+      vi.mocked(navigator.geolocation.watchPosition).mockImplementation(
+        (success, error) => {
+          const id = ++nextWatchId;
+          watches.set(id, { success, error: error ?? null });
+          if (id > 1) {
+            setTimeout(() => sendError(2, "Failed to request", id), 0);
+            setTimeout(() => sendFix(32.08, 34.78, id), 35_000);
+          }
+          return id;
+        },
+      );
+      const { result } = renderHook(() => useLiveGeolocation());
+      act(() => result.current.start());
+      act(() => sendError(2, "Failed to request", 1));
+
+      act(() => vi.advanceTimersByTime(60_000));
+
+      expect(watchPositionCalls()).toBe(2);
+      expect(result.current.status).toBe("watching");
+    });
+
+    it("a restarted watch whose fresh request fails again is restarted", () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useLiveGeolocation());
+      act(() => result.current.start());
+      act(() => sendError(2, "Failed to request"));
+      act(() => vi.advanceTimersByTime(2_000));
+      expect(watchPositionCalls()).toBe(2);
+
+      // Replay first, then the fresh request's own failure.
+      act(() => {
+        sendError(2, "Failed to request");
+        sendError(2, "Failed to request");
+      });
+      act(() => vi.advanceTimersByTime(4_000));
+
+      expect(watchPositionCalls()).toBe(3);
+      expect(result.current.status).toBe("unavailable");
+    });
+
+    it("Try again after a mid-session denial still reports what fails next", () => {
+      const { result } = renderHook(() => useLiveGeolocation());
+      act(() => result.current.start());
+      act(() => sendFix(32.08, 34.78));
+      act(() => sendError(1, "User denied Geolocation"));
+      expect(result.current.status).toBe("denied");
+
+      act(() => result.current.start());
+      act(() => sendError(3, "Timeout expired"));
+
+      // Not stuck on "requesting" over the pre-denial position.
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("TIMEOUT: Timeout expired");
+    });
+
     it("keeps the last fix and status once a position has been seen", () => {
       vi.useFakeTimers();
       const { result } = renderHook(() => useLiveGeolocation());
@@ -341,8 +401,12 @@ describe("useLiveGeolocation", () => {
       act(() => vi.advanceTimersByTime(2_000));
       expect(watchPositionCalls()).toBe(2);
 
-      // Second consecutive failure waits ~4s, not 2s.
-      act(() => sendError(2, "x"));
+      // Second consecutive failure waits ~4s, not 2s. A restarted watch first
+      // gets the replay of the error that restarted it, then its own.
+      act(() => {
+        sendError(2, "x");
+        sendError(2, "x");
+      });
       act(() => vi.advanceTimersByTime(2_000));
       expect(watchPositionCalls()).toBe(2);
       act(() => vi.advanceTimersByTime(2_000));

@@ -270,6 +270,32 @@ describe("LiveMidpointPage", () => {
     },
   );
 
+  it("geo denied screen offers Reload, for WebKit's page-lifetime denial", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, search: "", reload });
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "denied",
+      position: null,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByText("app.reload"));
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unavailable", "error"] as const)(
+    "geo %s screen does not offer Reload",
+    (status) => {
+      mockGeo.mockReturnValue({ ...defaultGeo(), status, position: null });
+
+      renderPage();
+
+      expect(screen.queryByText("app.reload")).toBeNull();
+    },
+  );
+
   it("shows geo timeout error with retry button", () => {
     const startFn = vi.fn();
     mockGeo.mockReturnValue({

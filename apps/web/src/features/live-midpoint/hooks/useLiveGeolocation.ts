@@ -46,9 +46,9 @@ const RETRY_BACKOFF = { baseMs: 2_000, maxMs: 30_000, jitter: true } as const;
  *
  * The page used to treat POSITION_UNAVAILABLE as final: the whole app became
  * "Location services unavailable", with no retry, no explanation and no
- * telemetry. Once a fix has been seen, an error does not change the status;
- * the last position stands, and the graph's staleness rules decide what it is
- * worth.
+ * telemetry. Once a fix has been seen, a non-fatal error does not change the
+ * status and the last position stands. (Presence keeps re-publishing that
+ * position with a fresh timestamp, so peers see it as live, not stale.)
  */
 export function useLiveGeolocation(): LiveGeoState {
   const [status, setStatus] = useState<GeoStatus>("idle");
@@ -92,16 +92,27 @@ export function useLiveGeolocation(): LiveGeoState {
     teardown();
     failuresRef.current = 0;
     sawUnavailableRef.current = false;
+    // Try again must start clean. Left set, a fix from before a denial kept
+    // every later error from reaching the screen: status sat on "requesting"
+    // over the old position, with no message and no button.
+    hasFixRef.current = false;
     setStatus("requesting");
     setError(null);
 
-    const watch = () => {
+    const watch = (restarted: boolean) => {
+      // Chrome hands a new watch the provider's cached error before any fresh
+      // result, so a restarted watch always opens with a replay of the code 2
+      // that caused the restart. Restarting on that replay tore down every
+      // replacement before its fresh request could answer, so a provider that
+      // had recovered but needed longer than the backoff never got a fix. A
+      // restarted watch therefore restarts only on a second code 2: a fresh
+      // request that fails reports again.
+      let replayExpected = restarted;
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
-          // A fix means this watch works. A restart still pending from an
-          // earlier error would tear it down, and on Chrome the replacement
-          // watch is first handed that same error again from the provider's
-          // cache — which schedules another restart, indefinitely.
+          replayExpected = false;
+          // A fix means this watch works; a restart still pending from an
+          // earlier error would only tear it down and restart the provider.
           if (retryTimerRef.current !== null) {
             clearTimeout(retryTimerRef.current);
             retryTimerRef.current = null;
@@ -141,6 +152,11 @@ export function useLiveGeolocation(): LiveGeoState {
           // The timed-out watch is still acquiring; leave it be.
           if (timedOut) return;
 
+          if (replayExpected) {
+            replayExpected = false;
+            return;
+          }
+
           // One restart pending at a time, however many errors arrive.
           if (retryTimerRef.current !== null) return;
           const delay = backoffDelayMs(failuresRef.current, RETRY_BACKOFF);
@@ -151,14 +167,14 @@ export function useLiveGeolocation(): LiveGeoState {
               navigator.geolocation.clearWatch(watchIdRef.current);
               watchIdRef.current = null;
             }
-            watch();
+            watch(true);
           }, delay);
         },
         GEO_OPTIONS,
       );
     };
 
-    watch();
+    watch(false);
   }, [teardown]);
 
   // Cleanup on unmount
