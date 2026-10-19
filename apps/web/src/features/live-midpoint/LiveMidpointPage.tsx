@@ -307,22 +307,24 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           <div className="live-error-icon">{screen.icon}</div>
           <div className="live-error-title">{t(screen.title)}</div>
           <div className="live-error-message">{t(screen.instructions)}</div>
-          <button
-            type="button"
-            className="live-btn live-retry-btn"
-            onClick={() => geo.start()}
-          >
-            {t("common.retry")}
-          </button>
-          {screen.offerReload && (
+          <div className="live-error-actions">
             <button
               type="button"
-              className="live-btn live-btn-secondary"
-              onClick={() => window.location.reload()}
+              className="live-btn live-btn-primary"
+              onClick={() => geo.start()}
             >
-              {t("app.reload")}
+              {t("common.retry")}
             </button>
-          )}
+            {screen.offerReload && (
+              <button
+                type="button"
+                className="live-btn live-btn-secondary"
+                onClick={() => window.location.reload()}
+              >
+                {t("app.reload")}
+              </button>
+            )}
+          </div>
           {/* Open, so a screenshot of this screen carries the reason. */}
           {geo.error && (
             <details className="live-error-details" open>

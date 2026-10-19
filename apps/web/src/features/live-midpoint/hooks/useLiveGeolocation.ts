@@ -25,6 +25,14 @@ const GEO_OPTIONS: PositionOptions = {
 const RETRY_BACKOFF = { baseMs: 2_000, maxMs: 30_000, jitter: true } as const;
 
 /**
+ * Restart delay for a restarted watch's opening code 2, which on Chrome 150+
+ * is a replay of the error that caused the restart: long enough for a slow
+ * fresh request to answer, short enough that a browser without the replay —
+ * where that error is the fresh request's real failure — still retries.
+ */
+const REPLAY_FUSE = { baseMs: 30_000, maxMs: 120_000 } as const;
+
+/**
  * Continuous geolocation streaming via `watchPosition`.
  * Keeps streaming until explicitly stopped or the component unmounts.
  *
@@ -60,6 +68,7 @@ export function useLiveGeolocation(): LiveGeoState {
   const [error, setError] = useState<string | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longFuseRef = useRef(false);
   const failuresRef = useRef(0);
   const hasFixRef = useRef(false);
   const sawUnavailableRef = useRef(false);
@@ -71,6 +80,7 @@ export function useLiveGeolocation(): LiveGeoState {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
+    longFuseRef.current = false;
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
@@ -100,13 +110,15 @@ export function useLiveGeolocation(): LiveGeoState {
     setError(null);
 
     const watch = (restarted: boolean) => {
-      // Chrome hands a new watch the provider's cached error before any fresh
-      // result, so a restarted watch always opens with a replay of the code 2
-      // that caused the restart. Restarting on that replay tore down every
-      // replacement before its fresh request could answer, so a provider that
-      // had recovered but needed longer than the backoff never got a fix. A
-      // restarted watch therefore restarts only on a second code 2: a fresh
-      // request that fails reports again.
+      // Chrome 150+ on Android hands a new watch the provider's cached error
+      // before any fresh result, so a restarted watch opens with a replay of
+      // the code 2 that caused the restart. Restarting on that replay at the
+      // normal backoff tore down every replacement before its fresh request
+      // could answer. So the opening code 2 of a restarted watch only arms a
+      // long fuse (REPLAY_FUSE); a fix cancels it, and a second code 2 — the
+      // fresh request failing — swaps it for the normal backoff. Where there
+      // is no replay (older Chromium, WebKit) the opening code 2 is real, and
+      // the fuse still retries it.
       let replayExpected = restarted;
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
@@ -117,6 +129,7 @@ export function useLiveGeolocation(): LiveGeoState {
             clearTimeout(retryTimerRef.current);
             retryTimerRef.current = null;
           }
+          longFuseRef.current = false;
           failuresRef.current = 0;
           hasFixRef.current = true;
           setStatus("watching");
@@ -152,17 +165,23 @@ export function useLiveGeolocation(): LiveGeoState {
           // The timed-out watch is still acquiring; leave it be.
           if (timedOut) return;
 
-          if (replayExpected) {
-            replayExpected = false;
-            return;
+          const long = replayExpected;
+          replayExpected = false;
+          if (retryTimerRef.current !== null) {
+            // One restart pending at a time, however many errors arrive —
+            // unless a fresh failure lands on a fuse armed for a replay.
+            if (!longFuseRef.current) return;
+            clearTimeout(retryTimerRef.current);
           }
-
-          // One restart pending at a time, however many errors arrive.
-          if (retryTimerRef.current !== null) return;
-          const delay = backoffDelayMs(failuresRef.current, RETRY_BACKOFF);
-          failuresRef.current += 1;
+          // The long fuse waits for an answer; it is not a failure, so it does
+          // not advance the backoff.
+          const delay = long
+            ? backoffDelayMs(failuresRef.current, REPLAY_FUSE)
+            : backoffDelayMs(failuresRef.current++, RETRY_BACKOFF);
+          longFuseRef.current = long;
           retryTimerRef.current = setTimeout(() => {
             retryTimerRef.current = null;
+            longFuseRef.current = false;
             if (watchIdRef.current !== null) {
               navigator.geolocation.clearWatch(watchIdRef.current);
               watchIdRef.current = null;
