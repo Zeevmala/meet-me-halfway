@@ -131,7 +131,9 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
         {retryable && (
           <button
             type="button"
-            className="live-btn live-btn-primary live-retry-btn"
+            // In an in-app browser, opening the real one is the action that
+            // helps; a retry there usually fails the same way.
+            className={`live-btn ${showInAppHint ? "live-btn-secondary" : "live-btn-primary"} live-retry-btn`}
             onClick={() => window.location.reload()}
           >
             {t("common.retry")}

@@ -365,6 +365,57 @@ describe("useLiveGeolocation", () => {
       expect(result.current.position).toEqual({ lat: 40, lng: 35 });
     });
 
+    // Chrome 150+ provider: a failed request stays failed for the watch's
+    // life; every new watch is first handed the cached error, and its fresh
+    // request then answers after `latency`.
+    function chrome150(latency: number, firstWatch: (id: number) => void) {
+      vi.mocked(navigator.geolocation.watchPosition).mockImplementation(
+        (success, error) => {
+          const id = ++nextWatchId;
+          watches.set(id, { success, error: error ?? null });
+          if (id === 1) {
+            firstWatch(id);
+          } else {
+            setTimeout(() => sendError(2, "Failed to request", id), 0);
+            setTimeout(() => sendFix(40, 35, id), latency);
+          }
+          return id;
+        },
+      );
+    }
+
+    it.each([70_000, 150_000])(
+      "on Chrome 150+, a fresh request needing %ims after one failure still gets its fix",
+      (latency) => {
+        // A fuse that never grew tore each such request down at 60s, forever.
+        vi.useFakeTimers();
+        chrome150(latency, (id) =>
+          setTimeout(() => sendError(2, "Failed to request", id), 0),
+        );
+        const { result } = renderHook(() => useLiveGeolocation());
+        act(() => result.current.start());
+
+        act(() => vi.advanceTimersByTime(600_000));
+
+        expect(result.current.status).toBe("watching");
+        expect(result.current.position).toEqual({ lat: 40, lng: 35 });
+      },
+    );
+
+    it("on Chrome 150+, a slow re-acquisition after a mid-session failure lands", () => {
+      vi.useFakeTimers();
+      chrome150(70_000, (id) => {
+        setTimeout(() => sendFix(32.08, 34.78, id), 1_000);
+        setTimeout(() => sendError(2, "Failed to request", id), 60_000);
+      });
+      const { result } = renderHook(() => useLiveGeolocation());
+      act(() => result.current.start());
+
+      act(() => vi.advanceTimersByTime(600_000));
+
+      expect(result.current.position).toEqual({ lat: 40, lng: 35 });
+    });
+
     it("Try again after a mid-session denial still reports what fails next", () => {
       const { result } = renderHook(() => useLiveGeolocation());
       act(() => result.current.start());

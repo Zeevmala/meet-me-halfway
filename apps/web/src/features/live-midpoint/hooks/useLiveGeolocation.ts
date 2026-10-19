@@ -28,9 +28,12 @@ const RETRY_BACKOFF = { baseMs: 2_000, maxMs: 30_000, jitter: true } as const;
  * Restart delay for a restarted watch's opening code 2, which on Chrome 150+
  * is a replay of the error that caused the restart: long enough for a slow
  * fresh request to answer, short enough that a browser without the replay —
- * where that error is the fresh request's real failure — still retries.
+ * where that error is the fresh request's real failure — still retries. It
+ * doubles each time it expires without a fix (60s → 300s), so on Chrome a
+ * request slower than the fuse is eventually allowed to finish; a fixed fuse
+ * tore every such request down at the same point, forever.
  */
-const REPLAY_FUSE = { baseMs: 30_000, maxMs: 120_000 } as const;
+const REPLAY_FUSE = { baseMs: 60_000, maxMs: 300_000 } as const;
 
 /**
  * Continuous geolocation streaming via `watchPosition`.
@@ -69,6 +72,7 @@ export function useLiveGeolocation(): LiveGeoState {
   const watchIdRef = useRef<number | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longFuseRef = useRef(false);
+  const fusesExpiredRef = useRef(0);
   const failuresRef = useRef(0);
   const hasFixRef = useRef(false);
   const sawUnavailableRef = useRef(false);
@@ -101,6 +105,7 @@ export function useLiveGeolocation(): LiveGeoState {
 
     teardown();
     failuresRef.current = 0;
+    fusesExpiredRef.current = 0;
     sawUnavailableRef.current = false;
     // Try again must start clean. Left set, a fix from before a denial kept
     // every later error from reaching the screen: status sat on "requesting"
@@ -131,6 +136,7 @@ export function useLiveGeolocation(): LiveGeoState {
           }
           longFuseRef.current = false;
           failuresRef.current = 0;
+          fusesExpiredRef.current = 0;
           hasFixRef.current = true;
           setStatus("watching");
           setPosition({
@@ -173,14 +179,15 @@ export function useLiveGeolocation(): LiveGeoState {
             if (!longFuseRef.current) return;
             clearTimeout(retryTimerRef.current);
           }
-          // The long fuse waits for an answer; it is not a failure, so it does
-          // not advance the backoff.
+          // The long fuse waits for an answer; it is not a failure, so it
+          // grows on its own count instead of advancing the backoff.
           const delay = long
-            ? backoffDelayMs(failuresRef.current, REPLAY_FUSE)
+            ? backoffDelayMs(fusesExpiredRef.current, REPLAY_FUSE)
             : backoffDelayMs(failuresRef.current++, RETRY_BACKOFF);
           longFuseRef.current = long;
           retryTimerRef.current = setTimeout(() => {
             retryTimerRef.current = null;
+            if (longFuseRef.current) fusesExpiredRef.current += 1;
             longFuseRef.current = false;
             if (watchIdRef.current !== null) {
               navigator.geolocation.clearWatch(watchIdRef.current);

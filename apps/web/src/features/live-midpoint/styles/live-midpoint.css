@@ -331,7 +331,7 @@
 .live-retry-btn {
   flex: none;
   margin-block-start: 16px;
-  min-width: 160px;
+  min-inline-size: 160px;
 }
 
 .live-btn--whatsapp {
@@ -572,6 +572,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* Centred content taller than a small phone overflowed both ends of this
+     box, and .live-page clips, so the top and bottom were unreachable. safe
+     centring keeps the top in view and the box scrolls; browsers without
+     "safe" keep the line above. */
+  justify-content: safe center;
+  overflow-y: auto;
   text-align: center;
   padding: 32px;
   background: var(--live-bg);
