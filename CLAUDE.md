@@ -68,7 +68,7 @@ apps/web/src/
 │   │   ├── types.ts                   # SlotVector, GraphSources, RouteInfo, TravelProfile
 │   │   └── useGraph.ts                # useSyncExternalStore bindings
 │   ├── hooks/                         # source adapters — event streams, not graph nodes
-│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
+│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper; only PERMISSION_DENIED is terminal, the rest restart with backoff
 │   │   └── useLiveSession.ts          # RTDB create/join/listen; returns Result, takes an AbortSignal
 │   └── lib/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
