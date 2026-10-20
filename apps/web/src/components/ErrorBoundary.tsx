@@ -23,7 +23,7 @@ function ErrorFallback({ error }: { error: Error | null }) {
         <div className="live-error-message">{t("app.errorMessage")}</div>
         <button
           type="button"
-          className="live-btn live-retry-btn"
+          className="live-btn live-btn-primary live-retry-btn"
           onClick={() => window.location.reload()}
         >
           {t("app.reload")}

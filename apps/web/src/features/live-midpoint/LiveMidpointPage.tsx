@@ -1,9 +1,18 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
+import type { GeoStatus } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
@@ -20,6 +29,36 @@ import "./styles/live-midpoint.css";
 
 // Lazy-load VenueListCard — only needed when Places API key is configured
 const VenueListCard = lazy(() => import("./components/VenueListCard"));
+
+type GeoErrorStatus = Extract<GeoStatus, "denied" | "unavailable" | "error">;
+
+/** The location failures that replace the page, and what each one says. */
+const GEO_ERROR_SCREENS: Record<
+  GeoErrorStatus,
+  { icon: string; title: string; instructions: string; offerReload: boolean }
+> = {
+  // Reload as well as Try again: WebKit (every iOS browser) fixes a page's
+  // denial for the page's lifetime, so there only a reload asks again — and an
+  // installed PWA has no reload control of its own.
+  denied: {
+    icon: "\u{1F4CD}",
+    title: "live.geoDenied",
+    instructions: "live.geoDeniedInstructions",
+    offerReload: true,
+  },
+  unavailable: {
+    icon: "\u{1F4CD}",
+    title: "live.geoUnavailable",
+    instructions: "live.geoUnavailableInstructions",
+    offerReload: false,
+  },
+  error: {
+    icon: "\u23F2",
+    title: "live.geoTimeout",
+    instructions: "live.geoTimeoutInstructions",
+    offerReload: false,
+  },
+};
 
 /** Read ?code= from URL query string. */
 function getCodeFromURL(): string | null {
@@ -179,20 +218,33 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return out;
   }, [slots, routes]);
 
-  // ── Initialize: start geolocation, then create or join session ──
+  // ── Initialize: stream GPS, and create or join the session ──
+  // Both effects are plain start/stop pairs with no run-once guard. They used
+  // to share one effect behind an `initRef` guard, which StrictMode — on in
+  // every `npm run dev` — defeats: its mount → unmount → mount cycle ran the
+  // geolocation hook's cleanup (clearWatch) and aborted the handshake, and the
+  // guard then stopped the second mount restarting either. Local dev has
+  // never streamed a position since 05365d9 for exactly that reason.
+  const { start: startGeo, stop: stopGeo } = geo;
+  useEffect(() => {
+    startGeo();
+    return stopGeo;
+  }, [startGeo, stopGeo]);
+
+  // Read once per mount, not inside the effect: createSession rewrites the URL
+  // to ?code=<new code>, so a re-run that read it again would try to *join*
+  // the session its aborted predecessor never wrote.
+  const [urlCode] = useState(getCodeFromURL);
+
   // The handshake returns a Result rather than throwing. It used to throw into
   // this effect with no `.catch()`, so every failed join raised an unhandled
   // rejection on top of the Sentry event the hook already recorded. The
-  // controller cancels the retry loop if we unmount mid-handshake.
-  const initRef = useRef(false);
+  // controller cancels the retry loop if we unmount mid-handshake; both
+  // handshakes check it before their first write, so an aborted run leaves
+  // nothing behind for the next one to trip over.
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
     const controller = new AbortController();
-    geo.start();
 
-    const urlCode = getCodeFromURL();
     void (async () => {
       const result =
         urlCode !== null
@@ -200,13 +252,13 @@ function LiveMidpointInner({ uid }: { uid: string }) {
           : await session.createSession(controller.signal);
       // The failure is already reflected in session state, which drives the
       // error panel below; nothing further to do but leave a breadcrumb.
-      if (!result.ok) {
+      if (!result.ok && !controller.signal.aborted) {
         console.warn("[live] session handshake failed:", result.error.code);
       }
     })();
 
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one handshake per mount
   }, []);
 
   // Own location no longer needs piping to Firebase from here: the graph's
@@ -239,50 +291,47 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   }, []);
 
   // ── Error states ──
-  if (geo.status === "denied") {
+  // Every location failure gets the same way out. The denied screen used to
+  // have none, and it is where a phone with its Location toggle off lands:
+  // Chrome reports that as PERMISSION_DENIED and offers its "turn on location"
+  // dialog only for a request made inside a tap, so a reload never recovers.
+  if (
+    geo.status === "denied" ||
+    geo.status === "unavailable" ||
+    geo.status === "error"
+  ) {
+    const screen = GEO_ERROR_SCREENS[geo.status];
     return (
       <div className="live-page">
         <div className="live-error">
-          <div className="live-error-icon">&#128205;</div>
-          <div className="live-error-title">{t("live.geoDenied")}</div>
-          <div className="live-error-message">
-            {t("live.geoDeniedInstructions")}
+          <div className="live-error-icon">{screen.icon}</div>
+          <div className="live-error-title">{t(screen.title)}</div>
+          <div className="live-error-message">{t(screen.instructions)}</div>
+          <div className="live-error-actions">
+            <button
+              type="button"
+              className="live-btn live-btn-primary"
+              onClick={() => geo.start()}
+            >
+              {t("common.retry")}
+            </button>
+            {screen.offerReload && (
+              <button
+                type="button"
+                className="live-btn live-btn-secondary"
+                onClick={() => window.location.reload()}
+              >
+                {t("app.reload")}
+              </button>
+            )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (geo.status === "unavailable") {
-    return (
-      <div className="live-page">
-        <div className="live-error">
-          <div className="live-error-icon">&#128205;</div>
-          <div className="live-error-title">{t("live.geoUnavailable")}</div>
-          <div className="live-error-message">
-            {t("live.geoUnavailableInstructions")}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (geo.status === "error") {
-    return (
-      <div className="live-page">
-        <div className="live-error">
-          <div className="live-error-icon">&#9202;</div>
-          <div className="live-error-title">{t("live.geoTimeout")}</div>
-          <div className="live-error-message">
-            {t("live.geoTimeoutInstructions")}
-          </div>
-          <button
-            type="button"
-            className="live-btn live-retry-btn"
-            onClick={() => geo.start()}
-          >
-            {t("common.retry")}
-          </button>
+          {/* Open, so a screenshot of this screen carries the reason. */}
+          {geo.error && (
+            <details className="live-error-details" open>
+              <summary>{t("live.errorDetails")}</summary>
+              <code>{geo.error}</code>
+            </details>
+          )}
         </div>
       </div>
     );

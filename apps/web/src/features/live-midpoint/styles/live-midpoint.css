@@ -326,8 +326,12 @@
   transform: scale(0.97);
 }
 
+/* flex: none — .live-btn's flex: 1 is meant for button rows; directly inside
+   the fixed-height .live-error column it stretched the button vertically. */
 .live-retry-btn {
-  margin-top: 16px;
+  flex: none;
+  margin-block-start: 16px;
+  min-inline-size: 160px;
 }
 
 .live-btn--whatsapp {
@@ -568,6 +572,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* Centred content taller than a small phone overflowed both ends of this
+     box, and .live-page clips, so the top and bottom were unreachable. safe
+     centring keeps the top in view and the box scrolls; browsers without
+     "safe" keep the line above. */
+  justify-content: safe center;
+  overflow-y: auto;
   text-align: center;
   padding: 32px;
   background: var(--live-bg);
@@ -615,6 +625,17 @@
 .live-error-callout-buttons {
   display: flex;
   gap: 8px;
+}
+
+/* Try again + Reload on the location error screens. A row, so .live-btn's
+   flex: 1 shares the width instead of stretching each button down the
+   column. */
+.live-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-block-start: 16px;
+  inline-size: 100%;
+  max-inline-size: 320px;
 }
 
 .live-btn-primary {

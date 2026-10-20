@@ -22,7 +22,7 @@ npx vitest run src/features/live-midpoint/lib/geo-math.test.ts   # single test f
 npx vitest run -t "midpoint"                                      # tests matching name pattern
 ```
 
-**CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check) and `typecheck` run in parallel → `test` (vitest) → `build` → `lighthouse` + `e2e` → `deploy` (main only). All must pass. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
+**CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check), `typecheck` and `rules` run in parallel; `test` (vitest) follows `lint` and `typecheck`; `build` and `e2e` follow all four, **in parallel**; `lighthouse` follows `build`; `deploy` (main only) follows everything. All must pass. `e2e` deliberately does not depend on `build`: it builds its own dist from fake env vars and never consumes the `web-dist` artifact, so that edge carries no data — it would only inherit `build`'s Dependabot skip (secrets are withheld from Dependabot PRs), and dependency bumps would again merge with no e2e and no `vite build`, as they did until `#83`. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
 
 ## Architecture
 
@@ -68,7 +68,7 @@ apps/web/src/
 │   │   ├── types.ts                   # SlotVector, GraphSources, RouteInfo, TravelProfile
 │   │   └── useGraph.ts                # useSyncExternalStore bindings
 │   ├── hooks/                         # source adapters — event streams, not graph nodes
-│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
+│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper; only PERMISSION_DENIED is terminal, the rest restart with backoff
 │   │   └── useLiveSession.ts          # RTDB create/join/listen; returns Result, takes an AbortSignal
 │   └── lib/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
@@ -103,7 +103,9 @@ apps/web/src/
 
 Tests are co-located as `*.test.ts` / `*.test.tsx` next to source files. Test environment: jsdom with vitest globals.
 
-Security-rules tests are the exception: they live in `apps/web/rules/`, run in a node environment against the RTDB emulator via `vitest.rules.config.ts`, and are invoked with `npm run test:rules`. Note that `tsconfig.json` currently **excludes** `*.test.ts` from `tsc`, so type errors in test files do not fail `npm run tsc`.
+Security-rules tests are the exception: they live in `apps/web/rules/`, run in a node environment against the RTDB emulator via `vitest.rules.config.ts`, and are invoked with `npm run test:rules`.
+
+Tests are typechecked. Vitest strips types without checking them, so `tsc` is the only gate that reads a test's types — excluding test files is what let 33 errors accumulate unseen before `#83`. `npm run tsc` runs two projects: `tsconfig.json` (browser — all of `src/`, tests included, no `@types/node`) and `tsconfig.node.json` (`rules/`, the Vite/Vitest/Playwright configs, and `src/lib/register-sw.test.ts`, which reads `public/sw.js` off disk). Node-side files go in the second project's `include`; never add `"node"` to the browser project's `types`, or `process.env` and `Buffer` will typecheck inside a React component.
 
 ## Firebase RTDB Schema
 
