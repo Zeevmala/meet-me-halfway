@@ -29,6 +29,7 @@ Thumbs.db
 # Testing
 .pytest_cache/
 .coverage
+coverage/
 htmlcov/
 .mypy_cache/
 
@@ -56,9 +57,12 @@ apps/web/test-results/
 # Legacy API artifacts (compiled-only, no source)
 apps/api/
 
-# Claude Code (keep commands/ tracked for team-shared skills)
+# Claude Code (keep commands/, the shared settings and their hooks tracked;
+# settings.local.json and the hook's .verify-cache.json stay local)
 .claude/*
 !.claude/commands/
+!.claude/settings.json
+!.claude/hooks/
 
 # Firebase emulator logs
 firebase-debug.log
