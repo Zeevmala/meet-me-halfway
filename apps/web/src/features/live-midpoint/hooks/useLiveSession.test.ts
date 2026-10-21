@@ -31,17 +31,20 @@ vi.mock("firebase/database", () => ({
   get: (r: unknown) => mockGet(r),
 }));
 
-// ── Mock firebase/app-check ──
-const mockGetToken = vi.fn();
-vi.mock("firebase/app-check", () => ({
-  getToken: (...args: unknown[]) => mockGetToken(...args),
-}));
-
-// ── Mock useFirebase (appCheck is mutable so attestation tests can opt in) ──
+// ── Mock useFirebase ──
+// Attestation is primed once at the composition root now, so the hook awaits
+// a shared promise rather than calling `getToken` per handshake. Both are
+// mutable and read inside the accessor so a case can vary them.
 const mockDb = { _db: true };
 let mockAppCheck: object | null = null;
+let mockAppCheckReady: Promise<{ ok: boolean; reason: string }>;
 vi.mock("../../../hooks/useFirebase", () => ({
-  useFirebase: () => ({ app: {}, db: mockDb, appCheck: mockAppCheck }),
+  useFirebase: () => ({
+    app: {},
+    db: mockDb,
+    appCheck: mockAppCheck,
+    appCheckReady: mockAppCheckReady,
+  }),
 }));
 
 // ── Mock the injected services (the hook only reads the presence writer) ──
@@ -101,7 +104,7 @@ beforeEach(() => {
   mockOnDisconnectRemove.mockResolvedValue(undefined);
   mockPresenceRemove.mockReset();
   mockAppCheck = null;
-  mockGetToken.mockResolvedValue({ token: "test-token" });
+  mockAppCheckReady = Promise.resolve({ ok: true, reason: "token" });
 
   // Mock window.location and history
   vi.stubGlobal("location", { href: "http://localhost:5173/", search: "" });
@@ -514,17 +517,16 @@ describe("useLiveSession", () => {
     });
   });
 
-  describe("App Check attestation classification", () => {
-    it("does NOT relabel an opaque join failure when the token fetch fails", async () => {
+  describe("App Check attestation", () => {
+    it("does NOT relabel an opaque join failure when attestation failed", async () => {
       // Regression: this used to promote to JOIN_PERMISSION_DENIED, telling
       // the user their browser was blocking storage or attestation. With App
       // Check reporting ~89% of RTDB requests unverified, that promotion fired
       // on nearly every device and hid the real cause — it took a three-day
       // outage to notice the rules were simply stale. A failed attestation is
       // telemetry, not a verdict about the user's browser.
-      vi.useFakeTimers({ shouldAdvanceTime: true });
       mockAppCheck = { _appCheck: true };
-      mockGetToken.mockRejectedValue(new Error("recaptcha blocked"));
+      mockAppCheckReady = Promise.resolve({ ok: false, reason: "error" });
       // Opaque error: matches neither permission nor network patterns,
       // so classifyJoinError returns the catch-all JOIN_FAILED.
       mockGet.mockRejectedValue(new Error("Something went wrong"));
@@ -532,47 +534,16 @@ describe("useLiveSession", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        const join = result.current.joinSession("XYZ789", live()).catch(() => {
-          // joinSession rethrows after classifying — expected here
-        });
-        await vi.runAllTimersAsync();
-        await join;
+        await result.current.joinSession("XYZ789", live());
       });
 
       expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("JOIN_FAILED");
-      expect(mockGetToken).toHaveBeenCalledWith(mockAppCheck, false);
-
-      vi.useRealTimers();
     });
 
-    it("keeps the generic JOIN_FAILED when the token was obtained", async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+    it("keeps the generic JOIN_FAILED when attestation succeeded", async () => {
       mockAppCheck = { _appCheck: true };
       mockGet.mockRejectedValue(new Error("Something went wrong"));
-
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
-      await act(async () => {
-        const join = result.current.joinSession("XYZ789", live()).catch(() => {
-          // rethrow expected
-        });
-        await vi.runAllTimersAsync();
-        await join;
-      });
-
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("JOIN_FAILED");
-
-      vi.useRealTimers();
-    });
-
-    it("never requests a token when App Check is not configured", async () => {
-      mockSession({
-        created: Date.now(),
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
-      });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -580,7 +551,61 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("JOIN_FAILED");
+    });
+
+    it("waits for the shared attestation promise before touching RTDB", async () => {
+      // The barrier that keeps the handshake behind attestation. It is shared
+      // with `useNetworkStatus`, so one reCAPTCHA round trip covers the whole
+      // page rather than one per handshake as the old 5s race did.
+      let settle!: (o: { ok: boolean; reason: string }) => void;
+      mockAppCheckReady = new Promise((resolve) => {
+        settle = resolve;
+      });
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let joined = false;
+      await act(async () => {
+        void result.current.joinSession("XYZ789", live()).then(() => {
+          joined = true;
+        });
+      });
+
+      expect(mockGet).not.toHaveBeenCalled();
+      expect(joined).toBe(false);
+
+      await act(async () => {
+        settle({ ok: true, reason: "token" });
+      });
+
+      expect(joined).toBe(true);
+      expect(result.current.ownIndex).toBe(1);
+    });
+
+    it("still completes the handshake when attestation never succeeds", async () => {
+      // Unattested traffic is fine while enforcement is off, and blocking the
+      // join on a blocked reCAPTCHA would be strictly worse than proceeding.
+      mockAppCheck = { _appCheck: true };
+      mockAppCheckReady = Promise.resolve({ ok: false, reason: "timeout" });
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.status).toBe("ready");
+      expect(result.current.ownIndex).toBe(1);
     });
   });
 

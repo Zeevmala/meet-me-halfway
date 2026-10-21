@@ -88,6 +88,23 @@ describe("SessionErrorPanel", () => {
     expect(screen.getByRole("button", { name: "live.copyLink" })).toBeTruthy();
   });
 
+  it("keeps Try again primary in a regular browser, secondary in an in-app one", () => {
+    render(<SessionErrorPanel errorCode="JOIN_FAILED" errorDetails={null} />);
+    expect(
+      screen.getByRole("button", { name: "common.retry" }).className,
+    ).toContain("live-btn-primary");
+  });
+
+  it("does not let Try again compete with Open in browser in WhatsApp", () => {
+    setUA(
+      "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 WhatsApp/2.24.5.78 A",
+    );
+    render(<SessionErrorPanel errorCode="JOIN_FAILED" errorDetails={null} />);
+    const retry = screen.getByRole("button", { name: "common.retry" });
+    expect(retry.className).toContain("live-btn-secondary");
+    expect(retry.className).not.toContain("live-btn-primary");
+  });
+
   it("does not show the in-app callout for non-join error codes even in WhatsApp", () => {
     setUA(
       "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 WhatsApp/2.24.5.78 A",

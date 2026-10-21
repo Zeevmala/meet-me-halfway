@@ -22,7 +22,7 @@ npx vitest run src/features/live-midpoint/lib/geo-math.test.ts   # single test f
 npx vitest run -t "midpoint"                                      # tests matching name pattern
 ```
 
-**CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check) and `typecheck` run in parallel → `test` (vitest) → `build` → `lighthouse` + `e2e` → `deploy` (main only). All must pass. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
+**CI pipeline** (`.github/workflows/web.yml`): `lint` (npm audit → eslint → prettier check), `typecheck` and `rules` run in parallel; `test` (vitest) follows `lint` and `typecheck`; `build` and `e2e` follow all four, **in parallel**; `lighthouse` follows `build`; `deploy` (main only) follows everything. All must pass. `e2e` deliberately does not depend on `build`: it builds its own dist from fake env vars and never consumes the `web-dist` artifact, so that edge carries no data — it would only inherit `build`'s Dependabot skip (secrets are withheld from Dependabot PRs), and dependency bumps would again merge with no e2e and no `vite build`, as they did until `#83`. ESLint runs with `--max-warnings=0`, so `react-hooks/exhaustive-deps` and the custom RTL `no-restricted-syntax` rule — both `warn` — fail CI.
 
 ## Architecture
 
@@ -30,7 +30,7 @@ npx vitest run -t "midpoint"                                      # tests matchi
 - **Vite 6** with manual chunks: react, firebase, mapbox, i18n
 - **Composition root** — `lib/config.ts` is the only module reading `VITE_*` application config; `lib/services.ts` wires Firebase, the API clients and the graph ports once in `main.tsx` and passes them down via `ServicesProvider`. Nothing below that constructs a Firebase handle or reads a credential
 - **Firebase Anonymous Auth** — `lib/firebase-factory.ts` builds auth with an explicit persistence fallback chain (IndexedDB → localStorage → in-memory) so strict-privacy browsers still sign in; `signInAnonymously()` on app init, UID as participant key. Failures classify to typed `AuthErrorCode` (network retried 3×, storage-blocked terminal). Tradeoff: under in-memory persistence a reload mints a new anonymous UID, consuming a fresh write-once slot claim
-- **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation)
+- **Firebase App Check** — reCAPTCHA Enterprise attestation (optional, graceful degradation). Primed at the composition root and exposed as `appCheckReady`, a promise that never rejects. **Anything that can open the RTDB connection awaits it first**: `getDatabase` does not connect, RTDB dials on its first subscription and attaches the token when it establishes the socket, so a subscription that beats the first token leaves that connection unattested for its lifetime. That race — not a misconfiguration — is what held attestation at 11% verified. `useNetworkStatus`'s `.info/connected` listener is the earliest such subscription and is gated accordingly; the wait is bounded by `APP_CHECK_TIMEOUT_MS` and then proceeds unattested, because degrading beats blocking the app on a blocked reCAPTCHA. The outcome (`token` / `timeout` / `error` / `no-appcheck`, plus token latency) is tagged on Sentry, since the console's verified/unverified split cannot tell those apart
 - **Firebase Realtime Database** — peer-to-peer location sync, auth-enforced security rules in `infra/database.rules.json`
 - **Mapbox GL JS 3.x** — dark-v11 basemap, pre-bundled via `optimizeDeps.include`
 - **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
@@ -68,7 +68,7 @@ apps/web/src/
 │   │   ├── types.ts                   # SlotVector, GraphSources, RouteInfo, TravelProfile
 │   │   └── useGraph.ts                # useSyncExternalStore bindings
 │   ├── hooks/                         # source adapters — event streams, not graph nodes
-│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper with error handling
+│   │   ├── useLiveGeolocation.ts      # watchPosition wrapper; only PERMISSION_DENIED is terminal, the rest restart with backoff
 │   │   └── useLiveSession.ts          # RTDB create/join/listen; returns Result, takes an AbortSignal
 │   └── lib/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
@@ -103,7 +103,9 @@ apps/web/src/
 
 Tests are co-located as `*.test.ts` / `*.test.tsx` next to source files. Test environment: jsdom with vitest globals.
 
-Security-rules tests are the exception: they live in `apps/web/rules/`, run in a node environment against the RTDB emulator via `vitest.rules.config.ts`, and are invoked with `npm run test:rules`. Note that `tsconfig.json` currently **excludes** `*.test.ts` from `tsc`, so type errors in test files do not fail `npm run tsc`.
+Security-rules tests are the exception: they live in `apps/web/rules/`, run in a node environment against the RTDB emulator via `vitest.rules.config.ts`, and are invoked with `npm run test:rules`.
+
+Tests are typechecked. Vitest strips types without checking them, so `tsc` is the only gate that reads a test's types — excluding test files is what let 33 errors accumulate unseen before `#83`. `npm run tsc` runs two projects: `tsconfig.json` (browser — all of `src/`, tests included, no `@types/node`) and `tsconfig.node.json` (`rules/`, the Vite/Vitest/Playwright configs, and `src/lib/register-sw.test.ts`, which reads `public/sw.js` off disk). Node-side files go in the second project's `include`; never add `"node"` to the browser project's `types`, or `process.env` and `Buffer` will typecheck inside a React component.
 
 ## Firebase RTDB Schema
 

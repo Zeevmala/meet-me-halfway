@@ -150,6 +150,7 @@ Create a `.env` file at the project root:
 | `VITE_FIREBASE_DATABASE_URL` | Yes | Firebase RTDB URL (`https://*.firebaseio.com`) |
 | `VITE_FIREBASE_PROJECT_ID` | Yes | Firebase project ID |
 | `VITE_RECAPTCHA_SITE_KEY` | Yes | reCAPTCHA Enterprise site key for App Check |
+| `VITE_FIREBASE_APP_ID` | For App Check | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so App Check is skipped with a warning when it is unset — the app runs, entirely unattested |
 | `VITE_GOOGLE_PLACES_API_KEY` | No | Google Places API key — venue search disabled if not set |
 
 ---
