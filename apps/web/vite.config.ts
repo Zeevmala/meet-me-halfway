@@ -30,6 +30,16 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), swCacheBust()],
   server: {
     hmr: true,
+    // Phones only get geolocation in a secure context, so `npm run tunnel`
+    // fronts this server with a Cloudflare quick tunnel on a random
+    // *.trycloudflare.com host. Vite's DNS-rebinding guard rejects unknown
+    // Host headers, the HMR socket's included. Cloudflare owns that zone's
+    // DNS, so allowing it reopens no rebinding path.
+    allowedHosts: [".trycloudflare.com"],
+    // The tunnel dials this exact port. Exit if it is taken rather than drift
+    // to 5174 and leave the tunnel serving whatever holds 5173.
+    port: 5173,
+    strictPort: true,
   },
   optimizeDeps: {
     include: [

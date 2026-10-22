@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "tunnel": "cloudflared tunnel --url http://localhost:5173",
     "build": "vite build",
     "preview": "vite preview",
     "tsc": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",

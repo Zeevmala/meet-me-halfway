@@ -136,6 +136,27 @@ npm run dev
 # Opens at http://localhost:5173
 ```
 
+### Testing on a phone
+
+Browsers only expose geolocation in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts): `localhost` qualifies, `http://<your-LAN-IP>:5173` on a phone does not. `npm run tunnel` puts the dev server behind a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/) — a public HTTPS URL with a real certificate, no account, nothing to install on the phone, HMR included. The phone needn't share your Wi-Fi: on mobile data it can be somewhere else, which is what a real midpoint needs.
+
+One-time install: `winget install --id Cloudflare.cloudflared` (macOS: `brew install cloudflared`), then open a new terminal so it is on `PATH`.
+
+```bash
+cd apps/web
+npm run dev      # terminal 1 — always :5173 (strictPort)
+npm run tunnel   # terminal 2 — prints https://<random-words>.trycloudflare.com
+```
+
+1. **PC:** open the `trycloudflare.com` URL — not `localhost` — and allow location. Share links are built from the page's origin, so a `localhost` link would point the phone at itself.
+2. **Send the session link to the phone.** The browser's *QR code for this page* is the reliable route: the phone camera opens it in Safari / Chrome. The app's WhatsApp button works too, but open the link in Safari / Chrome — in-app browsers, WhatsApp's Android WebView above all, break Firebase Auth and RTDB.
+3. **Phone:** allow location; it joins as the second participant.
+
+- The URL changes every run and dies with Ctrl+C. While it is up, anyone holding it reaches your dev server — stop the tunnel when you are done.
+- **App Check:** the dev build mints a debug token per browser *and per origin*, so the phone (and the PC's tunnel tab) run unattested — harmless while enforcement is off. Before enforcing, the dev build needs one pre-registered token instead: a per-origin token on a URL that changes every run can't be registered ahead of time.
+- Sign-in or the map failing **only** over the tunnel means the Firebase API key or Mapbox token is restricted to certain websites: add `trycloudflare.com` to the restriction on the key you develop with (Google API key syntax: `https://*.trycloudflare.com/*`).
+- Both devices on one desk? Override the PC's position in DevTools → More tools → Sensors for a midpoint worth looking at.
+
 ---
 
 ## Environment Variables

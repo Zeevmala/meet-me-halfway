@@ -14,6 +14,7 @@ All commands run from `apps/web/`:
 cd apps/web
 npm install
 npm run dev              # Vite dev server at localhost:5173
+npm run tunnel           # HTTPS URL for phone testing: cloudflared quick tunnel → :5173 (run beside dev)
 npm run build            # Production build → dist/
 npm run tsc              # TypeScript check (strict, noUnusedLocals/Parameters)
 npm test                 # vitest run (all tests)
