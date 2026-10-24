@@ -16,7 +16,7 @@
     "test:rules": "vitest run --config vitest.rules.config.ts"
   },
   "dependencies": {
-    "@sentry/react": "^10.73.0",
+    "@sentry/react": "^11.8.0",
     "firebase": "^12.18.0",
     "i18next": "^26.4.2",
     "mapbox-gl": "^3.32.0",
