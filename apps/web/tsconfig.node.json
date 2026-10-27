@@ -1,7 +1,8 @@
 {
-  // Node-side project: build/test configs, the RTDB security-rules tests, and
-  // the one src/ test that reads a build artifact off disk. Kept separate from
-  // the browser project so node globals never leak into application code.
+  // Node-side project: build/test configs, the RTDB security-rules tests, the
+  // Playwright suites, and the one src/ test that reads a build artifact off
+  // disk. Kept separate from the browser project so node globals never leak
+  // into application code.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -19,6 +20,8 @@
   },
   "include": [
     "rules",
+    "e2e",
+    "e2e-live",
     "src/lib/register-sw.test.ts",
     "vite.config.ts",
     "vitest.rules.config.ts",

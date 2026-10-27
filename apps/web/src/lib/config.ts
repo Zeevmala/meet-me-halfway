@@ -40,6 +40,16 @@ export interface AppConfig {
   readonly firebase: FirebaseConfig;
   readonly recaptchaSiteKey: string | null;
   readonly sentryDsn: string | null;
+  /**
+   * `host:port` of a Realtime Database emulator, for end-to-end tests only.
+   *
+   * The e2e suite drives the real client against the emulator loaded with the
+   * real `infra/database.rules.json`, so a schema change that the rules reject
+   * fails there instead of in production. `validateAppConfig` refuses it in a
+   * `production`-mode build, which is what `npm run build` and the deploy job
+   * produce; the e2e build opts in with `--mode e2e`.
+   */
+  readonly rtdbEmulatorHost: string | null;
 }
 
 function orNull(value: string | undefined): string | null {
@@ -60,6 +70,7 @@ export function createAppConfig(): AppConfig {
     },
     recaptchaSiteKey: orNull(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
     sentryDsn: orNull(import.meta.env.VITE_SENTRY_DSN),
+    rtdbEmulatorHost: orNull(import.meta.env.VITE_RTDB_EMULATOR_HOST),
   };
 }
 
@@ -71,10 +82,25 @@ export function createAppConfig(): AppConfig {
  * missing it looks healthy while being unattested. The previous `validateEnv`
  * omitted it.
  *
+ * An emulator host in a `production`-mode build is refused outright: that
+ * bundle would point every user's database traffic at a loopback address.
+ *
+ * @param mode the build mode; a parameter so the guard is testable, and
+ *   defaulted to the one flag that can tell a deploy build from an e2e build.
  * @throws with every missing variable named at once — finding them one build
  *   at a time is the worse experience.
  */
-export function validateAppConfig(config: AppConfig): void {
+export function validateAppConfig(
+  config: AppConfig,
+  mode: string = import.meta.env.MODE,
+): void {
+  if (config.rtdbEmulatorHost !== null && mode === "production") {
+    throw new Error(
+      "VITE_RTDB_EMULATOR_HOST is set in a production build. It exists for " +
+        "the e2e suite only (`vite build --mode e2e`); unset it to deploy.",
+    );
+  }
+
   const missing: string[] = [];
   if (config.mapboxToken === "") missing.push("VITE_MAPBOX_TOKEN");
   if (config.firebase.apiKey === "") missing.push("VITE_FIREBASE_API_KEY");

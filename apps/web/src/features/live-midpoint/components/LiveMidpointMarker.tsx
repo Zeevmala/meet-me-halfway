@@ -1,5 +1,6 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef } from "react";
+import { markerRoot } from "./marker-root";
 import "../styles/live-midpoint.css";
 
 interface LiveMidpointMarkerProps {
@@ -25,7 +26,10 @@ export default function LiveMidpointMarker({
     ring.className = "live-marker-ring";
     el.appendChild(ring);
 
-    markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
+    markerRef.current = new mapboxgl.Marker({
+      element: markerRoot(el),
+      anchor: "center",
+    })
       .setLngLat([lng, lat])
       .addTo(map);
 

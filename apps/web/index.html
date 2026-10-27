@@ -35,14 +35,8 @@
     <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
     <link rel="preconnect" href="https://events.mapbox.com" crossorigin />
 
-    <!-- Mapbox GL CSS — preloaded to avoid render-blocking -->
-    <link
-      rel="preload"
-      href="https://api.mapbox.com/mapbox-gl-js/v3.20.0/mapbox-gl.css"
-      as="style"
-      onload="this.onload=null;this.rel='stylesheet'"
-    />
-    <noscript><link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.20.0/mapbox-gl.css" /></noscript>
+    <!-- Mapbox GL's stylesheet is bundled with the map (LiveMap.tsx). An inline
+         onload swap here cannot run under the production CSP. -->
     <title>Meet Me Halfway</title>
   </head>
   <body>

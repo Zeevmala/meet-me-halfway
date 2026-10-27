@@ -1,4 +1,14 @@
 import mapboxgl from "mapbox-gl";
+// Bundled, not linked from the CDN. index.html used to load it with an inline
+// `onload` swap, which the production CSP (no 'unsafe-inline') refuses — so in
+// production it never applied, the canvas lost `position: absolute`, and every
+// marker was laid out below the map, off-screen. Bundling also pins it to the
+// installed mapbox-gl rather than a hard-coded, older CDN version.
+import "mapbox-gl/dist/mapbox-gl.css";
+// Served from this origin for the same reason: Mapbox `import()`s the plugin,
+// and the CSP's script-src does not admit api.mapbox.com. The package's
+// exports map points at its source; Mapbox needs the built file.
+import rtlTextPluginUrl from "@mapbox/mapbox-gl-rtl-text/dist/mapbox-gl-rtl-text.js?url";
 import { memo, useEffect, useRef, useState } from "react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
@@ -30,9 +40,7 @@ mapboxgl.accessToken = APP_CONFIG.mapboxToken;
 
 // RTL text plugin for Hebrew map labels
 try {
-  mapboxgl.setRTLTextPlugin(
-    "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js",
-  );
+  mapboxgl.setRTLTextPlugin(rtlTextPluginUrl);
 } catch {
   /* already loaded */
 }

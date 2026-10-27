@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   APP_CHECK_TIMEOUT_MS,
   createFirebaseServices,
+  parseEmulatorHost,
   primeAppCheck,
 } from "./firebase-factory";
 import type { AppConfig } from "./config";
@@ -34,8 +35,11 @@ vi.mock("firebase/auth", () => ({
 // A spy, not a literal: the ordering test below compares when this ran
 // against when App Check was initialized.
 const mockGetDatabase = vi.fn(() => ({ _db: true }));
+const mockConnectDatabaseEmulator = vi.fn();
 vi.mock("firebase/database", () => ({
   getDatabase: () => mockGetDatabase(),
+  connectDatabaseEmulator: (...args: unknown[]) =>
+    mockConnectDatabaseEmulator(...args),
 }));
 
 const mockInitializeAppCheck = vi.fn();
@@ -74,6 +78,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     recaptchaSiteKey: null,
     sentryDsn: null,
+    rtdbEmulatorHost: null,
     ...overrides,
   };
 }
@@ -231,6 +236,40 @@ describe("createFirebaseServices", () => {
     expect(services.db).toEqual({ _db: true });
     expect(services.auth).toEqual({ kind: "auth-persistent" });
   });
+
+  it("never points the Database handle at an emulator unless configured", () => {
+    createFirebaseServices(config());
+
+    expect(mockConnectDatabaseEmulator).not.toHaveBeenCalled();
+  });
+
+  it("points the Database handle at the configured emulator", () => {
+    const services = createFirebaseServices(
+      config({ rtdbEmulatorHost: "127.0.0.1:9000" }),
+    );
+
+    expect(mockConnectDatabaseEmulator).toHaveBeenCalledWith(
+      services.db,
+      "127.0.0.1",
+      9000,
+    );
+  });
+});
+
+describe("parseEmulatorHost", () => {
+  it("splits host and port", () => {
+    expect(parseEmulatorHost("localhost:9000")).toEqual({
+      host: "localhost",
+      port: 9000,
+    });
+  });
+
+  it.each(["127.0.0.1", ":9000", "127.0.0.1:", "127.0.0.1:abc"])(
+    "rejects %j rather than guessing",
+    (value) => {
+      expect(() => parseEmulatorHost(value)).toThrow(/host:port/);
+    },
+  );
 });
 
 /**

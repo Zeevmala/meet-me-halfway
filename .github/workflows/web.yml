@@ -162,8 +162,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     # Deliberately not `needs: [build]`. This job builds its own dist from the
-    # fake env vars below and never downloads the `web-dist` artifact, so that
-    # edge carried no data — it only propagated `build`'s
+    # fake env in apps/web/.env.e2e and never downloads the `web-dist`
+    # artifact, so that edge carried no data — it only propagated `build`'s
     # `github.actor != 'dependabot[bot]'` skip into e2e, which is exactly when
     # e2e is most worth running. Dependency bumps were merging with no e2e and
     # no `vite build` at all. `lighthouse` does consume the artifact and keeps
@@ -176,24 +176,30 @@ jobs:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: apps/web/package-lock.json
+      # The Realtime Database emulator the suite runs against is a Java process.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
       - run: npm ci
         working-directory: apps/web
       - name: Install Playwright browsers
         working-directory: apps/web
         run: npx playwright install --with-deps chromium firefox
+      # `--mode e2e` reads apps/web/.env.e2e: fake credentials plus the
+      # emulator host, which validateAppConfig refuses in a production build.
       - name: Build for E2E
         working-directory: apps/web
-        run: npm run build
-        env:
-          VITE_MAPBOX_TOKEN: "pk.fake_for_e2e"
-          VITE_FIREBASE_API_KEY: "fake-key"
-          VITE_FIREBASE_AUTH_DOMAIN: "fake.firebaseapp.com"
-          VITE_FIREBASE_DATABASE_URL: "https://fake-rtdb.firebaseio.com"
-          VITE_FIREBASE_PROJECT_ID: "fake-project"
-          VITE_RECAPTCHA_SITE_KEY: "fake-recaptcha"
-      - name: Run E2E tests
-        working-directory: apps/web
-        run: npx playwright test
+        run: npm run build:e2e
+      # The real client against the real rules, under the headers
+      # firebase.json serves (vite preview reads them from it). Mocked HTTP
+      # alone let a CSP that broke the production map, and a schema the
+      # deployed rules rejected, both pass this job. Pinned like the rules job.
+      - name: Run E2E tests (RTDB emulator)
+        run: >
+          npx -y firebase-tools@15.29.0 emulators:exec
+          --only database --project demo-meet-me-halfway
+          "npm --prefix apps/web run test:e2e"
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

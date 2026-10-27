@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:e2e": "vite build --mode e2e",
     "preview": "vite preview",
     "tsc": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
@@ -16,6 +17,7 @@
     "test:rules": "vitest run --config vitest.rules.config.ts"
   },
   "dependencies": {
+    "@mapbox/mapbox-gl-rtl-text": "0.3.0",
     "@sentry/react": "^10.73.0",
     "firebase": "^12.18.0",
     "i18next": "^26.4.2",
@@ -28,6 +30,7 @@
     "@firebase/rules-unit-testing": "^5.0.2",
     "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.64.0",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/geojson": "^7946.0.16",
@@ -45,7 +48,6 @@
     "jsdom": "^30.1.2",
     "postcss": "^8.5.29",
     "prettier": "^3.9.9",
-    "@tailwindcss/vite": "^4.3.3",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.3",
     "vite": "^6.4.4",

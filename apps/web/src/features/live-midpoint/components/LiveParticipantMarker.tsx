@@ -1,6 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import type { ParticipantIndex } from "../lib/participant-config";
+import { markerRoot } from "./marker-root";
 import "../styles/live-midpoint.css";
 
 interface LiveParticipantMarkerProps {
@@ -31,7 +32,10 @@ export default function LiveParticipantMarker({
     ring.className = "live-marker-ring";
     el.appendChild(ring);
 
-    markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
+    markerRef.current = new mapboxgl.Marker({
+      element: markerRoot(el),
+      anchor: "center",
+    })
       .setLngLat([lng, lat])
       .addTo(map);
     elementRef.current = el;

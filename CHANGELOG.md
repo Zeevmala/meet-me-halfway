@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — the map under the production CSP
+
+- **Markers were off-screen in production.** Mapbox's stylesheet was loaded
+  with an inline `onload` swap, which the CSP (no `'unsafe-inline'`) refuses,
+  so it never applied: the canvas lost `position: absolute` and every marker
+  was laid out below the map. The stylesheet is now bundled with the map, and
+  pinned to the installed mapbox-gl rather than an older CDN version
+- **Markers were offset everywhere.** `.live-marker { position: relative }`
+  overrode Mapbox's absolute positioning, so each marker was drawn lower by
+  the height of the markers before it (the midpoint by ~30px with two
+  participants), and venue selection wiped Mapbox's classes by assigning
+  `className`. Mapbox is now handed a bare root (`markerRoot`) and every class
+  lives on its child
+- **Hebrew map labels.** The RTL text plugin was `import()`ed from
+  api.mapbox.com, which the CSP's `script-src` does not admit; it is now
+  served from this origin
+- **E2E can see the map.** `vite preview` serves firebase.json's headers, and
+  the suite runs the real client against the RTDB emulator loaded with the
+  real rules. A new two-device spec checks for CSP violations and asserts
+  where the markers are drawn; it fails on the code before this change
+
 ### P3 — Declared Execution Graph
 
 - **DAG pipeline** — `slots → midpoint → venues → destination → routes → frame`
