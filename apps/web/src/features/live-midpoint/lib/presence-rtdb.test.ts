@@ -7,12 +7,21 @@ import type { Database } from "firebase/database";
 const mockSet = vi.fn();
 const mockRemove = vi.fn();
 const mockOnDisconnectRemove = vi.fn();
+const mockOnValue = vi.fn();
+
+/** Plays `.info/connected` to the writer's latest subscription. */
+let emitConnected: (connected: boolean) => void = () => {};
 
 vi.mock("firebase/database", () => ({
   ref: (_db: unknown, path?: string) => ({ path }),
   set: (r: unknown, v: unknown) => mockSet(r, v),
   remove: (r: unknown) => mockRemove(r),
   onDisconnect: (r: unknown) => ({ remove: () => mockOnDisconnectRemove(r) }),
+  onValue: (r: unknown, cb: (snapshot: { val: () => unknown }) => void) => {
+    mockOnValue(r);
+    emitConnected = (connected) => cb({ val: () => connected });
+    return () => {};
+  },
 }));
 
 const db = { _db: true } as unknown as Database;
@@ -160,5 +169,55 @@ describe("createPresenceWriter", () => {
     await writer.write("ABC234", SLOT, VALUE, live());
 
     expect(mockOnDisconnectRemove).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression guard: the server runs an onDisconnect once and forgets it.
+  // Armed only per session, it covered the first dropped connection; after a
+  // reconnect, the next drop left the participant's last position stored
+  // indefinitely — what the privacy policy says does not happen.
+  it("re-arms every published path when the connection comes back", async () => {
+    const writer = createPresenceWriter(db);
+    await writer.write("ABC234", SLOT, VALUE, live());
+    emitConnected(true); // the connection the write armed
+
+    emitConnected(false);
+    emitConnected(true);
+
+    expect(mockOnDisconnectRemove).toHaveBeenCalledTimes(2);
+    expect(mockOnDisconnectRemove).toHaveBeenLastCalledWith({ path: PATH });
+  });
+
+  it("does not re-arm for the connection it subscribed on", async () => {
+    const writer = createPresenceWriter(db);
+
+    await writer.write("ABC234", SLOT, VALUE, live());
+    emitConnected(true);
+
+    expect(mockOnDisconnectRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-arm a removed path on reconnect", async () => {
+    const writer = createPresenceWriter(db);
+    await writer.write("ABC234", SLOT, VALUE, live());
+    emitConnected(true);
+    writer.remove("ABC234", SLOT);
+
+    emitConnected(false);
+    emitConnected(true);
+
+    expect(mockOnDisconnectRemove).toHaveBeenCalledTimes(1);
+  });
+
+  // The writer is built at the composition root. Listening there would open
+  // the RTDB socket before App Check has a token, leaving it unattested.
+  it("does not touch the connection until the first write", async () => {
+    const writer = createPresenceWriter(db);
+    expect(mockOnValue).not.toHaveBeenCalled();
+
+    await writer.write("ABC234", SLOT, VALUE, live());
+    await writer.write("ABC234", SLOT, VALUE, live());
+
+    expect(mockOnValue).toHaveBeenCalledTimes(1);
+    expect(mockOnValue).toHaveBeenCalledWith({ path: ".info/connected" });
   });
 });
