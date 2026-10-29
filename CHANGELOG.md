@@ -26,6 +26,28 @@ All notable changes to this project will be documented in this file.
   real rules. A new two-device spec checks for CSP violations and asserts
   where the markers are drawn; it fails on the code before this change
 
+### Fixed — the privacy policy now describes what the app does
+
+- **Rewritten against the code.** The old policy said sessions are deleted
+  after 24 hours; nothing is ever deleted automatically, and after 24 hours
+  the rules only refuse to read a session. It said locations are visible
+  only to participants; anyone with the code can read them. It also left out
+  Google reCAPTCHA, Mapbox's map tiles and telemetry identifier, the
+  device-type display name every participant publishes by default, and what
+  stays on the device. It now says all of that. The terms list reCAPTCHA too
+- **Positions lingered after a reconnect.** `onDisconnect` was armed once per
+  session, but the server forgets it after the first drop, so after any
+  reconnect the next drop left the last position stored indefinitely. It is
+  re-armed on every connection, proven against the emulator
+- **Sentry reports carried locations and the session code.** The Directions
+  URL — every participant's coordinates, in its path — rode along as a fetch
+  breadcrumb, and the page URL and Firebase's own warnings carried the full
+  session code. Errors, breadcrumbs and spans are now scrubbed before they
+  leave; checked with the real SDK in a browser, before and after
+- **Revoking location permission did not stop sharing.** The last fix stood,
+  and the presence heartbeat re-published it as live. A denial now clears it
+  and withdraws presence, while staying in the session so a retry resumes
+
 ### Changed — dependency baseline
 
 - **Audit gate green again.** re2js 2.9.1 (GHSA-gg6h-894w-4m9c, via
