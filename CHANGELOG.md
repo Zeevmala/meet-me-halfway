@@ -26,6 +26,20 @@ All notable changes to this project will be documented in this file.
   real rules. A new two-device spec checks for CSP violations and asserts
   where the markers are drawn; it fails on the code before this change
 
+### Changed — dependency baseline
+
+- **Audit gate green again.** re2js 2.9.1 (GHSA-gg6h-894w-4m9c, via
+  @firebase/firestore, not bundled) had failed `lint` on main and every PR
+- mapbox-gl 3.33 (RTL built in, see above), react 19.3.1, i18next 26.5.3,
+  react-i18next 17.1.0
+- firebase 13 with @firebase/rules-unit-testing 6, which only install
+  together; CI moves to Node 24, which rules-unit-testing 6 requires, and
+  @types/node to 24 to match
+- **Sentry 11 without new data collection.** v11's unset `dataCollection`
+  stores reporters' IP addresses; it is pinned to the v10 defaults that
+  privacy.html describes, and a test holds it there
+- Dependabot opens one grouped PR per ecosystem instead of one per package
+
 ### P3 — Declared Execution Graph
 
 - **DAG pipeline** — `slots → midpoint → venues → destination → routes → frame`

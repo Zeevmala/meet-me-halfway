@@ -1,10 +1,19 @@
 version: 2
+# One open PR per ecosystem, never one per package.
+#
+# Every npm update edits the same package-lock.json, so separate PRs
+# conflict with each other as soon as one merges. They also hide pairs
+# that only install together: firebase 13 and @firebase/rules-unit-testing
+# 6 arrived as #101 and #103, and each failed `npm ci` on its own. One
+# group carries every update, majors included, so a breaking release is
+# fixed in the same PR as the rest of the week's bumps. The cost is that it
+# holds them back until it is fixed.
 updates:
   - package-ecosystem: "npm"
     directory: "/apps/web"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 1
     ignore:
       - dependency-name: "eslint"
         update-types: ["version-update:semver-major"]
@@ -27,14 +36,19 @@ updates:
       # See #72.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # Tracks the Node major CI runs (`node-version` in web.yml). Newer
+      # types let APIs that CI's Node lacks typecheck in e2e/ and rules/.
+      # Move both together.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
-      dev-dependencies:
-        dependency-type: "development"
-        update-types: ["minor", "patch"]
-      production-dependencies:
-        dependency-type: "production"
-        update-types: ["minor", "patch"]
+      npm:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]
