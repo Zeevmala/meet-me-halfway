@@ -3,22 +3,8 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { readFileSync, writeFileSync } from "fs";
-import { createRequire } from "module";
-import { dirname, resolve } from "path";
+import { resolve } from "path";
 import { createHash } from "crypto";
-
-/**
- * The built RTL text plugin. Its package's `exports` map only admits
- * `src/index.js`, but Mapbox `import()`s a standalone file, so the alias below
- * reaches past it — located through the package's own entry rather than a
- * hard-coded node_modules path, so hoisting cannot move it out from under us.
- */
-const RTL_TEXT_PLUGIN =
-  /^@mapbox\/mapbox-gl-rtl-text\/dist\/mapbox-gl-rtl-text\.js(?=\?|$)/;
-const rtlTextPluginFile = resolve(
-  dirname(createRequire(import.meta.url).resolve("@mapbox/mapbox-gl-rtl-text")),
-  "../dist/mapbox-gl-rtl-text.js",
-);
 
 interface FirebaseHostingConfig {
   hosting: {
@@ -82,10 +68,6 @@ function swCacheBust() {
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss(), swCacheBust()],
-  resolve: {
-    // A regex so the `?url` query survives the substitution.
-    alias: [{ find: RTL_TEXT_PLUGIN, replacement: rtlTextPluginFile }],
-  },
   server: {
     hmr: true,
   },
@@ -101,10 +83,6 @@ export default defineConfig(({ mode }) => ({
       "firebase/auth",
       "firebase/database",
     ],
-    // Imported as a `?url`, never as a module: pre-bundling it rewrote the
-    // dev URL to a `.vite/deps` path that 404s, so `npm run dev` lost the
-    // RTL plugin while production builds were fine.
-    exclude: ["@mapbox/mapbox-gl-rtl-text"],
   },
   build: {
     sourcemap: !!process.env.CI,

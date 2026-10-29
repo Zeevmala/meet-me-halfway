@@ -19,6 +19,10 @@ import { setupMapboxMocks } from "./helpers/mock-mapbox";
  * RTL text plugin, and the marker CSS offset every marker by the height of
  * the ones before it. None of them is visible to jsdom or to a page served
  * without the production headers.
+ *
+ * Right-to-left labels are not asserted here. Since mapbox-gl 3.33 they need
+ * no plugin; Mapbox fetches its shaping module only once RTL text is on
+ * screen, and the mocked style draws no text at all.
  */
 
 const TEL_AVIV = { latitude: 32.0853, longitude: 34.7818 };
@@ -38,8 +42,6 @@ interface Device {
   readonly page: Page;
   /** CSP violations, from the DOM event and from the browser's own report. */
   readonly cspViolations: string[];
-  /** HTTP statuses of every request for the RTL text plugin. */
-  readonly rtlPluginStatuses: number[];
 }
 
 async function openDevice(
@@ -55,7 +57,6 @@ async function openDevice(
   openContexts.push(context);
   const page = await context.newPage();
   const cspViolations: string[] = [];
-  const rtlPluginStatuses: number[] = [];
 
   await page.addInitScript(() => {
     document.addEventListener("securitypolicyviolation", (event) => {
@@ -70,16 +71,11 @@ async function openDevice(
       cspViolations.push(text);
     }
   });
-  context.on("response", (response) => {
-    if (response.url().includes("mapbox-gl-rtl-text")) {
-      rtlPluginStatuses.push(response.status());
-    }
-  });
 
   await setupFirebaseMocks(page);
   await setupMapboxMocks(page);
   await page.goto(path);
-  return { page, cspViolations, rtlPluginStatuses };
+  return { page, cspViolations };
 }
 
 interface Point {
@@ -209,13 +205,6 @@ test("two devices meet, and the map draws them where they are", async ({
         timeout: 15_000,
       })
       .toBeLessThan(MARKER_TOLERANCE_PX);
-
-    await check
-      .poll(() => device.rtlPluginStatuses, {
-        message: `${name}: the RTL text plugin loads (Hebrew labels)`,
-        timeout: 15_000,
-      })
-      .toContain(200);
 
     check(device.cspViolations, `${name}: no CSP violations`).toEqual([]);
   }

@@ -18,8 +18,9 @@ All notable changes to this project will be documented in this file.
   `className`. Mapbox is now handed a bare root (`markerRoot`) and every class
   lives on its child
 - **Hebrew map labels.** The RTL text plugin was `import()`ed from
-  api.mapbox.com, which the CSP's `script-src` does not admit; it is now
-  served from this origin
+  api.mapbox.com, which the CSP's `script-src` does not admit. mapbox-gl
+  3.33 removes the plugin and shapes RTL text itself, with a WebAssembly
+  module the CSP already admits
 - **E2E can see the map.** `vite preview` serves firebase.json's headers, and
   the suite runs the real client against the RTDB emulator loaded with the
   real rules. A new two-device spec checks for CSP violations and asserts

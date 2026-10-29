@@ -17,11 +17,10 @@
     "test:rules": "vitest run --config vitest.rules.config.ts"
   },
   "dependencies": {
-    "@mapbox/mapbox-gl-rtl-text": "0.3.0",
     "@sentry/react": "^10.73.0",
     "firebase": "^12.18.0",
     "i18next": "^26.4.2",
-    "mapbox-gl": "^3.32.0",
+    "mapbox-gl": "^3.33.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.16"
