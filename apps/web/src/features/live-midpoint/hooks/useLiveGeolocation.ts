@@ -59,7 +59,9 @@ const REPLAY_FUSE = { baseMs: 60_000, maxMs: 300_000 } as const;
  * "Location services unavailable", with no retry, no explanation and no
  * telemetry. Once a fix has been seen, a non-fatal error does not change the
  * status and the last position stands. (Presence keeps re-publishing that
- * position with a fresh timestamp, so peers see it as live, not stale.)
+ * position with a fresh timestamp, so peers see it as live, not stale.) A
+ * denial is the exception: it clears the position, because it means the user
+ * stopped sharing.
  */
 export function useLiveGeolocation(): LiveGeoState {
   const [status, setStatus] = useState<GeoStatus>("idle");
@@ -151,6 +153,12 @@ export function useLiveGeolocation(): LiveGeoState {
 
           if (err.code === err.PERMISSION_DENIED) {
             teardown();
+            // A denial takes back the position it had granted. Kept, the last
+            // fix went on feeding the presence write, whose heartbeat
+            // re-published it with a fresh timestamp: someone who had turned
+            // sharing off stayed on everyone's map as live.
+            setPosition(null);
+            setAccuracy(null);
             setStatus("denied");
             setError(describeGeoError(err));
             return;

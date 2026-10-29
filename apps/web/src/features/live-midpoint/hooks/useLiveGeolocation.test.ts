@@ -135,6 +135,20 @@ describe("useLiveGeolocation", () => {
     );
   });
 
+  // Unlike a GPS blip, a denial means the user stopped sharing. The last fix
+  // used to stand, and presence kept re-publishing it to the session as live.
+  it("takes back the last position when permission is revoked mid-session", () => {
+    const { result } = renderHook(() => useLiveGeolocation());
+    act(() => result.current.start());
+    act(() => sendFix(32.08, 34.78));
+
+    act(() => sendError(1, "User denied Geolocation"));
+
+    expect(result.current.status).toBe("denied");
+    expect(result.current.position).toBeNull();
+    expect(result.current.accuracy).toBeNull();
+  });
+
   it('sets status to "unavailable" on POSITION_UNAVAILABLE error', () => {
     const { result } = renderHook(() => useLiveGeolocation());
     act(() => result.current.start());

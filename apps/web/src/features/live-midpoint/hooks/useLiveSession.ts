@@ -98,6 +98,8 @@ export interface LiveSessionState {
     signal: AbortSignal,
   ) => Promise<Result<string, SessionFailure>>;
   setOwnName: (name: string) => void;
+  /** Remove own presence, keep listening. */
+  withdraw: () => void;
   cleanup: () => void;
 }
 
@@ -539,12 +541,12 @@ export function useLiveSession(uid: string): LiveSessionState {
     setOwnNameState(saveDisplayName(raw));
   }, []);
 
-  /** Detach the listener and remove own presence. */
-  const cleanup = useCallback(() => {
-    if (unsubRef.current) {
-      unsubRef.current();
-      unsubRef.current = null;
-    }
+  /**
+   * Remove own presence but stay in the session, still listening — for a
+   * device that stops sharing without leaving. The next presence write puts
+   * it back.
+   */
+  const withdraw = useCallback(() => {
     // Read, never clear. Clearing here and then gating the removal on it made
     // cleanup non-idempotent: a second call — which React will make whenever
     // this callback's identity changes — found a null slot and skipped the
@@ -561,6 +563,15 @@ export function useLiveSession(uid: string): LiveSessionState {
       presence.remove(codeRef.current, slot);
     }
   }, [presence]);
+
+  /** Detach the listener and remove own presence. */
+  const cleanup = useCallback(() => {
+    if (unsubRef.current) {
+      unsubRef.current();
+      unsubRef.current = null;
+    }
+    withdraw();
+  }, [withdraw]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -581,6 +592,7 @@ export function useLiveSession(uid: string): LiveSessionState {
     createSession,
     joinSession,
     setOwnName,
+    withdraw,
     cleanup,
   };
 }
