@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import type { GeoStatus } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
@@ -96,6 +97,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const geo = useLiveGeolocation();
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();
+  const serverTimeOffsetMs = useServerTimeOffset();
 
   // ── The derived pipeline ──
   // slots → midpoint → venues → destination → routes, declared in
@@ -125,6 +127,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       ownUid: uid,
       ownName: session.ownName,
       sessionStatus: session.status,
+      serverTimeOffsetMs,
     });
   }, [
     runtime,
@@ -136,6 +139,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     session.status,
     geo.position,
     geo.accuracy,
+    serverTimeOffsetMs,
   ]);
 
   // Turning location off is turning sharing off. The denial clears the

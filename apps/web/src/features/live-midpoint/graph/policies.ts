@@ -16,7 +16,7 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
-import type { RouteInfo, TravelProfile } from "./types";
+import type { RouteInfo, RouteSet, TravelProfile } from "./types";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -101,6 +101,18 @@ export interface PresenceInput {
 
 /** One RTDB write per this window, matching the old WRITE_THROTTLE_MS. */
 const PRESENCE_WRITE_MS = 3_000;
+
+/**
+ * How often the runtime offers a stationary participant's position again.
+ *
+ * Admission alone is not a heartbeat: `admits` only runs when something asks.
+ * With GPS quiet and nobody moving, the only askers were peers' liveness wakes,
+ * which fire at the instant a peer has already turned stale — and a participant
+ * alone in the session, waiting, was never asked again. Peers mark anyone
+ * silent for `STALE_THRESHOLD_MS` (30s) as stale; a third of that leaves room
+ * for two missed beats.
+ */
+export const PRESENCE_HEARTBEAT_MS = 10_000;
 /**
  * Displacement worth an early write. Deliberately below typical GPS noise:
  * the TTL clause below guarantees a heartbeat regardless, so this exists only
@@ -167,7 +179,6 @@ export function createPresencePolicy(
           lat: input.position.lat,
           lng: input.position.lng,
           accuracy: input.accuracy,
-          ts: Date.now(),
           name: input.name,
         },
         signal,
@@ -202,9 +213,27 @@ function anySlotMoved(
   return false;
 }
 
+/**
+ * Whether a route set still answers the current destination and profile.
+ *
+ * Within the same radius that decides when to fetch again: a destination that
+ * drifted less than that is the one these routes were fetched for, and one
+ * that moved further — a venue picked, the midpoint shifted — is not, so its
+ * routes and distances would describe somewhere else.
+ */
+export function routesAnswer(
+  set: RouteSet,
+  dest: LatLng,
+  profile: TravelProfile,
+): boolean {
+  return (
+    set.profile === profile && haversineDistance(set.dest, dest) < ROUTE_ADMIT_M
+  );
+}
+
 export function createRoutePolicy(
   ports: GraphPorts,
-): ResourcePolicy<RouteInput, (RouteInfo | null)[]> {
+): ResourcePolicy<RouteInput, RouteSet> {
   return {
     id: "routes",
     debounceMs: 3_000,
@@ -240,10 +269,7 @@ export function createRoutePolicy(
      * fresh; only a total wipeout is reported as a node failure, so a genuine
      * outage still trips the breaker but one bad leg does not.
      */
-    run: async (
-      input,
-      signal,
-    ): Promise<Result<(RouteInfo | null)[], ResourceError>> => {
+    run: async (input, signal): Promise<Result<RouteSet, ResourceError>> => {
       const targets: { slot: number; position: LatLng }[] = [];
       input.slots.forEach((position, slot) => {
         if (position !== null) targets.push({ slot, position });
@@ -276,7 +302,7 @@ export function createRoutePolicy(
       }
 
       if (successes === 0 && firstError !== null) return err(firstError);
-      return ok(bySlot);
+      return ok({ dest: input.dest, profile: input.profile, bySlot });
     },
   };
 }

@@ -54,7 +54,7 @@ No backend, no database server, no Docker, no Python.
 1. App init → `signInAnonymously()` with retry (3 attempts, exponential backoff)
 2. **Creator** opens `/` → geolocation prompt → 6-char session code → URL becomes `/?code=XXXXX`
 3. **Joiners** (up to 4) open `/?code=XXXXX` → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
-4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node)
+4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node, and re-sent every 10s while standing still — peers mark anyone silent for 30s as stale, and stop counting them toward the midpoint and routes after 2 minutes)
 5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
 6. Optional venue search around midpoint (Google Places, ranked by rating/proximity/popularity/open_now)
 
@@ -99,7 +99,8 @@ apps/web/src/
 ├── hooks/
 │   ├── useAuth.ts                     # Anonymous sign-in with retry + typed AuthErrorCode classification
 │   ├── useFirebase.ts                 # thin read of useServices().firebase
-│   └── useNetworkStatus.ts            # Firebase RTDB .info/connected tracking
+│   ├── useNetworkStatus.ts            # Firebase RTDB .info/connected tracking
+│   └── useServerTimeOffset.ts         # .info/serverTimeOffset — liveness runs on server time
 ├── lib/
 │   ├── config.ts                      # the ONLY module reading VITE_* app config; validateAppConfig
 │   ├── services.ts                    # composition root: createServices(config)
@@ -118,13 +119,15 @@ Tests are typechecked. Vitest strips types without checking them, so `tsc` is th
 
 ```
 /sessions/{6charCode}/
-  created: number (timestamp)
+  created: number (server timestamp)
   creatorUid: string (write-once, must match auth.uid)
   slots/{0..4}: uid (write-once; exactly five keys may ever exist)
-  participants/{slot}: { uid, lat, lng, accuracy, ts, name }
+  participants/{slot}: { uid, lat, lng, accuracy, ts, name }   # ts: server timestamp
 ```
 
-Security rules enforce: auth required for all reads, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`) — and **the participant cap**.
+Security rules enforce: auth required for all reads, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`), session keys in the code generator's alphabet, no claim or position in a session that was never created or is over 24 hours old (a holder may still clear their own position) — and **the participant cap**.
+
+The client has the server stamp both timestamps (`serverTimestamp()`), never the device: every peer judges staleness from `ts`, and phones run minutes off. The rules require it only from the contract step below. Liveness compares them against `Date.now()` plus `.info/serverTimeOffset` (`useServerTimeOffset` → the graph's `serverTimeOffsetMs` source), never the device clock alone.
 
 The cap is a property of the schema, not a client-side check. Exactly five keys are declared under `slots`, each write-once and each validated to equal the writer's `auth.uid`; any other key has no `.write` rule anywhere up the tree and is rejected. `participants/{slot}` is then writable only by whoever holds `slots/{slot}`, which needs no key-pattern matching: since only 0–4 can exist under `slots`, any other participant key resolves to a null holder and is denied for free. Slot 0 additionally validates against `creatorUid`, making "the creator is green" a server invariant.
 
@@ -146,6 +149,8 @@ Hosting deploys before rules deliberately. Either order leaves a window during a
 
 **For the next breaking schema change, use expand/contract instead of relying on that ordering:** publish rules that accept both the old and new shapes, deploy, migrate the client, then drop the old shape in a later release. The window becomes zero. `2daf708` should have been shaped that way.
 
+**One is in flight: restricting location reads to slot holders.** The code is at the expand step. The join reads `created` and `creatorUid` field by field, never the session node, and both timestamps are server-stamped; the rules before this step accept all of it too, which is what keeps hosting-first safe. The contract step, a later release, restricts `participants` reads to slot holders (from then on a whole-node read is refused, which is why the join stopped doing one), requires `created` and `ts` to equal `now`, and makes `createSession` one atomic update. That last part cannot ship with the rules that allow it. Slot 0's rule now reads `creatorUid` from `newData`; the rules before this step read it from `root`, the state before the write, and so refuse the atomic form. The three sequential create writes stay until this step's rules are in production.
+
 ## Code Conventions
 
 - TypeScript strict mode (`noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`)
@@ -159,7 +164,7 @@ Hosting deploys before rules deliberately. Either order leaves a window during a
 - Participant indexing via `ParticipantIndex = 0 | 1 | 2 | 3 | 4` (creator = 0). Slots are **claimed from the database** (`sessions/{code}/slots/{i}`, write-once) and are stable for the session — never renumbered when someone leaves. Anything keyed by slot (routes, accuracy circles, colours, Mapbox layer ids, the RTDB participant key) must agree on that one index space
 - Enforce invariants where they cannot be bypassed. A limit a client checks is a limit a modified client ignores: if a rule can express it, the rule owns it
 - Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code. This includes the session handshake: `createSession`/`joinSession` return `Result` and take an `AbortSignal`
-- Derived values are derived, not stored. `SessionPhase` and participant staleness are graph nodes, not `useState` — a predicate over a clock must never be driven by a polling interval (mobile browsers throttle `setInterval` to minutes and freeze it under bfcache)
+- Derived values are derived, not stored. `SessionPhase` and participant staleness and departure are graph nodes, not `useState` — a predicate over a clock must never be driven by a polling interval (mobile browsers throttle `setInterval` to minutes and freeze it under bfcache)
 - Anything the graph publishes is referentially stable; do not rebuild it with `.map()` in a render body. Project it with `useMemo` keyed on the snapshot array, or the map re-uploads every route geometry per frame
 - New effectful work belongs in a `ResourcePolicy` (`graph/policies.ts`), not a bespoke hook with its own debounce and abort handling
 - I/O reaches the graph through `graph/ports.ts` so tests inject fakes and a virtual clock instead of mocking modules, globals or timers. React-tree dependencies arrive through `ServicesProvider` for the same reason

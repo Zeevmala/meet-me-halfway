@@ -7,6 +7,7 @@ import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 import type { ParticipantInfo } from "./hooks/useLiveSession";
 import { ok } from "../../core/dag/result";
+import { DEPARTED_THRESHOLD_MS } from "./graph/nodes";
 
 // ── Mock i18next ──
 vi.mock("react-i18next", () => ({
@@ -28,6 +29,12 @@ vi.mock("../../hooks/useAuth", () => ({
 const mockNetworkStatus = vi.fn();
 vi.mock("../../hooks/useNetworkStatus", () => ({
   useNetworkStatus: () => mockNetworkStatus(),
+}));
+
+// ── Mock useServerTimeOffset (an RTDB `.info` listener, like the above) ──
+const mockServerTimeOffset = vi.fn();
+vi.mock("../../hooks/useServerTimeOffset", () => ({
+  useServerTimeOffset: () => mockServerTimeOffset(),
 }));
 
 // ── Mock useLiveGeolocation ──
@@ -183,6 +190,7 @@ beforeEach(() => {
     firebaseConnected: true,
     isOnline: true,
   });
+  mockServerTimeOffset.mockReturnValue(0);
   mockGeo.mockReturnValue(defaultGeo());
   mockSession.mockReturnValue(defaultSession());
   // Reset URL to no code
@@ -458,6 +466,37 @@ describe("LiveMidpointPage", () => {
     renderPage();
 
     expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+  });
+
+  // Peers' `lastSeen` is server-stamped; the graph can only judge it against
+  // server time if the page hands it the offset, which RTDB reports after
+  // connecting — here, one that puts the server two minutes ahead.
+  it("judges peers against the server's clock once its offset is known", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0, // the test ports' clock reads 0 too
+          index: 1,
+          name: null,
+        },
+      ],
+    });
+    const { rerender } = renderPage();
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+
+    mockServerTimeOffset.mockReturnValue(DEPARTED_THRESHOLD_MS);
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
+
+    expect(screen.queryByTestId("midpoint-card")).toBeNull();
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
   });
 });
 

@@ -302,6 +302,106 @@ describe("session metadata", () => {
   });
 });
 
+describe("hardening — holes the review found open", () => {
+  /** A session older than the 24h TTL, with a joiner already in slot 1. */
+  async function seedExpired(): Promise<void> {
+    await testEnv.clearDatabase();
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .database()
+        .ref(`sessions/${CODE}`)
+        .set({
+          created: Date.now() - 25 * 60 * 60 * 1000,
+          creatorUid: CREATOR,
+          slots: { 0: CREATOR, 1: JOINERS[0] },
+          participants: { 1: position(JOINERS[0]) },
+        });
+    });
+  }
+
+  // Before: a slot and then a live position could be written under a code
+  // nobody had created — a session with no `created`, which no read rule can
+  // ever open again, and which nothing deletes.
+  it("refuses a slot claim in a session that was never created", async () => {
+    await testEnv.clearDatabase();
+
+    await assertFails(
+      as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]),
+    );
+    await assertFails(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/participants/1`)
+        .set(position(JOINERS[0])),
+    );
+  });
+
+  it("refuses slot 0 in a session that was never created", async () => {
+    await testEnv.clearDatabase();
+    await as(CREATOR).ref(`sessions/${CODE}/creatorUid`).set(CREATOR);
+
+    await assertFails(as(CREATOR).ref(`sessions/${CODE}/slots/0`).set(CREATOR));
+  });
+
+  // Before: any string was a session key, up to RTDB's 768-byte limit.
+  it("refuses a session code the client could not have generated", async () => {
+    await testEnv.clearDatabase();
+    for (const code of [
+      "abc234", // lower case
+      "ABC23", // too short
+      "ABC2345", // too long
+      "ABCD0O", // 0 and O are not in the alphabet
+      "ILL234", // nor are I and L
+      "not-a-code",
+    ]) {
+      await assertFails(
+        as(CREATOR).ref(`sessions/${code}/created`).set(Date.now()),
+      );
+    }
+    await assertSucceeds(
+      as(CREATOR).ref(`sessions/ZY98XW/created`).set(Date.now()),
+    );
+  });
+
+  // Before: reads stopped at 24 hours but writes did not, so a session kept
+  // taking new participants and positions that nobody could ever read.
+  it("refuses new claims and positions in an expired session", async () => {
+    await seedExpired();
+
+    await assertFails(
+      as(JOINERS[1]).ref(`sessions/${CODE}/slots/2`).set(JOINERS[1]),
+    );
+    await assertFails(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/participants/1`)
+        .set({ ...position(JOINERS[0]), lat: 32.5 }),
+    );
+  });
+
+  // The disconnect cleanup must still land after expiry, or a participant
+  // still connected at the 24h mark could never be removed.
+  it("still lets the holder clear their node in an expired session", async () => {
+    await seedExpired();
+
+    await assertSucceeds(
+      as(JOINERS[0]).ref(`sessions/${CODE}/participants/1`).remove(),
+    );
+  });
+
+  // What the next client release will send: the whole session in one write,
+  // so a failure can no longer leave `created` without its slot 0.
+  it("accepts an atomic create of created, creatorUid and slot 0", async () => {
+    await testEnv.clearDatabase();
+
+    await assertSucceeds(
+      as(CREATOR).ref(`sessions/${CODE}`).update({
+        created: Date.now(),
+        creatorUid: CREATOR,
+        "slots/0": CREATOR,
+      }),
+    );
+  });
+});
+
 describe("the handshake the deployed client actually performs", () => {
   // The test the 2026-09-11 outage needed and did not have.
   //
@@ -337,6 +437,40 @@ describe("the handshake the deployed client actually performs", () => {
     );
     await assertSucceeds(
       joiner.ref(`sessions/${CODE}/participants/1`).set(position(JOINERS[0])),
+    );
+  });
+
+  // What this release sends: `created` and every `ts` stamped by the server,
+  // and a join that reads `created` and `creatorUid` field by field instead of
+  // the whole session. The sequence above is what already-loaded tabs still
+  // send, so until every one has reloaded the rules must accept both.
+  it("accepts this release's handshake: server timestamps, field-by-field reads", async () => {
+    await testEnv.clearDatabase();
+    const creator = as(CREATOR);
+    const now = { ".sv": "timestamp" };
+
+    await assertSucceeds(creator.ref(`sessions/${CODE}/created`).set(now));
+    await assertSucceeds(
+      creator.ref(`sessions/${CODE}/creatorUid`).set(CREATOR),
+    );
+    await assertSucceeds(creator.ref(`sessions/${CODE}/slots/0`).set(CREATOR));
+    await assertSucceeds(
+      creator
+        .ref(`sessions/${CODE}/participants/0`)
+        .set({ ...position(CREATOR), ts: now }),
+    );
+
+    const joiner = as(JOINERS[0]);
+    await assertSucceeds(joiner.ref(`sessions/${CODE}/created`).get());
+    await assertSucceeds(joiner.ref(`sessions/${CODE}/creatorUid`).get());
+    await assertSucceeds(joiner.ref(`sessions/${CODE}/slots`).get());
+    await assertSucceeds(
+      joiner.ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]),
+    );
+    await assertSucceeds(
+      joiner
+        .ref(`sessions/${CODE}/participants/1`)
+        .set({ ...position(JOINERS[0]), ts: now }),
     );
   });
 

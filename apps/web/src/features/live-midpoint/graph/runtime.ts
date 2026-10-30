@@ -14,6 +14,7 @@ import { rankVenues } from "../lib/venue-ranking";
 import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
+import type { ParticipantIndex } from "../lib/participant-config";
 import { TOPO_ORDER } from "./edges";
 import {
   buildSlotVector,
@@ -26,6 +27,8 @@ import {
   createVenuePolicy,
   createRoutePolicy,
   createPresencePolicy,
+  PRESENCE_HEARTBEAT_MS,
+  routesAnswer,
 } from "./policies";
 import type { PresenceInput, RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
@@ -33,6 +36,7 @@ import type {
   GraphSources,
   LivenessResult,
   RouteInfo,
+  RouteSet,
   SessionPhase,
   SlotVector,
   TravelProfile,
@@ -56,10 +60,16 @@ export const DEFAULT_SOURCES: GraphSources = {
   ownUid: null,
   ownName: "",
   sessionStatus: "idle",
+  serverTimeOffsetMs: 0,
 };
 
+const NO_FLAGS: readonly boolean[] = Object.freeze(
+  new Array<boolean>(MAX_PARTICIPANTS).fill(false),
+);
+
 const NO_LIVENESS: LivenessResult = Object.freeze({
-  stale: Object.freeze(new Array<boolean>(MAX_PARTICIPANTS).fill(false)),
+  stale: NO_FLAGS,
+  departed: NO_FLAGS,
   nextFlipAtMs: null,
 });
 
@@ -109,12 +119,14 @@ function sameLatLng(a: LatLng | null, b: LatLng | null): boolean {
 function sameSlots(a: SlotVector, b: SlotVector): boolean {
   if (a.ownSlot !== b.ownSlot) return false;
   if (a.occupied.length !== b.occupied.length) return false;
+  if (a.counted.length !== b.counted.length) return false;
   for (let i = 0; i < MAX_PARTICIPANTS; i++) {
     if (!sameLatLng(a.positions[i] ?? null, b.positions[i] ?? null)) {
       return false;
     }
     if (a.accuracy[i] !== b.accuracy[i]) return false;
     if (a.stale[i] !== b.stale[i]) return false;
+    if (a.departed[i] !== b.departed[i]) return false;
     if (a.names[i] !== b.names[i]) return false;
   }
   return true;
@@ -131,7 +143,7 @@ export function createRuntime(
     createVenuePolicy(ports),
     ports,
   );
-  const routes: Resource<RouteInput, (RouteInfo | null)[]> = createResource(
+  const routes: Resource<RouteInput, RouteSet> = createResource(
     createRoutePolicy(ports),
     ports,
   );
@@ -152,6 +164,18 @@ export function createRuntime(
   // life of the session whether or not anything was about to change.
   let livenessTimer: ReturnType<GraphPorts["schedule"]> | null = null;
   let livenessArmedFor: number | null = null;
+  // Offers own position again while it is being published, so a participant
+  // standing still keeps writing — see PRESENCE_HEARTBEAT_MS.
+  let heartbeatTimer: ReturnType<GraphPorts["schedule"]> | null = null;
+  // Positions the routes are computed from, and the routes published from
+  // them — both memoised so an unchanged roster keeps its references.
+  let countedFor: SlotVector | null = null;
+  let countedPositions: readonly (LatLng | null)[] = EMPTY_ROUTES.map(
+    () => null,
+  );
+  let publishedRoutes: readonly (RouteInfo | null)[] = EMPTY_ROUTES;
+  let publishedFrom: RouteSet | null = null;
+  let publishedMask = "";
   let ranked: readonly RankedVenue[] = EMPTY_VENUES;
   let rankedFromRaw: PlaceResult[] | null = null;
   let rankedAtCenter: LatLng | null = null;
@@ -183,10 +207,17 @@ export function createRuntime(
    *
    * Re-armed only when the target instant actually changes, so a heartbeat
    * that does not move the earliest flip costs nothing. Nothing is armed when
-   * every participant is already stale — there is no further transition to
-   * wait for, and the next real event will recompute anyway.
+   * every participant has departed — there is no further transition to wait
+   * for, and the next real event will recompute anyway.
+   *
+   * The flip is in server time; the timer runs on this device's clock, so it
+   * is keyed by the device instant. Keyed by the server instant, a re-measured
+   * offset left the wake on the old one: the flip had not moved, so nothing
+   * re-armed.
    */
-  function armLivenessWake(atMs: number | null): void {
+  function armLivenessWake(atServerMs: number | null): void {
+    const atMs =
+      atServerMs === null ? null : atServerMs - sources.serverTimeOffsetMs;
     if (atMs === livenessArmedFor) return;
     if (livenessTimer !== null) {
       ports.cancel(livenessTimer);
@@ -210,6 +241,59 @@ export function createRuntime(
     );
   }
 
+  /** Keep one heartbeat wake armed while own position is being published. */
+  function armHeartbeat(publishing: boolean): void {
+    if (!publishing) {
+      if (heartbeatTimer !== null) ports.cancel(heartbeatTimer);
+      heartbeatTimer = null;
+      return;
+    }
+    if (heartbeatTimer !== null) return;
+    heartbeatTimer = ports.schedule(() => {
+      heartbeatTimer = null;
+      tick();
+    }, PRESENCE_HEARTBEAT_MS);
+  }
+
+  /** Slot positions with everyone not counted — vacant or departed — nulled. */
+  function positionsCounted(of: SlotVector): readonly (LatLng | null)[] {
+    if (of !== countedFor) {
+      countedFor = of;
+      countedPositions = of.positions.map((position, slot) =>
+        of.counted.includes(slot as ParticipantIndex) ? position : null,
+      );
+    }
+    return countedPositions;
+  }
+
+  /**
+   * The routes to show: only a set that still answers the current
+   * destination and profile, and only for participants still counted.
+   *
+   * The resource keeps its last value through any change of input, so this
+   * used to publish whatever it last fetched: routes for a venue no longer
+   * picked, and for participants who had left — drawn and listed until the
+   * next fetch replaced them, which never came once the destination itself
+   * was gone.
+   */
+  function routesToPublish(
+    set: RouteSet | null,
+    dest: LatLng | null,
+    of: SlotVector,
+  ): readonly (RouteInfo | null)[] {
+    if (set === null || dest === null) return EMPTY_ROUTES;
+    if (!routesAnswer(set, dest, sources.travelProfile)) return EMPTY_ROUTES;
+    const mask = of.counted.join(",");
+    if (set !== publishedFrom || mask !== publishedMask) {
+      publishedFrom = set;
+      publishedMask = mask;
+      publishedRoutes = set.bySlot.map((route, slot) =>
+        of.counted.includes(slot as ParticipantIndex) ? route : null,
+      );
+    }
+    return publishedRoutes;
+  }
+
   function compute(): void {
     let nextDestination: LatLng | null = null;
     let nextSelected: RankedVenue | null = null;
@@ -219,7 +303,9 @@ export function createRuntime(
     for (const node of TOPO_ORDER) {
       switch (node) {
         case "liveness": {
-          liveness = deriveLiveness(sources.participants, ports.now());
+          // Server time: peers' `lastSeen` is stamped by the server.
+          const serverNowMs = ports.now() + sources.serverTimeOffsetMs;
+          liveness = deriveLiveness(sources.participants, serverNowMs);
           armLivenessWake(liveness.nextFlipAtMs);
           break;
         }
@@ -253,8 +339,10 @@ export function createRuntime(
               accuracy: sources.ownAccuracy ?? 0,
               name: sources.ownName,
             });
+            armHeartbeat(true);
           } else {
             presence.request(null);
+            armHeartbeat(false);
           }
           break;
         }
@@ -302,9 +390,9 @@ export function createRuntime(
           break;
         }
         case "routes": {
-          if (nextDestination !== null && slots.occupied.length > 0) {
+          if (nextDestination !== null && slots.counted.length > 0) {
             routes.request({
-              slots: slots.positions,
+              slots: positionsCounted(slots),
               dest: nextDestination,
               profile: sources.travelProfile,
             });
@@ -326,7 +414,7 @@ export function createRuntime(
             destination: sameLatLng(nextDestination, snapshot.destination)
               ? snapshot.destination
               : nextDestination,
-            routes: routeState.value ?? EMPTY_ROUTES,
+            routes: routesToPublish(routeState.value, nextDestination, slots),
             routesDegraded: routeState.status === "degraded",
             travelProfile: sources.travelProfile,
             phase,
@@ -404,6 +492,8 @@ export function createRuntime(
       if (livenessTimer !== null) ports.cancel(livenessTimer);
       livenessTimer = null;
       livenessArmedFor = null;
+      if (heartbeatTimer !== null) ports.cancel(heartbeatTimer);
+      heartbeatTimer = null;
       venues.dispose();
       routes.dispose();
       presence.dispose();

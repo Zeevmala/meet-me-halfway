@@ -8,7 +8,14 @@
  * The uid still travels inside the payload: peers need it to tell themselves
  * apart from everyone else, and the rules validate it against `auth.uid`.
  */
-import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
+import {
+  onDisconnect,
+  onValue,
+  ref,
+  remove,
+  serverTimestamp,
+  set,
+} from "firebase/database";
 import type { Database } from "firebase/database";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
@@ -16,13 +23,17 @@ import { classifyThrown } from "../../../core/dag/errors";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { ParticipantIndex } from "./participant-config";
 
+/**
+ * What a participant publishes. The write's time (`ts`) is not part of it: the
+ * writer stamps it with the server's clock. Device clocks disagree — by minutes
+ * on some phones — and every peer judges staleness from this one number.
+ */
 export interface PresenceValue {
   /** Validated against `auth.uid` by the rules; identifies self to peers. */
   readonly uid: string;
   readonly lat: number;
   readonly lng: number;
   readonly accuracy: number;
-  readonly ts: number;
   readonly name: string;
 }
 
@@ -95,7 +106,7 @@ export function createPresenceWriter(db: Database): PresenceWriter {
       watchConnection();
 
       try {
-        await set(ownRef, value);
+        await set(ownRef, { ...value, ts: serverTimestamp() });
         // The resource aborts a superseded write, but `set` has already been
         // sent over the WebSocket by then; report the abort so the epoch guard
         // discards the result rather than counting it as a success.

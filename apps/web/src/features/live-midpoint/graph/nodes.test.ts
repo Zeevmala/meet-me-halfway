@@ -5,6 +5,7 @@ import {
   deriveMidpoint,
   deriveDestination,
   derivePhase,
+  DEPARTED_THRESHOLD_MS,
   STALE_THRESHOLD_MS,
 } from "./nodes";
 import type { GraphSources, LivenessResult, ParticipantSource } from "./types";
@@ -33,12 +34,11 @@ function participant(
   };
 }
 
+const NONE = () => new Array<boolean>(MAX_PARTICIPANTS).fill(false);
+
 /** Liveness with nobody stale — the default for slot-vector tests. */
 function fresh(): LivenessResult {
-  return {
-    stale: new Array<boolean>(MAX_PARTICIPANTS).fill(false),
-    nextFlipAtMs: null,
-  };
+  return { stale: NONE(), departed: NONE(), nextFlipAtMs: null };
 }
 
 function sources(overrides: Partial<GraphSources> = {}): GraphSources {
@@ -53,6 +53,7 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownUid: "own-uid",
     ownName: "Me",
     sessionStatus: "ready",
+    serverTimeOffsetMs: 0,
     ...overrides,
   };
 }
@@ -118,7 +119,7 @@ describe("buildSlotVector", () => {
     stale[1] = true;
     const v = buildSlotVector(
       sources({ participants: [participant(1, JERUSALEM)] }),
-      { stale, nextFlipAtMs: null },
+      { stale, departed: NONE(), nextFlipAtMs: null },
     );
 
     expect(v.stale[1]).toBe(true);
@@ -146,6 +147,37 @@ describe("buildSlotVector", () => {
 
     expect(v.occupied).toEqual([]);
     expect(v.ownSlot).toBeNull();
+  });
+
+  it("still draws a departed peer, but stops counting them", () => {
+    const departed = NONE();
+    departed[1] = true;
+    const v = buildSlotVector(
+      sources({
+        participants: [participant(1, JERUSALEM), participant(2, HAIFA)],
+      }),
+      { stale: departed, departed, nextFlipAtMs: null },
+    );
+
+    expect(v.positions[1]).toEqual(JERUSALEM);
+    expect(v.occupied).toEqual([0, 1, 2]);
+    expect(v.counted).toEqual([0, 2]);
+    expect(v.departed[1]).toBe(true);
+  });
+
+  it("always counts own slot", () => {
+    // Own position is this device's GPS fix. The session layer drops our own
+    // record, so liveness never judges it; should it ever, how long ago our
+    // last write landed says nothing about whether we are still here.
+    const departed = NONE();
+    departed[0] = true;
+    const v = buildSlotVector(sources(), {
+      stale: departed,
+      departed,
+      nextFlipAtMs: null,
+    });
+
+    expect(v.counted).toEqual([0]);
   });
 });
 
@@ -188,6 +220,41 @@ describe("deriveMidpoint", () => {
 
     expect(sparse?.lat).toBeCloseTo(dense?.lat ?? NaN, 10);
     expect(sparse?.lng).toBeCloseTo(dense?.lng ?? NaN, 10);
+  });
+
+  // A peer silent for minutes kept pulling the midpoint towards wherever they
+  // were last seen, for as long as their node stayed in the database.
+  it("leaves a departed participant out", () => {
+    const departed = NONE();
+    departed[2] = true;
+    const withDeparted = deriveMidpoint(
+      buildSlotVector(
+        sources({
+          participants: [participant(1, JERUSALEM), participant(2, HAIFA)],
+        }),
+        { stale: departed, departed, nextFlipAtMs: null },
+      ),
+    );
+    const withoutThem = deriveMidpoint(
+      buildSlotVector(
+        sources({ participants: [participant(1, JERUSALEM)] }),
+        fresh(),
+      ),
+    );
+
+    expect(withDeparted?.lat).toBeCloseTo(withoutThem?.lat ?? NaN, 10);
+    expect(withDeparted?.lng).toBeCloseTo(withoutThem?.lng ?? NaN, 10);
+  });
+
+  it("has no midpoint once the only peer has departed", () => {
+    const departed = NONE();
+    departed[1] = true;
+    const v = buildSlotVector(
+      sources({ participants: [participant(1, JERUSALEM)] }),
+      { stale: departed, departed, nextFlipAtMs: null },
+    );
+
+    expect(deriveMidpoint(v)).toBeNull();
   });
 });
 
@@ -248,17 +315,39 @@ describe("deriveLiveness", () => {
     expect(result.stale[1]).toBe(true);
   });
 
-  it("is stale exactly at the threshold, and has no further flip to wait for", () => {
+  it("is stale exactly at the threshold, and next waits for departure", () => {
     // The boundary is inclusive because the runtime arms a wake for precisely
     // this instant: if the predicate were still false when that wake fired,
     // it would re-derive the same target and re-arm at a zero delay forever.
+    const lastSeen = NOW - STALE_THRESHOLD_MS;
     const result = deriveLiveness(
-      [participant(1, JERUSALEM, { lastSeen: NOW - STALE_THRESHOLD_MS })],
+      [participant(1, JERUSALEM, { lastSeen })],
       NOW,
     );
 
     expect(result.stale[1]).toBe(true);
-    expect(result.nextFlipAtMs).toBeNull();
+    expect(result.departed[1]).toBe(false);
+    expect(result.nextFlipAtMs).toBe(lastSeen + DEPARTED_THRESHOLD_MS);
+  });
+
+  it("marks a participant departed exactly at the departure threshold", () => {
+    const before = deriveLiveness(
+      [
+        participant(1, JERUSALEM, {
+          lastSeen: NOW - DEPARTED_THRESHOLD_MS + 1,
+        }),
+      ],
+      NOW,
+    );
+    const at = deriveLiveness(
+      [participant(1, JERUSALEM, { lastSeen: NOW - DEPARTED_THRESHOLD_MS })],
+      NOW,
+    );
+
+    expect(before.departed[1]).toBe(false);
+    expect(before.nextFlipAtMs).toBe(NOW + 1);
+    expect(at.departed[1]).toBe(true);
+    expect(at.stale[1]).toBe(true);
   });
 
   it("is fresh one millisecond before the threshold", () => {
@@ -284,14 +373,30 @@ describe("deriveLiveness", () => {
     expect(result.nextFlipAtMs).toBe(NOW - 20_000 + STALE_THRESHOLD_MS);
   });
 
-  it("has no next flip when everyone is already stale", () => {
+  it("has no next flip once everyone has departed", () => {
     const result = deriveLiveness(
-      [participant(1, JERUSALEM, { lastSeen: NOW - STALE_THRESHOLD_MS * 4 })],
+      [participant(1, JERUSALEM, { lastSeen: NOW - DEPARTED_THRESHOLD_MS })],
       NOW,
     );
 
-    expect(result.stale[1]).toBe(true);
+    expect(result.departed[1]).toBe(true);
     expect(result.nextFlipAtMs).toBeNull();
+  });
+
+  it("waits for the earliest transition across stale and departed peers", () => {
+    const result = deriveLiveness(
+      [
+        // Stale already; departs 100s from now.
+        participant(1, JERUSALEM, {
+          lastSeen: NOW - 20_000 - STALE_THRESHOLD_MS,
+        }),
+        // Fresh; goes stale 25s from now.
+        participant(2, HAIFA, { lastSeen: NOW - 5_000 }),
+      ],
+      NOW,
+    );
+
+    expect(result.nextFlipAtMs).toBe(NOW - 5_000 + STALE_THRESHOLD_MS);
   });
 
   it("has no next flip with an empty roster", () => {
@@ -329,7 +434,11 @@ describe("derivePhase", () => {
   const withPeer = (stale: boolean) => {
     const flags = new Array<boolean>(MAX_PARTICIPANTS).fill(false);
     flags[1] = stale;
-    const liveness: LivenessResult = { stale: flags, nextFlipAtMs: null };
+    const liveness: LivenessResult = {
+      stale: flags,
+      departed: NONE(),
+      nextFlipAtMs: null,
+    };
     return {
       slots: buildSlotVector(
         sources({ participants: [participant(1, JERUSALEM)] }),
@@ -364,11 +473,31 @@ describe("derivePhase", () => {
     expect(derivePhase("ready", slots, liveness)).toBe("some_stale");
   });
 
+  it("waits again once the only peer has departed", () => {
+    const flags = NONE();
+    flags[1] = true;
+    const liveness: LivenessResult = {
+      stale: flags,
+      departed: flags,
+      nextFlipAtMs: null,
+    };
+    const slots = buildSlotVector(
+      sources({ participants: [participant(1, JERUSALEM)] }),
+      liveness,
+    );
+
+    expect(derivePhase("ready", slots, liveness)).toBe("waiting");
+  });
+
   it("does not count own slot as a peer", () => {
     // Own staleness is not a thing the user needs telling about, and counting
     // it would flip a solo session to "connected" against itself.
     const flags = new Array<boolean>(MAX_PARTICIPANTS).fill(true);
-    const liveness: LivenessResult = { stale: flags, nextFlipAtMs: null };
+    const liveness: LivenessResult = {
+      stale: flags,
+      departed: NONE(),
+      nextFlipAtMs: null,
+    };
     expect(
       derivePhase("ready", buildSlotVector(sources(), liveness), liveness),
     ).toBe("waiting");

@@ -22,7 +22,11 @@ vi.mock("firebase/database", () => ({
     emitConnected = (connected) => cb({ val: () => connected });
     return () => {};
   },
+  serverTimestamp: () => SERVER_TIMESTAMP,
 }));
+
+/** Stands in for `serverTimestamp()`'s placeholder, which the server resolves. */
+const SERVER_TIMESTAMP = { ".sv": "timestamp" };
 
 const db = { _db: true } as unknown as Database;
 const live = () => new AbortController().signal;
@@ -35,7 +39,6 @@ const VALUE: PresenceValue = {
   lat: 32.08,
   lng: 34.78,
   accuracy: 10,
-  ts: 1_700_000_000_000,
   name: "Me",
 };
 
@@ -56,7 +59,21 @@ describe("createPresenceWriter", () => {
     const result = await writer.write("ABC234", SLOT, VALUE, live());
 
     expect(result).toEqual({ ok: true, value: undefined });
-    expect(mockSet).toHaveBeenCalledWith({ path: PATH }, VALUE);
+    expect(mockSet).toHaveBeenCalledWith(
+      { path: PATH },
+      { ...VALUE, ts: SERVER_TIMESTAMP },
+    );
+  });
+
+  // Peers judge staleness from `ts`, and device clocks disagree by minutes on
+  // some phones. A device-stamped `ts` made a participant with a slow clock
+  // look stale to everyone, and one with a fast clock look live after leaving.
+  it("stamps each write with the server's clock, not the device's", async () => {
+    const writer = createPresenceWriter(db);
+
+    await writer.write("ABC234", SLOT, VALUE, live());
+
+    expect(mockSet.mock.calls[0]?.[1]).toMatchObject({ ts: SERVER_TIMESTAMP });
   });
 
   // Regression guard: a participant whose socket drops without a clean

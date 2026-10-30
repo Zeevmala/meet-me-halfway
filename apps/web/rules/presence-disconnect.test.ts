@@ -70,7 +70,7 @@ function connected(want: boolean): Promise<void> {
 }
 
 function position(lat: number) {
-  return { uid: "u1", lat, lng: 34.78, accuracy: 10, ts: Date.now(), name: "" };
+  return { uid: "u1", lat, lng: 34.78, accuracy: 10, name: "" };
 }
 
 beforeAll(async () => {
