@@ -541,6 +541,14 @@
   margin-top: 1px;
 }
 
+/* Under the stats: the last routes are shown after a failed refresh. */
+.live-routes-stale {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-block: -4px 10px;
+  text-align: center;
+}
+
 /* ── Offline banner ── */
 
 .live-offline-banner {

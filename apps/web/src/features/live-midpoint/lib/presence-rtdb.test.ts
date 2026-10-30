@@ -146,14 +146,32 @@ describe("createPresenceWriter", () => {
   });
 
   it("returns a typed failure rather than throwing when the write fails", async () => {
-    mockSet.mockRejectedValueOnce(new Error("permission_denied"));
+    mockSet.mockRejectedValueOnce(new Error("Disconnected"));
     const writer = createPresenceWriter(db);
 
     const result = await writer.write("ABC234", SLOT, VALUE, live());
 
     expect(result).toEqual({
       ok: false,
-      error: { kind: "NETWORK", detail: "permission_denied" },
+      error: { kind: "NETWORK", detail: "Disconnected" },
+    });
+  });
+
+  // Classified as a network failure, a denial was retried three times per
+  // write and counted towards opening the breaker on a healthy database.
+  it("reports a rules denial as DENIED, not as a network failure", async () => {
+    // Worded as @firebase/database's errorForServerCode words it.
+    const denial =
+      "permission_denied at /sessions/ABC234/participants/1: " +
+      "Client doesn't have permission to access the desired data.";
+    mockSet.mockRejectedValueOnce(new Error(denial));
+    const writer = createPresenceWriter(db);
+
+    const result = await writer.write("ABC234", SLOT, VALUE, live());
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "DENIED", detail: denial },
     });
   });
 

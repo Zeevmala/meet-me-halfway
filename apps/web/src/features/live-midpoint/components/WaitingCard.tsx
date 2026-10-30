@@ -47,10 +47,16 @@ export default memo(function WaitingCard({ code }: WaitingCardProps) {
           </button>
         </div>
       </div>
+      {/* A new tab, so reading them does not leave the session. Followed in
+          place, they unloaded the page, and Back restored it frozen. */}
       <nav className="live-legal-links" aria-label="Legal">
-        <a href="/privacy">{t("live.privacy")}</a>
+        <a href="/privacy" target="_blank" rel="noopener noreferrer">
+          {t("live.privacy")}
+        </a>
         <span aria-hidden="true">&middot;</span>
-        <a href="/terms">{t("live.terms")}</a>
+        <a href="/terms" target="_blank" rel="noopener noreferrer">
+          {t("live.terms")}
+        </a>
         <span aria-hidden="true">&middot;</span>
         <a
           href="https://github.com/zeevmala/meet-me-halfway"

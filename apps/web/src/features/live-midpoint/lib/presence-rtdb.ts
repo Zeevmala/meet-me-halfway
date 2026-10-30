@@ -23,6 +23,9 @@ import { classifyThrown } from "../../../core/dag/errors";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { ParticipantIndex } from "./participant-config";
 
+/** How RTDB words a rules denial in a rejected write. */
+const PERMISSION_DENIED = /permission[_ ]denied/i;
+
 /**
  * What a participant publishes. The write's time (`ts`) is not part of it: the
  * writer stamps it with the server's clock. Device clocks disagree — by minutes
@@ -118,7 +121,15 @@ export function createPresenceWriter(db: Database): PresenceWriter {
         if (thrown instanceof DOMException && thrown.name === "AbortError") {
           throw thrown;
         }
-        return err(classifyThrown(thrown));
+        // A rules denial — say, once the session is past its 24 hours — was
+        // classified as a network failure: retried three times per write,
+        // and counted towards opening the breaker on a healthy database.
+        const failure = classifyThrown(thrown);
+        return err(
+          failure.kind === "NETWORK" && PERMISSION_DENIED.test(failure.detail)
+            ? { kind: "DENIED", detail: failure.detail }
+            : failure,
+        );
       }
     },
 

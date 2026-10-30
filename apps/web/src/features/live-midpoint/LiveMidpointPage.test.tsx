@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ParticipantIndex } from "./lib/participant-config";
 import { ServicesProvider } from "../../components/ServicesProvider";
 import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 import type { ParticipantInfo } from "./hooks/useLiveSession";
-import { ok } from "../../core/dag/result";
+import { ok, err } from "../../core/dag/result";
 import { DEPARTED_THRESHOLD_MS } from "./graph/nodes";
 
 // ── Mock i18next ──
@@ -394,6 +394,72 @@ describe("LiveMidpointPage", () => {
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.getByTestId("session-badge")).toBeTruthy();
+  });
+
+  // Dropped as "no code", a mangled ?code= started a new session in place of
+  // the one the link named. The join validates it, so it has to receive it.
+  it("hands a mangled link's code to the join rather than creating a session", () => {
+    vi.stubGlobal("location", { ...window.location, search: "?code=!!bad" });
+    const session = defaultSession();
+    mockSession.mockReturnValue(session);
+
+    renderPage();
+
+    expect(session.joinSession).toHaveBeenCalledWith(
+      "!!BAD",
+      expect.any(AbortSignal),
+    );
+    expect(session.createSession).not.toHaveBeenCalled();
+  });
+
+  // pagehide tears down the listener and GPS. Restored from the
+  // back/forward cache, nothing restarted them and the map froze.
+  it("reloads when the page is restored from the back/forward cache", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, search: "", reload });
+    renderPage();
+
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: false }),
+    );
+    expect(reload).not.toHaveBeenCalled();
+
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    );
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  // The graph knew own location was not getting through, and nothing said
+  // so: the others watched this participant go stale while this screen
+  // looked fine.
+  it("says so when own location is not reaching the others", async () => {
+    vi.useFakeTimers();
+    try {
+      const failing: GraphPorts = {
+        ...testPorts,
+        now: () => Date.now(),
+        schedule: (fn, ms) => setTimeout(fn, ms),
+        cancel: (id) => clearTimeout(id),
+        writePresence: vi
+          .fn()
+          .mockResolvedValue(err({ kind: "DENIED", detail: "denied" })),
+      };
+      render(
+        <ServicesProvider services={{ ...testServices, graphPorts: failing }}>
+          <LiveMidpointPage />
+        </ServicesProvider>,
+      );
+      expect(screen.queryByText("live.presenceFailed")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(screen.getByText("live.presenceFailed")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows offline banner when network is offline", () => {

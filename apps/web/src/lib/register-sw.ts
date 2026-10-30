@@ -43,13 +43,49 @@ async function unregisterInDev(): Promise<void> {
   }
 }
 
+/**
+ * Production: register, and make sure a deploy actually reaches open tabs.
+ *
+ * `sw.js` takes over open tabs the moment a new version activates and deletes
+ * the cache that held the previous bundle. A tab left running that bundle has
+ * nothing to fall back on — its next lazy import 404s — and it keeps writing
+ * whatever schema it was built for, which is what a contract-step rules
+ * release refuses. So a takeover reloads the page.
+ *
+ * The browser looks for a new worker only on navigation, which a single-page
+ * tab left open for hours never makes, so the check also runs each time the
+ * tab comes back into view — the moment a reload costs the least.
+ */
+function registerInProd(): void {
+  // The first worker claiming an uncontrolled page is an install, not an
+  // update: reloading then would only repeat a load that just happened.
+  let controlled = navigator.serviceWorker.controller !== null;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!controlled) {
+      controlled = true;
+      return;
+    }
+    location.reload();
+  });
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => {
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState !== "visible") return;
+          registration
+            .update()
+            .catch((err) => console.warn("[sw] update check failed:", err));
+        });
+      })
+      .catch((err) => console.warn("[sw] registration failed:", err));
+  });
+}
+
 if ("serviceWorker" in navigator) {
   if (import.meta.env.PROD) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker
-        .register("/sw.js")
-        .catch((err) => console.warn("[sw] registration failed:", err));
-    });
+    registerInProd();
   } else {
     void unregisterInDev().catch((err) =>
       console.warn("[sw] dev teardown failed:", err),

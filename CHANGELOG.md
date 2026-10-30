@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — flows that left people stuck, and deploys that missed open tabs
+
+- **A failed create led into a dead end, or a stranger's session.** The URL
+  took the new code before anything was written, so after a failure Retry
+  reloaded into a join of a session that did not exist. And `created` is
+  write-once, so a code that was already taken failed the create — and that
+  same Retry joined whoever held it. The URL now changes only once the
+  session exists, and a taken code draws another (up to three)
+- **A mangled link silently started a new session.** An invalid `?code=`
+  read as no code at all, so the joiner sat alone, believing they had joined.
+  It is now refused as an invalid link
+- **Some error screens had no way out.** Not found, expired, full and invalid
+  link now offer to start a new session
+- **Going back to the app could leave it frozen.** Leaving the page shut down
+  the listener and GPS, and a page restored from the back/forward cache never
+  restarted them; it now reloads. The privacy and terms links open in a new
+  tab, so reading them does not leave the session
+- **Failures were silent.** The page now says when your location is not
+  reaching the others, and the card when routes could not be refreshed. A
+  rules denial of the location write was treated as a network failure,
+  retried and counted towards the circuit breaker; it is now neither
+- **Straight-line distances measured to the wrong place.** With a venue
+  picked and no route yet, they measured to the midpoint
+- **Deploys reach open tabs.** A tab reloads when a new service worker takes
+  it over, and checks for one whenever it comes back into view; the page is
+  served `no-cache`; a chunk removed by a deploy triggers one reload instead
+  of the error screen; and deploys run one at a time, so two quick pushes
+  cannot ship a client and rules from different commits
+
 ### Fixed — holes in the database rules
 
 - **Slot claims under codes no session had.** Any signed-in client could
