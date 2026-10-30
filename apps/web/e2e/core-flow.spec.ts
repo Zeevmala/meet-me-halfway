@@ -18,9 +18,13 @@ test("app shows auth or session state after load", async ({ page }) => {
   const livePage = page.locator(".live-page");
   await expect(livePage).toBeVisible({ timeout: 10_000 });
 
-  // Verify the page contains meaningful content (not blank)
-  const text = await livePage.textContent();
-  expect(text?.length).toBeGreaterThan(0);
+  // Verify the page contains meaningful content (not blank). Retried, not
+  // read once: the page is briefly visible with no text at all — its first
+  // render draws only the map, and the session badge follows when the
+  // handshake sets the code. A single read could land in that gap, and on
+  // headless Firefox in CI it did, failing main's run for #104 and skipping
+  // its deploy.
+  await expect(livePage).toHaveText(/\S/, { timeout: 10_000 });
 });
 
 test("joiner can open a session link without crashing", async ({ page }) => {
