@@ -8,9 +8,6 @@ import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
-
-/** A participant whose last write is older than this is shown as stale. */
-export const STALE_THRESHOLD_MS = 30_000;
 import type {
   DestinationResult,
   GraphSources,
@@ -20,6 +17,18 @@ import type {
   SessionStatus,
   SlotVector,
 } from "./types";
+
+/** A participant whose last write is older than this is shown as stale. */
+export const STALE_THRESHOLD_MS = 30_000;
+
+/**
+ * A participant silent this long has left, as far as the meeting point is
+ * concerned: still drawn, dimmed, but no longer pulling the midpoint or
+ * getting a route. Their node should be gone already — the disconnect cleanup
+ * removes it — so this covers the cases it cannot: a tab still connected but
+ * frozen in the background, or a phone that stopped reporting.
+ */
+export const DEPARTED_THRESHOLD_MS = 120_000;
 
 /**
  * Fold own position and every participant into slot-indexed parallel arrays
@@ -38,6 +47,7 @@ export function buildSlotVector(
   const accuracy: number[] = new Array(MAX_PARTICIPANTS).fill(0);
   const names: (string | null)[] = new Array(MAX_PARTICIPANTS).fill(null);
   const occupied: ParticipantIndex[] = [];
+  const counted: ParticipantIndex[] = [];
 
   const ownSlot = sources.ownSlot;
   if (ownSlot !== null && sources.ownPosition !== null) {
@@ -54,15 +64,21 @@ export function buildSlotVector(
   }
 
   for (let i = 0; i < MAX_PARTICIPANTS; i++) {
-    if (positions[i] !== null) occupied.push(i as ParticipantIndex);
+    if (positions[i] === null) continue;
+    occupied.push(i as ParticipantIndex);
+    if (i === ownSlot || liveness.departed[i] !== true) {
+      counted.push(i as ParticipantIndex);
+    }
   }
 
   return {
     positions,
     accuracy,
     stale: liveness.stale,
+    departed: liveness.departed,
     names,
     occupied,
+    counted,
     ownSlot,
   };
 }
@@ -71,19 +87,25 @@ export function buildSlotVector(
  * A participant is stale once their last write is older than the threshold.
  *
  * The second return value is what makes this cheap: `nextFlipAtMs` is the
- * earliest instant at which some participant's staleness changes, so the
+ * earliest instant at which some participant turns stale or departs, so the
  * runtime arms exactly one timer for it instead of polling. Recomputing from
  * the clock on every tick also means a tab that was backgrounded for ten
  * minutes reports the truth on its first tick back, which the 10s
  * `setInterval` this replaces could not: mobile browsers throttle it to
  * minutes and freeze it entirely under bfcache. That is the same reasoning
  * `core/dag/breaker.ts` gives for holding no timer of its own.
+ *
+ * `nowMs` must be the server's clock. `lastSeen` is stamped by the server, and
+ * device clocks run minutes off on some phones: measured against one, a fresh
+ * peer looked stale on a slow phone and a departed one looked live on a fast
+ * one.
  */
 export function deriveLiveness(
   participants: readonly ParticipantSource[],
   nowMs: number,
 ): LivenessResult {
   const stale: boolean[] = new Array(MAX_PARTICIPANTS).fill(false);
+  const departed: boolean[] = new Array(MAX_PARTICIPANTS).fill(false);
   let nextFlipAtMs: number | null = null;
 
   for (const participant of participants) {
@@ -95,17 +117,26 @@ export function deriveLiveness(
     // participant was still fresh at that instant, `nextFlipAtMs` came back as
     // the same now-current timestamp, and the wake re-armed at a zero delay —
     // the same livelock `core/dag/breaker.ts` has at its half-open boundary.
-    const flipAtMs = participant.lastSeen + STALE_THRESHOLD_MS;
-    if (nowMs >= flipAtMs) {
-      stale[slot] = true;
-      continue;
-    }
-    if (nextFlipAtMs === null || flipAtMs < nextFlipAtMs) {
+    const staleAtMs = participant.lastSeen + STALE_THRESHOLD_MS;
+    const departedAtMs = participant.lastSeen + DEPARTED_THRESHOLD_MS;
+    stale[slot] = nowMs >= staleAtMs;
+    departed[slot] = nowMs >= departedAtMs;
+
+    const flipAtMs =
+      nowMs < staleAtMs
+        ? staleAtMs
+        : nowMs < departedAtMs
+          ? departedAtMs
+          : null;
+    if (
+      flipAtMs !== null &&
+      (nextFlipAtMs === null || flipAtMs < nextFlipAtMs)
+    ) {
       nextFlipAtMs = flipAtMs;
     }
   }
 
-  return { stale, nextFlipAtMs };
+  return { stale, departed, nextFlipAtMs };
 }
 
 /**
@@ -133,9 +164,11 @@ export function derivePhase(
       break;
   }
 
+  // Departed peers are drawn but do not count: one who has been silent for
+  // minutes is not someone the session is "connected" to.
   let others = 0;
   let anyStale = false;
-  for (const slot of slots.occupied) {
+  for (const slot of slots.counted) {
     if (slot === slots.ownSlot) continue;
     others++;
     if (liveness.stale[slot] === true) anyStale = true;
@@ -146,7 +179,10 @@ export function derivePhase(
 }
 
 /**
- * Geographic centroid of every occupied slot.
+ * Geographic centroid of every counted slot — occupied and not departed.
+ *
+ * A departed participant used to pull the midpoint for as long as their node
+ * stayed in the database, towards wherever they were last seen.
  *
  * Fewer than two participants is a normal waiting state, not a failure, so
  * this returns `null` rather than an error. The guard also keeps
@@ -155,7 +191,7 @@ export function derivePhase(
  */
 export function deriveMidpoint(slots: SlotVector): LatLng | null {
   const points: LatLng[] = [];
-  for (const slot of slots.occupied) {
+  for (const slot of slots.counted) {
     const position = slots.positions[slot];
     if (position) points.push(position);
   }

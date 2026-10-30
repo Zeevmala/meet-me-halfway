@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createVenuePolicy, createRoutePolicy } from "./policies";
+import { createVenuePolicy, createRoutePolicy, routesAnswer } from "./policies";
 import type { RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
 import type { LatLng } from "../lib/geo-math";
@@ -155,9 +155,25 @@ describe("route policy", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value[0]).toBeNull();
-    expect(result.value[1]?.distance).toBe(11);
-    expect(result.value[3]?.distance).toBe(22);
+    expect(result.value.bySlot[0]).toBeNull();
+    expect(result.value.bySlot[1]?.distance).toBe(11);
+    expect(result.value.bySlot[3]?.distance).toBe(22);
+  });
+
+  it("tags the routes with the destination and profile they answer", async () => {
+    const p = createRoutePolicy(makePorts());
+    const input = routeInput(
+      [TEL_AVIV, null, null, null, null],
+      FAR,
+      "walking",
+    );
+
+    const result = await p.run(input, new AbortController().signal);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.dest).toEqual(FAR);
+    expect(result.value.profile).toBe("walking");
   });
 
   // Regression: Promise.all meant one participant's 429 discarded every
@@ -180,8 +196,8 @@ describe("route policy", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value[0]).toBeNull();
-    expect(result.value[1]?.distance).toBe(22);
+    expect(result.value.bySlot[0]).toBeNull();
+    expect(result.value.bySlot[1]?.distance).toBe(22);
   });
 
   // But a total wipeout is a real outage and must reach the breaker.
@@ -197,5 +213,28 @@ describe("route policy", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe("RATE_LIMITED");
+  });
+});
+
+describe("routesAnswer", () => {
+  const set = {
+    dest: TEL_AVIV,
+    profile: "driving" as const,
+    bySlot: [null, null, null, null, null],
+  };
+
+  it("holds while the destination stays inside the route threshold", () => {
+    expect(routesAnswer(set, TEL_AVIV, "driving")).toBe(true);
+    expect(routesAnswer(set, NEARBY, "driving")).toBe(true);
+  });
+
+  // Picking a venue moves the destination; the routes to the old one would
+  // list times and distances to somewhere nobody is going.
+  it("lapses once the destination moves beyond it", () => {
+    expect(routesAnswer(set, FAR, "driving")).toBe(false);
+  });
+
+  it("lapses when the travel profile changes", () => {
+    expect(routesAnswer(set, TEL_AVIV, "walking")).toBe(false);
   });
 });

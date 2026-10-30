@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRuntime } from "./runtime";
+import { DEPARTED_THRESHOLD_MS, STALE_THRESHOLD_MS } from "./nodes";
+import { PRESENCE_HEARTBEAT_MS } from "./policies";
 import type { GraphPorts } from "./ports";
 import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
@@ -388,11 +390,11 @@ describe("createRuntime — presence", () => {
     r.dispose();
   });
 
-  it("does not write on its own while no fix arrives", async () => {
-    // Documented limitation, unchanged from the hook this replaces: presence
-    // is driven by geolocation, so a device whose watchPosition goes quiet
-    // stops publishing and peers will eventually show it as stale. Making the
-    // heartbeat self-sustaining is a behaviour change, not a refactor.
+  // This used to be the documented limitation: presence wrote only when
+  // something else ticked the graph, so with GPS quiet and no peer moving a
+  // participant wrote once and then not again, and every peer showed them as
+  // stale after STALE_THRESHOLD_MS.
+  it("keeps writing while standing still, so peers do not see it go stale", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports);
 
@@ -401,7 +403,25 @@ describe("createRuntime — presence", () => {
     expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
 
     await h.advance(60_000);
-    expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(h.ports.writePresence).mock.calls.length,
+    ).toBeGreaterThanOrEqual(1 + 60_000 / PRESENCE_HEARTBEAT_MS - 1);
+    r.dispose();
+  });
+
+  it("stops the heartbeat once there is nothing to publish", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(ready());
+    await h.advance(3_000);
+
+    // A denied permission clears the position.
+    r.setSources({ ownPosition: null });
+    const writes = vi.mocked(h.ports.writePresence).mock.calls.length;
+    await h.advance(60_000);
+
+    expect(h.ports.writePresence).toHaveBeenCalledTimes(writes);
+    expect(h.pending()).toBe(0);
     r.dispose();
   });
 
@@ -512,7 +532,7 @@ describe("createRuntime — liveness", () => {
     r.dispose();
   });
 
-  it("arms nothing further once every peer is stale", async () => {
+  it("arms a wake for departure once a peer has gone stale", async () => {
     const h = createHarness({ placesEnabled: false });
     const r = createRuntime(h.ports);
 
@@ -521,9 +541,65 @@ describe("createRuntime — liveness", () => {
       participants: [peer(h.now() - 60_000)],
     });
     await h.advance(1_000);
-
     expect(r.getSnapshot().slots.stale[1]).toBe(true);
+    expect(r.getSnapshot().slots.departed[1]).toBe(false);
+
+    await h.advance(DEPARTED_THRESHOLD_MS);
+    expect(r.getSnapshot().slots.departed[1]).toBe(true);
+    r.dispose();
+  });
+
+  it("arms nothing further once every peer has departed", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+
+    r.setSources({
+      sessionStatus: "ready",
+      participants: [peer(h.now() - DEPARTED_THRESHOLD_MS)],
+    });
+    await h.advance(1_000);
+
+    expect(r.getSnapshot().slots.departed[1]).toBe(true);
     expect(h.pending()).toBe(0);
+    r.dispose();
+  });
+
+  // `lastSeen` is stamped by the server, so it is compared with server time.
+  it("judges staleness against server time, not this device's clock", () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    // This device runs two minutes fast, and the peer has just written.
+    const serverNowMs = h.now() - 120_000;
+
+    r.setSources({
+      sessionStatus: "ready",
+      participants: [peer(serverNowMs)],
+      serverTimeOffsetMs: -120_000,
+    });
+    expect(r.getSnapshot().slots.stale[1]).toBe(false);
+
+    // Measured against the device's clock alone, the same write is two
+    // minutes old: the peer would have been dropped from the midpoint.
+    r.setSources({ serverTimeOffsetMs: 0 });
+    expect(r.getSnapshot().slots.departed[1]).toBe(true);
+    r.dispose();
+  });
+
+  // RTDB reports the offset after connecting, typically once the wake for the
+  // next flip is already armed — and the flip's server time is unchanged by
+  // it. Kept, that wake ran on the old offset: a phone three minutes slow
+  // marked a peer who stopped writing stale three minutes late.
+  it("re-arms the liveness wake when the server offset is re-measured", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources({ sessionStatus: "ready", participants: [peer(h.now())] });
+
+    // The server is 20s ahead: the peer's write is already 20s old.
+    r.setSources({ serverTimeOffsetMs: 20_000 });
+    expect(r.getSnapshot().slots.stale[1]).toBe(false);
+
+    await h.advance(STALE_THRESHOLD_MS - 20_000);
+    expect(r.getSnapshot().slots.stale[1]).toBe(true);
     r.dispose();
   });
 
@@ -557,5 +633,80 @@ describe("createRuntime — liveness", () => {
 
     r.dispose();
     expect(h.pending()).toBe(0);
+  });
+});
+
+describe("createRuntime — departed peers and stale routes", () => {
+  function session(
+    participants: ParticipantSource[],
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      sessionCode: "ABC234",
+      ownUid: "own-uid",
+      ownSlot: 0 as const,
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 10,
+      ownName: "Me",
+      sessionStatus: "ready" as const,
+      participants,
+      ...overrides,
+    };
+  }
+
+  // After the only peer left, the midpoint went null but the last route set
+  // stayed on the map and in the card, with nothing left to replace it.
+  it("drops every route when the last peer leaves", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(session([peer(1, JERUSALEM, h.now())]));
+    await h.advance(10_000);
+    expect(r.getSnapshot().routes.filter(Boolean)).toHaveLength(2);
+
+    r.setSources({ participants: [] });
+
+    expect(r.getSnapshot().midpoint).toBeNull();
+    expect(r.getSnapshot().routes.filter(Boolean)).toHaveLength(0);
+    r.dispose();
+  });
+
+  // A peer silent for minutes kept pulling the midpoint towards where they
+  // were last seen, and kept a route.
+  it("stops counting a departed peer toward the midpoint and routes", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(session([peer(1, JERUSALEM, h.now())]));
+    await h.advance(10_000);
+    expect(r.getSnapshot().midpoint).not.toBeNull();
+
+    await h.advance(DEPARTED_THRESHOLD_MS);
+
+    const snapshot = r.getSnapshot();
+    expect(snapshot.slots.departed[1]).toBe(true);
+    expect(snapshot.slots.positions[1]).toEqual(JERUSALEM); // still drawn
+    expect(snapshot.midpoint).toBeNull();
+    expect(snapshot.routes[1]).toBeNull();
+    expect(snapshot.phase).toBe("waiting");
+    r.dispose();
+  });
+
+  // Routes answer one destination. Picking a venue moved it, and the card went
+  // on listing times and distances to the midpoint until the new fetch landed.
+  it("hides routes fetched for a previous destination until new ones arrive", async () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports);
+    r.setSources(session([peer(1, JERUSALEM, h.now())]));
+    // The venue search's maxWait, as in "routes to a selected venue": every
+    // tick re-offers its input, so its trailing debounce alone never fires.
+    await h.advance(15_000);
+    expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
+
+    r.setSources({ selectedVenueId: "v1" });
+    expect(r.getSnapshot().destination).toEqual(PLACES[0]?.location);
+    expect(r.getSnapshot().routes.filter(Boolean)).toHaveLength(0);
+
+    await h.advance(10_000);
+    expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
+    r.dispose();
   });
 });

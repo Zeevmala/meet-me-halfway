@@ -5,6 +5,19 @@ import type { RankedVenue } from "../lib/venue-ranking";
 
 export type TravelProfile = "driving" | "walking";
 
+/**
+ * Routes as computed for one destination and travel profile.
+ *
+ * Tagged with what they answer so the graph can tell when they no longer do:
+ * a route set for a previous venue, or kept after its participant left, used
+ * to stay on the map and in the distances until something replaced it.
+ */
+export interface RouteSet {
+  readonly dest: LatLng;
+  readonly profile: TravelProfile;
+  readonly bySlot: readonly (RouteInfo | null)[];
+}
+
 export interface RouteInfo {
   geometry: GeoJSON.LineString;
   duration: number; // seconds
@@ -24,7 +37,7 @@ export interface ParticipantSource {
   readonly index: ParticipantIndex;
   readonly position: LatLng;
   readonly accuracy: number;
-  /** Epoch ms of this participant's most recent RTDB write. */
+  /** Server-clock epoch ms of this participant's most recent RTDB write. */
   readonly lastSeen: number;
   readonly name: string | null;
 }
@@ -55,9 +68,16 @@ export interface SlotVector {
   readonly positions: readonly (LatLng | null)[];
   readonly accuracy: readonly number[];
   readonly stale: readonly boolean[];
+  /** Silent long enough to have left — drawn, but no longer counted. */
+  readonly departed: readonly boolean[];
   readonly names: readonly (string | null)[];
   /** Slots actually taken, ascending — for iteration without scanning. */
   readonly occupied: readonly ParticipantIndex[];
+  /**
+   * The occupied slots the midpoint and routes are computed from: everyone
+   * but the departed. Own slot is always counted while it has a position.
+   */
+  readonly counted: readonly ParticipantIndex[];
   readonly ownSlot: ParticipantIndex | null;
 }
 
@@ -74,10 +94,16 @@ export interface GraphSources {
   readonly ownUid: string | null;
   readonly ownName: string;
   readonly sessionStatus: SessionStatus;
+  /**
+   * Server clock minus this device's (`.info/serverTimeOffset`). Liveness
+   * compares server-stamped `lastSeen` against server time, never against
+   * this device's clock alone.
+   */
+  readonly serverTimeOffsetMs: number;
 }
 
 /**
- * Staleness of every slot, plus the next instant at which it changes.
+ * Staleness and departure of every slot, plus the next instant either changes.
  *
  * `nextFlipAtMs` is what replaces the polling interval: the runtime arms a
  * single timer for that instant and nothing else. It is the same lazy-clock
@@ -87,7 +113,11 @@ export interface GraphSources {
  */
 export interface LivenessResult {
   readonly stale: readonly boolean[];
-  /** Epoch ms of the next staleness transition; `null` when nobody is fresh. */
+  readonly departed: readonly boolean[];
+  /**
+   * Server-clock ms of the next transition, stale or departed; `null` once
+   * everyone has departed.
+   */
   readonly nextFlipAtMs: number | null;
 }
 

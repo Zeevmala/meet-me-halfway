@@ -29,7 +29,11 @@ vi.mock("firebase/database", () => ({
   onDisconnect: (r: unknown) => ({ remove: () => mockOnDisconnectRemove(r) }),
   set: (r: unknown, v: unknown) => mockSet(r, v),
   get: (r: unknown) => mockGet(r),
+  serverTimestamp: () => SERVER_TIMESTAMP,
 }));
+
+/** Stands in for `serverTimestamp()`'s placeholder, which the server resolves. */
+const SERVER_TIMESTAMP = { ".sv": "timestamp" };
 
 // ── Mock useFirebase ──
 // Attestation is primed once at the composition root now, so the hook awaits
@@ -66,14 +70,21 @@ vi.mock("../lib/session-code", () => ({
 /**
  * Resolve `get` per path.
  *
- * The slot claim reads `sessions/{code}/slots` directly, so a blanket
- * `mockResolvedValue` would hand it the whole session object and it would read
- * `created`/`creatorUid` as slot holders. `session` is the payload for the
- * session root; `slots` is what the claim sees.
+ * The join reads `created` and `creatorUid` one field at a time, and the slot
+ * claim reads `sessions/{code}/slots`, so each path is answered separately
+ * from `session` (the session as stored) and `slots` (what the claim sees).
  */
-function mockSession(session: unknown, slots: Record<string, string> = {}) {
+function mockSession(
+  session: { created?: number; creatorUid?: string } | null,
+  slots: Record<string, string> = {},
+) {
   mockGet.mockImplementation((r: { path?: string }) => {
     const path = r?.path ?? "";
+    const field = /\/(created|creatorUid)$/.exec(path);
+    if (field) {
+      const name = field[1] as "created" | "creatorUid";
+      return Promise.resolve({ val: () => session?.[name] ?? null });
+    }
     if (path.endsWith("/slots")) {
       return Promise.resolve({ val: () => slots });
     }
@@ -132,7 +143,7 @@ describe("useLiveSession", () => {
 
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/ABC234/created" }),
-        expect.any(Number),
+        SERVER_TIMESTAMP,
       );
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
@@ -233,6 +244,29 @@ describe("useLiveSession", () => {
   });
 
   describe("joinSession", () => {
+    // The next rules release lets only slot holders read `participants`, and a
+    // joiner holds no slot until the claim. A read of the whole session node
+    // would include `participants` and be refused for every joiner, so the
+    // join must reach for the fields it needs and nothing else.
+    it("never reads the whole session node", async () => {
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      const paths = mockGet.mock.calls.map(
+        ([r]) => (r as { path: string }).path,
+      );
+      expect(result.current.status).toBe("ready");
+      expect(paths).not.toContain("sessions/XYZ789");
+      expect(paths).not.toContain("sessions/XYZ789/participants");
+    });
+
     // These two drive an empty snapshot, which the live rules never produce —
     // they deny the read first (see "session read is denied" below). They cover
     // the defensive branch, which is kept because it is what a future relaxed
@@ -364,11 +398,10 @@ describe("useLiveSession", () => {
     });
 
     it("claims a slot and sets ownIndex on successful join", async () => {
-      mockSession({
-        created: Date.now(),
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
-      });
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -388,19 +421,7 @@ describe("useLiveSession", () => {
 
     it("sets phase to 'connected' if another participant has data", async () => {
       const creatorUid = "creator-uid";
-      mockSession({
-        created: Date.now(),
-        creatorUid,
-        slots: { "0": creatorUid },
-        participants: {
-          [creatorUid]: {
-            lat: 32.08,
-            lng: 34.78,
-            accuracy: 10,
-            ts: Date.now(),
-          },
-        },
-      });
+      mockSession({ created: Date.now(), creatorUid }, { "0": creatorUid });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -430,11 +451,10 @@ describe("useLiveSession", () => {
 
     it("joins successfully if session is less than 24h old", async () => {
       const recentTime = Date.now() - 23 * 60 * 60 * 1000;
-      mockSession({
-        created: recentTime,
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
-      });
+      mockSession(
+        { created: recentTime, creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -447,10 +467,7 @@ describe("useLiveSession", () => {
     });
 
     it("joins successfully if session has no created field (graceful)", async () => {
-      mockSession({
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
-      });
+      mockSession({ creatorUid: "creator-uid" }, { "0": "creator-uid" });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -480,11 +497,10 @@ describe("useLiveSession", () => {
     });
 
     it("sets phase to 'waiting' if no other participant has data", async () => {
-      mockSession({
-        created: Date.now(),
-        creatorUid: "creator-uid",
-        slots: { "0": "creator-uid" },
-      });
+      mockSession(
+        { created: Date.now(), creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 

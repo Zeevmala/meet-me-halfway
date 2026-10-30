@@ -62,14 +62,14 @@ the edges declared, it is a failing test that names both nodes.
 
 | Node | Kind | Input | Output | On failure |
 |---|---|---|---|---|
-| `liveness` | pure | participants, clock | `stale[]` + `nextFlipAtMs` | — |
+| `liveness` | pure | participants, server clock | `stale[]` + `departed[]` + `nextFlipAtMs` | — |
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
 | `presence` | effectful | session + own position | RTDB write | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
 | `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `midpoint` | raw `PlaceResult[]` | degrade to empty |
 | `destination` | pure | `midpoint`, `venues`, selection | `LatLng \| null` | — |
-| `routes` | effectful | `slots`, `destination`, profile | slot-keyed `RouteInfo[]` | degrade to last-good |
+| `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
 
 ### Liveness holds one timer, not an interval
@@ -88,6 +88,18 @@ The boundary is inclusive (`>=`) deliberately. With a strict `>`, a
 participant was still fresh at the instant the wake fired, the node re-derived
 the same target, and the wake re-armed at zero delay — the same livelock the
 breaker had at its half-open boundary.
+
+A second threshold rides on the same wake: at `now - lastSeen >= 120s` a
+participant has **departed**. They are still drawn, dimmed as stale, but
+`slots.counted` leaves them out, and the midpoint, the routes and the
+`connected` phase are computed from `counted` alone. Before, a peer whose tab
+froze in the background kept pulling the midpoint towards where they were
+last seen for as long as their node stayed in the database.
+
+`lastSeen` is the server's timestamp, so `now` is the server's clock:
+`ports.now()` plus the `serverTimeOffsetMs` source (`.info/serverTimeOffset`).
+Against the device clock alone, a phone running minutes slow saw a fresh peer
+as stale, and one running fast saw a departed peer as live.
 
 ### The slot is a server-arbitrated resource
 
@@ -189,6 +201,13 @@ its TTL**. Past that the value is dropped rather than served. A stale route is
 a confident lie; falling back to nothing lets `MidpointCard` show an honest
 straight-line distance instead.
 
+Routes have a second condition: they are published only while they answer the
+current destination and profile (`routesAnswer`, within the same 200 m that
+decides a refetch), and only for slots still counted. The resource keeps its
+last value through any change of input, so a venue picked, or the last peer
+leaving, used to leave the previous routes drawn and listed — in the second
+case indefinitely, since with no destination nothing would ever refetch.
+
 ---
 
 ## Atomic state
@@ -284,10 +303,14 @@ there. Mapbox at 5 participants × 1 request / 3 s is
 ~100 req/min against a 300/min free tier; the semaphore caps simultaneity at 4,
 which is the browser's per-host budget rather than the API's.
 
-**Known limitation.** `presence` is driven by geolocation, so a device whose
-`watchPosition` goes quiet stops publishing and peers eventually show it as
-stale. This is unchanged from the hook it replaces. Making the heartbeat
-self-sustaining is a behaviour change, not a refactor, and belongs in its own.
+**Heartbeat.** `presence` is offered on every tick, but a tick needs an event,
+and a participant standing still produces none: with GPS quiet and nobody
+moving, the only writes were the ones peers' liveness wakes happened to
+trigger, at the instant a peer had already turned stale — and a participant
+alone in the session, waiting, wrote once and was never asked again. The
+runtime now arms a `PRESENCE_HEARTBEAT_MS` (10 s) wake while it is publishing,
+and cancels it when it stops, so a stationary participant stays fresh for
+everyone else — which the 2-minute departure threshold depends on.
 
 ---
 

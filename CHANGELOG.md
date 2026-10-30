@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — holes in the database rules
+
+- **Slot claims under codes no session had.** Any signed-in client could
+  claim slots 1–4, then write positions, under any key: nodes nobody could
+  read, with no limit on how many. A claim, slot 0 included, now needs a
+  session created within the last 24 hours, and session keys must be codes
+  the app can generate
+- **Expired sessions still took writes.** After 24 hours a session refused
+  reads but accepted new claims and positions. It now refuses both; a holder
+  can still clear their own position
+- Shaped as the **expand** step: these rules accept the client in production
+  today, and that client works under them, so the hosting-first deploy has no
+  broken window. The contract step — location reads for slot holders only,
+  server-time equality for `created` and `ts`, an atomic create — follows in
+  a later release
+
+### Fixed — presence, liveness and routes
+
+- **A participant standing still went stale.** Presence was only re-offered
+  when something else ticked, so with GPS quiet nothing was written while
+  peers mark anyone silent for 30 s as stale. A 10 s heartbeat now keeps it
+  fresh while sharing
+- **Device clocks decided who was stale.** `ts` and `created` were the
+  writer's `Date.now()`, so a phone minutes off looked stale to everyone, or
+  live after it had left. The server stamps both now, and liveness compares
+  them against server time (`.info/serverTimeOffset`)
+- **Departed participants kept pulling the midpoint.** A peer silent for two
+  minutes is still drawn, dimmed, but no longer counts toward the midpoint,
+  the routes or the "connected" state
+- **Routes outlived what they answered.** Routes to a venue no longer picked,
+  or for a participant who had left, stayed on the map and in the card until
+  a new fetch replaced them — and after the last peer left, none ever did.
+  Routes are now tagged with the destination and profile they were fetched
+  for, and hidden once they no longer answer them
+- **The join read the whole session**, participants included, before holding
+  a slot. It reads `created` and `creatorUid` only, which the contract step
+  requires
+
 ### Fixed — the map under the production CSP
 
 - **Markers were off-screen in production.** Mapbox's stylesheet was loaded

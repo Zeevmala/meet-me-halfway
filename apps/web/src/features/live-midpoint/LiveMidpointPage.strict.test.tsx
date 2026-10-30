@@ -24,6 +24,9 @@ vi.mock("../../hooks/useAuth", () => ({
 vi.mock("../../hooks/useNetworkStatus", () => ({
   useNetworkStatus: () => ({ isOnline: true }),
 }));
+vi.mock("../../hooks/useServerTimeOffset", () => ({
+  useServerTimeOffset: () => 0,
+}));
 
 const { mockCreateSession, mockJoinSession } = vi.hoisted(() => ({
   mockCreateSession: vi.fn(),

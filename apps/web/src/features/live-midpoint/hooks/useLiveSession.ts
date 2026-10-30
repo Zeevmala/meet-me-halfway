@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onValue, ref, set, get } from "firebase/database";
+import { onValue, ref, set, get, serverTimestamp } from "firebase/database";
 import type { Database } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import * as Sentry from "@sentry/react";
@@ -390,9 +390,17 @@ export function useLiveSession(uid: string): LiveSessionState {
         // app start, so this is normally already settled — it is a barrier,
         // not a fetch. It never rejects; an unattested outcome still proceeds.
         await appCheckReady;
+        // Three writes, not one atomic update, until the rules that accept the
+        // atomic form are deployed: hosting ships before rules, and the
+        // rules in production until then refuse it. The server stamps
+        // `created`, so a phone with a wrong clock cannot shorten or extend
+        // the session's 24 hours.
         await withRetry(
           async () => {
-            await set(ref(db, `sessions/${sessionCode}/created`), Date.now());
+            await set(
+              ref(db, `sessions/${sessionCode}/created`),
+              serverTimestamp(),
+            );
             await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
             // Slot 0 must be written after creatorUid: its rule validates the
             // value against it, so claiming first would be rejected.
@@ -440,20 +448,26 @@ export function useLiveSession(uid: string): LiveSessionState {
       try {
         attestation = (await appCheckReady).reason;
 
-        const sessionRef = ref(db, `sessions/${sessionCode}`);
+        // Only the two fields the join needs, never the session node. The
+        // node includes `participants`, which the next rules release opens to
+        // slot holders only — and nobody holds a slot yet at this point, so a
+        // whole-node read would then be refused for every joiner.
+        //
         // The `.read` rule is `created > now - 24h`. For a session that was
         // never written, `created` is null and RTDB compares null to a number
         // as false — so a missing session is *denied*, not returned empty. A
-        // permission denial on this one read is therefore a statement about
-        // the session, not about the caller: it means the code is wrong or the
+        // permission denial on these reads is therefore a statement about the
+        // session, not about the caller: it means the code is wrong or the
         // session has aged out. Classifying it here rather than in the shared
         // catch is what makes SESSION_NOT_FOUND reachable at all; the branch
         // below could never fire against real rules, because `get` throws
         // before it can return a null snapshot.
-        let snap;
+        const field = (name: "created" | "creatorUid") =>
+          get(ref(db, `sessions/${sessionCode}/${name}`));
+        let snaps;
         try {
-          snap = await withRetry(
-            () => get(sessionRef),
+          snaps = await withRetry(
+            () => Promise.all([field("created"), field("creatorUid")]),
             signal,
             3,
             isTransientError,
@@ -467,18 +481,14 @@ export function useLiveSession(uid: string): LiveSessionState {
           }
           throw readRefused;
         }
-        const data = snap.val() as {
-          created?: number;
-          creatorUid?: string;
-          slots?: Record<string, string>;
-          participants?: Record<string, ParticipantData>;
-        } | null;
+        const created = snaps[0].val() as number | null;
+        const sessionCreator = snaps[1].val() as string | null;
 
-        if (!data || !data.creatorUid) {
+        if (!sessionCreator) {
           return err(fail("SESSION_NOT_FOUND", null));
         }
 
-        if (data.created && Date.now() - data.created > SESSION_TTL_MS) {
+        if (created && Date.now() - created > SESSION_TTL_MS) {
           return err(fail("SESSION_EXPIRED", null));
         }
 
@@ -495,8 +505,8 @@ export function useLiveSession(uid: string): LiveSessionState {
           return err(fail("SESSION_FULL", null));
         }
 
-        creatorUidRef.current = data.creatorUid;
-        setCreatorUid(data.creatorUid);
+        creatorUidRef.current = sessionCreator;
+        setCreatorUid(sessionCreator);
         ownSlotRef.current = slot;
 
         setCode(sessionCode);
