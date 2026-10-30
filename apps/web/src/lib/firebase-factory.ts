@@ -26,7 +26,11 @@ import {
   inMemoryPersistence,
   type Auth,
 } from "firebase/auth";
-import { getDatabase, type Database } from "firebase/database";
+import {
+  connectDatabaseEmulator,
+  getDatabase,
+  type Database,
+} from "firebase/database";
 import * as Sentry from "@sentry/react";
 import type { AppConfig } from "./config";
 
@@ -220,6 +224,40 @@ function createAuth(app: FirebaseApp): Auth {
   }
 }
 
+/**
+ * Split `host:port`. Throws rather than guessing a default port, so a
+ * misconfigured e2e build fails at startup instead of as a connection that
+ * never opens.
+ */
+export function parseEmulatorHost(value: string): {
+  host: string;
+  port: number;
+} {
+  const separator = value.lastIndexOf(":");
+  const host = value.slice(0, separator);
+  const port = Number(value.slice(separator + 1));
+  if (separator <= 0 || !Number.isInteger(port) || port <= 0) {
+    throw new Error(
+      `VITE_RTDB_EMULATOR_HOST must be host:port, got "${value}"`,
+    );
+  }
+  return { host, port };
+}
+
+/**
+ * The Database handle, pointed at the emulator when the e2e build asks for it.
+ * `connectDatabaseEmulator` must run before the first `ref()` starts the
+ * connection, which is why it lives here and nowhere downstream.
+ */
+function createDatabase(app: FirebaseApp, config: AppConfig): Database {
+  const db = getDatabase(app);
+  if (config.rtdbEmulatorHost !== null) {
+    const { host, port } = parseEmulatorHost(config.rtdbEmulatorHost);
+    connectDatabaseEmulator(db, host, port);
+  }
+  return db;
+}
+
 export function createFirebaseServices(config: AppConfig): FirebaseServices {
   const app = createApp(config);
 
@@ -235,7 +273,7 @@ export function createFirebaseServices(config: AppConfig): FirebaseServices {
     app,
     appCheck,
     appCheckReady,
-    db: getDatabase(app),
+    db: createDatabase(app, config),
     auth: createAuth(app),
   };
 }

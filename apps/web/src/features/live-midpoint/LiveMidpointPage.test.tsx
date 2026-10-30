@@ -167,6 +167,7 @@ function defaultSession() {
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
+    withdraw: vi.fn(),
     cleanup: vi.fn(),
   };
 }
@@ -224,6 +225,33 @@ describe("LiveMidpointPage", () => {
 
     expect(screen.getByText("live.geoDenied")).toBeTruthy();
     expect(screen.getByText("live.geoDeniedInstructions")).toBeTruthy();
+  });
+
+  // Turning location off is turning sharing off: the last position must not
+  // stay on everyone's map, and in the database, until the page closes.
+  it("withdraws own presence when location is denied", () => {
+    const session = defaultSession();
+    mockSession.mockReturnValue(session);
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "denied",
+      position: null,
+    });
+
+    renderPage();
+
+    expect(session.withdraw).toHaveBeenCalled();
+    expect(session.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("keeps own presence through a transient location failure", () => {
+    const session = defaultSession();
+    mockSession.mockReturnValue(session);
+    mockGeo.mockReturnValue({ ...defaultGeo(), status: "unavailable" });
+
+    renderPage();
+
+    expect(session.withdraw).not.toHaveBeenCalled();
   });
 
   it("shows geo unavailable error screen", () => {

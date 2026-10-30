@@ -138,6 +138,15 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     geo.accuracy,
   ]);
 
+  // Turning location off is turning sharing off. The denial clears the
+  // position, so nothing new is published; this takes down what already was,
+  // which would otherwise stay on everyone's map — and in the database — until
+  // the page closed. Transient GPS failures keep the last fix on purpose.
+  const { withdraw } = session;
+  useEffect(() => {
+    if (geo.status === "denied") withdraw();
+  }, [geo.status, withdraw]);
+
   // Selection and travel mode live in the graph rather than in React state.
   // Mirroring them would give two sources of truth: the list would highlight
   // a venue the graph had already stopped routing to.

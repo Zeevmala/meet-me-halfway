@@ -1,5 +1,6 @@
 import mapboxgl from "mapbox-gl";
 import { useEffect, useRef } from "react";
+import { markerRoot } from "./marker-root";
 import "../styles/live-midpoint.css";
 
 interface VenueMarkerProps {
@@ -32,7 +33,10 @@ export default function VenueMarker({
     label.textContent = name.length > 14 ? name.slice(0, 13) + "\u2026" : name;
     el.appendChild(label);
 
-    markerRef.current = new mapboxgl.Marker({ element: el, anchor: "center" })
+    markerRef.current = new mapboxgl.Marker({
+      element: markerRoot(el),
+      anchor: "center",
+    })
       .setLngLat([lng, lat])
       .addTo(map);
     elementRef.current = el;
@@ -52,13 +56,15 @@ export default function VenueMarker({
     markerRef.current?.setLngLat([lng, lat]);
   }, [lat, lng]);
 
-  // Effect 3: Toggle selected class without recreating DOM
+  // Effect 3: Toggle selected class without recreating DOM. Toggled, never
+  // assigned: assigning `className` here is what wiped Mapbox's own classes
+  // when this was the element Mapbox positioned.
   useEffect(() => {
-    if (elementRef.current) {
-      elementRef.current.className = selected
-        ? "live-marker--venue-selected"
-        : "live-marker--venue";
-    }
+    elementRef.current?.classList.toggle("live-marker--venue", !selected);
+    elementRef.current?.classList.toggle(
+      "live-marker--venue-selected",
+      selected,
+    );
   }, [selected]);
 
   return null;

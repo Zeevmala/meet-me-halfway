@@ -798,6 +798,23 @@ describe("useLiveSession", () => {
       expect(mockOnValueUnsub).toHaveBeenCalled();
     });
 
+    it("withdraw removes own presence and keeps listening", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      // The handshake detaches listeners of its own; count from here.
+      const unsubscribesBefore = mockOnValueUnsub.mock.calls.length;
+
+      act(() => {
+        result.current.withdraw();
+      });
+
+      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", 0);
+      expect(mockOnValueUnsub).toHaveBeenCalledTimes(unsubscribesBefore);
+    });
+
     it("does not remove presence if no session code", () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 

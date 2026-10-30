@@ -8,7 +8,7 @@
  * The uid still travels inside the payload: peers need it to tell themselves
  * apart from everyone else, and the rules validate it against `auth.uid`.
  */
-import { onDisconnect, ref, remove, set } from "firebase/database";
+import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
 import type { Database } from "firebase/database";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
@@ -41,32 +41,58 @@ export function presencePath(code: string, slot: ParticipantIndex): string {
 }
 
 export function createPresenceWriter(db: Database): PresenceWriter {
-  // Arm the server-side cleanup once per session rather than on every write.
-  // Keyed by path so a rejoin under a different code re-arms.
-  const armed = new Set<string>();
+  // Paths this client has published and not removed, each with a server-side
+  // removal armed for when this client's socket drops — tab close, crash,
+  // network loss, none of which reliably fire beforeunload on mobile. Without
+  // it a departed participant lingers, keeps dragging the computed midpoint,
+  // and leaves their last position in the database for good.
+  //
+  // Only `participants/{slot}` is cleared, never the `slots/{i}` claim: the
+  // claim is write-once, so releasing it would both break that rule's
+  // guarantee and let a reconnecting participant come back a different colour.
+  const published = new Set<string>();
+
+  const arm = (path: string) => {
+    onDisconnect(ref(db, path))
+      .remove()
+      .catch(() => {
+        published.delete(path); // allow a retry on the next write
+      });
+  };
+
+  // An onDisconnect belongs to the connection that registered it: the server
+  // runs it when that connection drops, then forgets it. Arming once per
+  // session therefore covered only the first drop — after a reconnect the next
+  // one left the participant's position behind. So every new connection
+  // re-arms every published path.
+  //
+  // Subscribed from the first write, not here: this writer is built at the
+  // composition root, and a listener at construction would open the socket
+  // before App Check has a token (see `appCheckReady`).
+  let watching = false;
+  let connected: boolean | null = null;
+  const watchConnection = () => {
+    if (watching) return;
+    watching = true;
+    onValue(ref(db, ".info/connected"), (snapshot) => {
+      const now = snapshot.val() === true;
+      // The first value is the connection the write just armed; only a later
+      // reconnect needs arming again.
+      if (now && connected === false) published.forEach(arm);
+      connected = now;
+    });
+  };
 
   return {
     write: async (code, slot, value, signal) => {
       const path = presencePath(code, slot);
       const ownRef = ref(db, path);
 
-      // When this client's socket drops — tab close, crash, network loss, none
-      // of which reliably fire beforeunload on mobile — Firebase clears our
-      // participant node. Without it a departed participant lingers and keeps
-      // dragging the computed midpoint.
-      //
-      // Only `participants/{slot}` is cleared, never the `slots/{i}` claim:
-      // the claim is write-once, so releasing it would both break that rule's
-      // guarantee and let a reconnecting participant come back a different
-      // colour.
-      if (!armed.has(path)) {
-        armed.add(path);
-        onDisconnect(ownRef)
-          .remove()
-          .catch(() => {
-            armed.delete(path); // allow a retry on the next write
-          });
+      if (!published.has(path)) {
+        published.add(path);
+        arm(path);
       }
+      watchConnection();
 
       try {
         await set(ownRef, value);
@@ -87,7 +113,7 @@ export function createPresenceWriter(db: Database): PresenceWriter {
 
     remove: (code, slot) => {
       const path = presencePath(code, slot);
-      armed.delete(path);
+      published.delete(path);
       // RTDB sends this over the open WebSocket immediately; it completes even
       // while the page is unloading.
       remove(ref(db, path)).catch(() => {

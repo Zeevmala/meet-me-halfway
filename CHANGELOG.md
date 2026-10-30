@@ -4,6 +4,64 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — the map under the production CSP
+
+- **Markers were off-screen in production.** Mapbox's stylesheet was loaded
+  with an inline `onload` swap, which the CSP (no `'unsafe-inline'`) refuses,
+  so it never applied: the canvas lost `position: absolute` and every marker
+  was laid out below the map. The stylesheet is now bundled with the map, and
+  pinned to the installed mapbox-gl rather than an older CDN version
+- **Markers were offset everywhere.** `.live-marker { position: relative }`
+  overrode Mapbox's absolute positioning, so each marker was drawn lower by
+  the height of the markers before it (the midpoint by ~30px with two
+  participants), and venue selection wiped Mapbox's classes by assigning
+  `className`. Mapbox is now handed a bare root (`markerRoot`) and every class
+  lives on its child
+- **Hebrew map labels.** The RTL text plugin was `import()`ed from
+  api.mapbox.com, which the CSP's `script-src` does not admit. mapbox-gl
+  3.33 removes the plugin and shapes RTL text itself, with a WebAssembly
+  module the CSP already admits
+- **E2E can see the map.** `vite preview` serves firebase.json's headers, and
+  the suite runs the real client against the RTDB emulator loaded with the
+  real rules. A new two-device spec checks for CSP violations and asserts
+  where the markers are drawn; it fails on the code before this change
+
+### Fixed — the privacy policy now describes what the app does
+
+- **Rewritten against the code.** The old policy said sessions are deleted
+  after 24 hours; nothing is ever deleted automatically, and after 24 hours
+  the rules only refuse to read a session. It said locations are visible
+  only to participants; anyone with the code can read them. It also left out
+  Google reCAPTCHA, Mapbox's map tiles and telemetry identifier, the
+  device-type display name every participant publishes by default, and what
+  stays on the device. It now says all of that. The terms list reCAPTCHA too
+- **Positions lingered after a reconnect.** `onDisconnect` was armed once per
+  session, but the server forgets it after the first drop, so after any
+  reconnect the next drop left the last position stored indefinitely. It is
+  re-armed on every connection, proven against the emulator
+- **Sentry reports carried locations and the session code.** The Directions
+  URL — every participant's coordinates, in its path — rode along as a fetch
+  breadcrumb, and the page URL and Firebase's own warnings carried the full
+  session code. Errors, breadcrumbs and spans are now scrubbed before they
+  leave; checked with the real SDK in a browser, before and after
+- **Revoking location permission did not stop sharing.** The last fix stood,
+  and the presence heartbeat re-published it as live. A denial now clears it
+  and withdraws presence, while staying in the session so a retry resumes
+
+### Changed — dependency baseline
+
+- **Audit gate green again.** re2js 2.9.1 (GHSA-gg6h-894w-4m9c, via
+  @firebase/firestore, not bundled) had failed `lint` on main and every PR
+- mapbox-gl 3.33 (RTL built in, see above), react 19.3.1, i18next 26.5.3,
+  react-i18next 17.1.0
+- firebase 13 with @firebase/rules-unit-testing 6, which only install
+  together; CI moves to Node 24, which rules-unit-testing 6 requires, and
+  @types/node to 24 to match
+- **Sentry 11 without new data collection.** v11's unset `dataCollection`
+  stores reporters' IP addresses; it is pinned to the v10 defaults that
+  privacy.html describes, and a test holds it there
+- Dependabot opens one grouped PR per ecosystem instead of one per package
+
 ### P3 — Declared Execution Graph
 
 - **DAG pipeline** — `slots → midpoint → venues → destination → routes → frame`

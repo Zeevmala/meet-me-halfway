@@ -15,6 +15,7 @@ function complete(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     recaptchaSiteKey: "site-key",
     sentryDsn: null,
+    rtdbEmulatorHost: null,
     ...overrides,
   };
 }
@@ -65,6 +66,29 @@ describe("validateAppConfig", () => {
       ),
     ).not.toThrow();
   });
+
+  it("refuses an emulator host in a production build", () => {
+    // That bundle would send every user's database traffic to loopback.
+    expect(() =>
+      validateAppConfig(
+        complete({ rtdbEmulatorHost: "127.0.0.1:9000" }),
+        "production",
+      ),
+    ).toThrow(/VITE_RTDB_EMULATOR_HOST/);
+  });
+
+  it("accepts an emulator host in the e2e build", () => {
+    expect(() =>
+      validateAppConfig(
+        complete({ rtdbEmulatorHost: "127.0.0.1:9000" }),
+        "e2e",
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts a production build without an emulator host", () => {
+    expect(() => validateAppConfig(complete(), "production")).not.toThrow();
+  });
 });
 
 describe("createAppConfig", () => {
@@ -86,5 +110,6 @@ describe("createAppConfig", () => {
     expect(config.recaptchaSiteKey).not.toBe("");
     expect(config.sentryDsn).not.toBe("");
     expect(config.firebase.appId).not.toBe("");
+    expect(config.rtdbEmulatorHost).not.toBe("");
   });
 });

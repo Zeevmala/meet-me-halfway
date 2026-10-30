@@ -1,4 +1,10 @@
 import mapboxgl from "mapbox-gl";
+// Bundled, not linked from the CDN. index.html used to load it with an inline
+// `onload` swap, which the production CSP (no 'unsafe-inline') refuses — so in
+// production it never applied, the canvas lost `position: absolute`, and every
+// marker was laid out below the map, off-screen. Bundling also pins it to the
+// installed mapbox-gl rather than a hard-coded, older CDN version.
+import "mapbox-gl/dist/mapbox-gl.css";
 import { memo, useEffect, useRef, useState } from "react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
@@ -28,14 +34,11 @@ const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
 // the environment read in a single place.
 mapboxgl.accessToken = APP_CONFIG.mapboxToken;
 
-// RTL text plugin for Hebrew map labels
-try {
-  mapboxgl.setRTLTextPlugin(
-    "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js",
-  );
-} catch {
-  /* already loaded */
-}
+// Hebrew labels need no setup: since 3.33 Mapbox shapes right-to-left text
+// itself, fetching a small WebAssembly module from api.mapbox.com the first
+// time such text is on screen. The CSP admits both halves of that —
+// `connect-src https://*.mapbox.com` for the fetch, and `'unsafe-eval'` in
+// `script-src` for compiling it.
 
 interface LiveMapProps {
   participants: readonly MapParticipant[];
