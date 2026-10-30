@@ -79,4 +79,16 @@ describe("WaitingCard", () => {
     const shareUrl = `${window.location.origin}?code=${CODE}`;
     expect(promptSpy).toHaveBeenCalledWith("live.copyLink", shareUrl);
   });
+
+  // Followed in place, they unloaded the page — tearing down the session
+  // listener and GPS — and Back restored it frozen.
+  it("opens the legal pages in a new tab, keeping the session", () => {
+    render(<WaitingCard code="ABC234" />);
+
+    for (const name of ["live.privacy", "live.terms"]) {
+      const link = screen.getByRole("link", { name });
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toContain("noopener");
+    }
+  });
 });

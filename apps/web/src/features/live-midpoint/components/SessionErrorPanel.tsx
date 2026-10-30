@@ -9,6 +9,7 @@ import {
 
 /** Map session error codes to i18n keys. */
 const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
+  INVALID_CODE: "live.sessionInvalidCode",
   SESSION_NOT_FOUND: "live.sessionNotFound",
   SESSION_FULL: "live.sessionFull",
   SESSION_EXPIRED: "live.sessionExpired",
@@ -47,6 +48,18 @@ const RETRYABLE_ERRORS: ReadonlySet<LiveErrorCode> = new Set([
   "AUTH_FAILED",
 ]);
 
+/**
+ * Errors about the session the link names, which no reload can change. These
+ * screens had no action at all; starting a session of one's own is the way
+ * out, and the root URL is where that happens.
+ */
+const START_OVER_ERRORS: ReadonlySet<LiveErrorCode> = new Set([
+  "INVALID_CODE",
+  "SESSION_NOT_FOUND",
+  "SESSION_EXPIRED",
+  "SESSION_FULL",
+]);
+
 /** Show the in-app-browser callout for these errors (where switching
  * browsers is likely to actually help — in-app browsers are the canonical
  * cause of blocked storage and failed attestation). */
@@ -74,6 +87,7 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
   const showInAppHint =
     inApp !== null && IN_APP_BROWSER_HINT_ERRORS.has(errorCode);
   const retryable = RETRYABLE_ERRORS.has(errorCode);
+  const startOver = START_OVER_ERRORS.has(errorCode);
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
 
   const handleCopy = useCallback(async () => {
@@ -137,6 +151,16 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
             onClick={() => window.location.reload()}
           >
             {t("common.retry")}
+          </button>
+        )}
+
+        {startOver && (
+          <button
+            type="button"
+            className="live-btn live-btn-primary live-retry-btn"
+            onClick={() => window.location.assign("/")}
+          >
+            {t("live.startNewSession")}
           </button>
         )}
 

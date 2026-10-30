@@ -21,14 +21,28 @@ function setup(opts: {
   vi.stubEnv("PROD", opts.prod);
   vi.stubEnv("DEV", !opts.prod);
 
-  const register = vi.fn().mockResolvedValue(undefined);
+  const update = vi.fn().mockResolvedValue(undefined);
+  const register = vi.fn().mockResolvedValue({ update });
+  const swListeners = new Map<string, () => void>();
   vi.stubGlobal("navigator", {
     serviceWorker: {
       controller: opts.controlled ? {} : null,
       register,
       getRegistrations: vi.fn().mockResolvedValue(registrations),
+      addEventListener: (event: string, cb: () => void) => {
+        swListeners.set(event, cb);
+      },
     },
   });
+
+  const docListeners = new Map<string, () => void>();
+  const doc = {
+    visibilityState: "visible",
+    addEventListener: (event: string, cb: () => void) => {
+      docListeners.set(event, cb);
+    },
+  };
+  vi.stubGlobal("document", doc);
 
   vi.stubGlobal("caches", {
     keys: vi.fn().mockResolvedValue(opts.cacheKeys ?? []),
@@ -40,7 +54,11 @@ function setup(opts: {
 
   vi.stubGlobal("location", { reload });
 
-  return { register, deleted, reload };
+  /** Play an event to the service worker container or the document. */
+  const fire = (event: "controllerchange" | "visibilitychange") =>
+    (event === "controllerchange" ? swListeners : docListeners).get(event)?.();
+
+  return { register, update, deleted, reload, doc, fire };
 }
 
 /** Import the side-effect module fresh, then let its promise chain settle. */
@@ -70,6 +88,42 @@ describe("register-sw", () => {
 
     expect(register).toHaveBeenCalledWith("/sw.js");
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  // sw.js claims open tabs and deletes the previous bundle's cache as it
+  // activates. A tab left running that bundle 404s on its next lazy import
+  // and keeps writing the schema it was built for.
+  it("reloads when a new worker takes over a page another one served", async () => {
+    const { reload, fire } = setup({ prod: true, controlled: true });
+    await loadModule();
+
+    fire("controllerchange");
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload when the first worker claims the page", async () => {
+    const { reload, fire } = setup({ prod: true, controlled: false });
+    await loadModule();
+
+    fire("controllerchange");
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  // The browser only looks for a new worker on navigation, and a tab left
+  // open never navigates — it would run the old bundle indefinitely.
+  it("looks for a new worker when the tab comes back into view", async () => {
+    const { update, doc, fire } = setup({ prod: true });
+    await loadModule();
+
+    doc.visibilityState = "hidden";
+    fire("visibilitychange");
+    expect(update).not.toHaveBeenCalled();
+
+    doc.visibilityState = "visible";
+    fire("visibilitychange");
+    expect(update).toHaveBeenCalledTimes(1);
   });
 
   it("does not register in development", async () => {
@@ -126,5 +180,34 @@ describe("public/sw.js build-hash marker", () => {
   it("gates dev behaviour on the unsubstituted placeholder", () => {
     expect(sw).toContain("const IS_UNBUILT =");
     expect(sw).toContain("self.registration.unregister()");
+  });
+});
+
+describe("firebase.json caching of the app shell", () => {
+  interface HeaderRule {
+    source: string;
+    headers: { key: string; value: string }[];
+  }
+  const hosting = (
+    JSON.parse(
+      readFileSync(resolve(__dirname, "../../../../firebase.json"), "utf-8"),
+    ) as { hosting: { headers: HeaderRule[] } }
+  ).hosting;
+  const cacheControl = (source: string) =>
+    hosting.headers
+      .find((rule) => rule.source === source)
+      ?.headers.find((h) => h.key === "Cache-Control")?.value;
+
+  // The worker's network-first fetch for the page goes through the HTTP
+  // cache. Left to Hosting's defaults, a browser could reuse the previous
+  // deploy's HTML, and with it the previous deploy's bundle.
+  it.each(["/", "/index.html"])("revalidates %s on every load", (source) => {
+    expect(cacheControl(source)).toBe("no-cache");
+  });
+
+  it("keeps hashed assets cacheable for good", () => {
+    expect(cacheControl("**/*.@(js|css|woff2)")).toBe(
+      "public,max-age=31536000,immutable",
+    );
   });
 });
