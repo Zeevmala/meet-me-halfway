@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — locations only for the people in the session
+
+- **Anyone with the code could read every live location.** Including
+  someone refused a slot because the session was full: the code was the only
+  key, and codes can be guessed. Locations are now readable only by the five
+  slot holders. Anyone signed in can still read when the session began and
+  which anonymous IDs hold slots, which the join needs before it holds one —
+  no position, no name. The privacy policy says so
+- **The server's clock, enforced.** The rules now require `created` and `ts`
+  to equal the server's `now`, so no client can stretch a session past its 24
+  hours or choose the timestamps the 2s write throttle compares
+- **A session is created whole or not at all.** One atomic write instead of
+  three, so a failure can no longer leave `created` without its slot 0
+- The contract step of the expand/contract change begun in the previous
+  release: that client already sent this shape, and a day passed for tabs
+  loaded before it to reload. A tab still running an older bundle is refused
+  until it does
+
 ### Fixed — flows that left people stuck, and deploys that missed open tabs
 
 - **A failed create led into a dead end, or a stranger's session.** The URL

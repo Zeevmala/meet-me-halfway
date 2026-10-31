@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onValue, ref, set, get, serverTimestamp } from "firebase/database";
+import {
+  onValue,
+  ref,
+  set,
+  get,
+  serverTimestamp,
+  update,
+} from "firebase/database";
 import type { Database } from "firebase/database";
 import type { Unsubscribe } from "firebase/database";
 import * as Sentry from "@sentry/react";
@@ -390,35 +397,34 @@ export function useLiveSession(uid: string): LiveSessionState {
       setOwnIndex(0);
       setStatus("ready");
 
-      // One write at a time, each retried on its own: all three are
-      // write-once, so retrying the group after a later write failed would
-      // re-send an earlier one the rules now refuse.
-      const write = (path: string, value: unknown) =>
-        withRetry(
-          () => set(ref(db, `sessions/${sessionCode}/${path}`), value),
-          signal,
-          3,
-          isTransientError,
-        );
-
       try {
         // Shared with every other RTDB consumer and already in flight since
         // app start, so this is normally already settled — it is a barrier,
         // not a fetch. It never rejects; an unattested outcome still proceeds.
         await appCheckReady;
-        // Three writes, not one atomic update, until the rules that accept the
-        // atomic form are deployed: hosting ships before rules, and the
-        // rules in production until then refuse it. The server stamps
-        // `created`, so a phone with a wrong clock cannot shorten or extend
-        // the session's 24 hours.
+        // One atomic write: the session exists whole or not at all. As three
+        // sequential writes, a failure between them left a session with
+        // `created` and no slot 0, whose code nobody could use. The server
+        // stamps `created`, and the rules require it to equal their `now`, so
+        // no device clock can shorten or extend the session's 24 hours.
         //
-        // `created` claims the code. A refusal there means somebody holds it
-        // already, so draw another rather than fail: reported as
-        // CREATE_FAILED, the Retry that followed reloaded into the taken
-        // code — and joined a stranger's session when it was still live.
+        // `created` is write-once, so a refusal means somebody holds the code
+        // already: draw another rather than fail. Reported as CREATE_FAILED,
+        // the Retry that followed reloaded into the taken code — and joined a
+        // stranger's session when it was still live.
         for (let attempt = 1; ; attempt++) {
           try {
-            await write("created", serverTimestamp());
+            await withRetry(
+              () =>
+                update(ref(db, `sessions/${sessionCode}`), {
+                  created: serverTimestamp(),
+                  creatorUid: uid,
+                  "slots/0": uid,
+                }),
+              signal,
+              3,
+              isTransientError,
+            );
             break;
           } catch (refused) {
             if (isTransientError(refused) || attempt >= MAX_CODE_ATTEMPTS) {
@@ -428,10 +434,6 @@ export function useLiveSession(uid: string): LiveSessionState {
             setCode(sessionCode);
           }
         }
-        await write("creatorUid", uid);
-        // Slot 0 must be written after creatorUid: its rule validates the
-        // value against it, so claiming first would be rejected.
-        await write("slots/0", uid);
 
         // Only now does the code name a session, so only now does it go in
         // the URL. Written up front, a failed create left it there, and Retry
@@ -440,11 +442,10 @@ export function useLiveSession(uid: string): LiveSessionState {
         url.searchParams.set("code", sessionCode);
         history.replaceState(null, "", url.toString());
 
-        // Attach the listener only after `created` exists: the `.read` rule
-        // requires `created > now - 24h`, so a listener attached before the
-        // write is evaluated against a session with no `created` and is
-        // rejected with permission_denied. (joinSession is safe because it
-        // reads an already-created session.)
+        // Attach the listener only once slot 0 is ours: the participants are
+        // readable by slot holders of a live session and nobody else, so a
+        // listener attached before the write is rejected with
+        // permission_denied. (joinSession attaches its own after the claim.)
         listenForParticipants(sessionCode);
 
         return ok(sessionCode);
@@ -485,9 +486,9 @@ export function useLiveSession(uid: string): LiveSessionState {
         attestation = (await appCheckReady).reason;
 
         // Only the two fields the join needs, never the session node. The
-        // node includes `participants`, which the next rules release opens to
-        // slot holders only — and nobody holds a slot yet at this point, so a
-        // whole-node read would then be refused for every joiner.
+        // node includes `participants`, which only slot holders may read —
+        // and nobody holds a slot yet at this point, so a whole-node read is
+        // refused for every joiner.
         //
         // The `.read` rule is `created > now - 24h`. For a session that was
         // never written, `created` is null and RTDB compares null to a number

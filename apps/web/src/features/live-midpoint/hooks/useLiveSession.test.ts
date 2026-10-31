@@ -6,6 +6,7 @@ import type { Result } from "../../../core/dag/result";
 
 // ── Mock firebase/database ──
 const mockSet = vi.fn();
+const mockUpdate = vi.fn();
 const mockGet = vi.fn();
 const mockRemove = vi.fn();
 const mockOnDisconnectRemove = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("firebase/database", () => ({
   remove: (r: unknown) => mockRemove(r),
   onDisconnect: (r: unknown) => ({ remove: () => mockOnDisconnectRemove(r) }),
   set: (r: unknown, v: unknown) => mockSet(r, v),
+  update: (r: unknown, v: unknown) => mockUpdate(r, v),
   get: (r: unknown) => mockGet(r),
   serverTimestamp: () => SERVER_TIMESTAMP,
 }));
@@ -69,9 +71,9 @@ vi.mock("../lib/session-code", async (importOriginal) => ({
   generateCode: () => mockGenerateCode(),
 }));
 
-/** Refuse writes to one path, as the write-once rules do to a taken code. */
-function refuseWritesTo(test: (path: string) => boolean) {
-  mockSet.mockImplementation((r: { path?: string }) =>
+/** Refuse creates under some codes, as the write-once rules do a taken one. */
+function refuseCreatesUnder(test: (path: string) => boolean) {
+  mockUpdate.mockImplementation((r: { path?: string }) =>
     test(r?.path ?? "")
       ? Promise.reject(new Error("Permission denied"))
       : Promise.resolve(undefined),
@@ -122,6 +124,7 @@ beforeEach(() => {
   onValueCallback = null;
   onValueErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
+  mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
   mockOnDisconnectRemove.mockResolvedValue(undefined);
   mockPresenceRemove.mockReset();
@@ -145,27 +148,25 @@ describe("useLiveSession", () => {
   });
 
   describe("createSession", () => {
-    it("writes created, creatorUid, and claims slot 0", async () => {
+    // As three sequential writes, a failure between them left `created`
+    // without its slot 0: a session whose code nobody could use.
+    it("creates the session in one atomic, server-stamped write", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession(live());
       });
 
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({ path: "sessions/ABC234/created" }),
-        SERVER_TIMESTAMP,
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "sessions/ABC234" }),
+        {
+          created: SERVER_TIMESTAMP,
+          creatorUid: TEST_UID,
+          "slots/0": TEST_UID,
+        },
       );
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
-        TEST_UID,
-      );
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: "sessions/ABC234/slots/0",
-        }),
-        TEST_UID,
-      );
+      expect(mockSet).not.toHaveBeenCalled();
     });
 
     it("sets ownIndex to 0 and phase to 'waiting'", async () => {
@@ -208,7 +209,7 @@ describe("useLiveSession", () => {
     // Written up front, the code stayed in the URL after a failed create, so
     // Retry reloaded into a join of a session that was never created.
     it("leaves the URL alone when the create fails", async () => {
-      mockSet.mockRejectedValue(new Error("Permission denied"));
+      mockUpdate.mockRejectedValue(new Error("Permission denied"));
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
@@ -225,7 +226,7 @@ describe("useLiveSession", () => {
       mockGenerateCode
         .mockReturnValueOnce("ABC234")
         .mockReturnValueOnce("XYZ789");
-      refuseWritesTo((path) => path === "sessions/ABC234/created");
+      refuseCreatesUnder((path) => path === "sessions/ABC234");
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       let created: Result<string, SessionFailure> | undefined;
@@ -235,13 +236,10 @@ describe("useLiveSession", () => {
 
       expect(created).toEqual({ ok: true, value: "XYZ789" });
       expect(result.current.code).toBe("XYZ789");
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({ path: "sessions/XYZ789/creatorUid" }),
-        TEST_UID,
-      );
-      expect(mockSet).not.toHaveBeenCalledWith(
-        expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
-        expect.anything(),
+      expect(mockUpdate).toHaveBeenCalledTimes(2);
+      expect(mockUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ path: "sessions/XYZ789" }),
+        expect.objectContaining({ creatorUid: TEST_UID }),
       );
       expect(history.replaceState).toHaveBeenCalledWith(
         null,
@@ -251,7 +249,7 @@ describe("useLiveSession", () => {
     });
 
     it("gives up after three taken codes", async () => {
-      refuseWritesTo((path) => path.endsWith("/created"));
+      refuseCreatesUnder(() => true);
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
@@ -260,24 +258,18 @@ describe("useLiveSession", () => {
 
       expect(result.current.error).toBe("CREATE_FAILED");
       expect(mockGenerateCode).toHaveBeenCalledTimes(3);
-      expect(mockSet).not.toHaveBeenCalledWith(
-        expect.objectContaining({ path: expect.stringMatching(/creatorUid$/) }),
-        expect.anything(),
-      );
+      expect(mockUpdate).toHaveBeenCalledTimes(3);
     });
 
-    // All three writes are write-once. Retried as a group, a transient
-    // failure on a later one re-sent the earlier ones, which the rules then
-    // refused — failing a create that had nearly succeeded.
-    it("retries a failed write on its own, not the ones before it", async () => {
+    // Only a refusal means the code is taken. A transient failure is retried
+    // under the same code; drawing a new one there would abandon a create
+    // that may yet land.
+    it("retries a transient failure under the same code", async () => {
       vi.useFakeTimers();
       try {
-        let slotAttempts = 0;
-        mockSet.mockImplementation((r: { path?: string }) =>
-          r?.path === "sessions/ABC234/slots/0" && ++slotAttempts === 1
-            ? Promise.reject({ code: "unavailable" })
-            : Promise.resolve(undefined),
-        );
+        mockUpdate
+          .mockRejectedValueOnce({ code: "unavailable" })
+          .mockResolvedValue(undefined);
         const { result } = renderHook(() => useLiveSession(TEST_UID));
 
         let created: Result<string, SessionFailure> | undefined;
@@ -288,12 +280,11 @@ describe("useLiveSession", () => {
         });
 
         expect(created).toEqual({ ok: true, value: "ABC234" });
-        const writes = mockSet.mock.calls.map(
+        expect(mockGenerateCode).toHaveBeenCalledTimes(1);
+        const paths = mockUpdate.mock.calls.map(
           ([r]) => (r as { path: string }).path,
         );
-        expect(writes.filter((p) => p.endsWith("/created"))).toHaveLength(1);
-        expect(writes.filter((p) => p.endsWith("/creatorUid"))).toHaveLength(1);
-        expect(writes.filter((p) => p.endsWith("/slots/0"))).toHaveLength(2);
+        expect(paths).toEqual(["sessions/ABC234", "sessions/ABC234"]);
       } finally {
         vi.useRealTimers();
       }
@@ -313,7 +304,7 @@ describe("useLiveSession", () => {
     });
 
     it("sets phase to error if RTDB write fails", async () => {
-      mockSet.mockRejectedValue(new Error("Permission denied"));
+      mockUpdate.mockRejectedValue(new Error("Permission denied"));
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -329,11 +320,11 @@ describe("useLiveSession", () => {
       expect(result.current.error).toBe("CREATE_FAILED");
     });
 
-    // Regression: the participants listener must attach only AFTER `created`
-    // is written. The .read rule requires `created > now - 24h`, so a
-    // listener attached before the write is rejected with permission_denied.
+    // Regression: the participants listener must attach only once slot 0 is
+    // ours. Only slot holders may read the participants, so a listener
+    // attached before the write is rejected with permission_denied.
     it("does not attach the participants listener when the create write fails", async () => {
-      mockSet.mockRejectedValue(new Error("Permission denied"));
+      mockUpdate.mockRejectedValue(new Error("Permission denied"));
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
