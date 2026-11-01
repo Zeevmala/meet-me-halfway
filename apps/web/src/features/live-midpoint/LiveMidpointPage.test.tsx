@@ -188,7 +188,7 @@ beforeEach(() => {
   mockNetworkStatus.mockReturnValue({
     browserOnline: true,
     firebaseConnected: true,
-    isOnline: true,
+    connectivity: "online",
   });
   mockServerTimeOffset.mockReturnValue(0);
   mockGeo.mockReturnValue(defaultGeo());
@@ -466,12 +466,36 @@ describe("LiveMidpointPage", () => {
     mockNetworkStatus.mockReturnValue({
       browserOnline: false,
       firebaseConnected: false,
-      isOnline: false,
+      connectivity: "offline",
     });
 
     renderPage();
 
-    expect(screen.getByText("app.offline")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("app.offline");
+  });
+
+  // The iPhone in the bug report was told "You are offline" while the map
+  // loaded its tiles: the network was fine, the database was not reachable.
+  it("says the server cannot be reached, not that the device is offline", () => {
+    mockNetworkStatus.mockReturnValue({
+      browserOnline: true,
+      firebaseConnected: false,
+      connectivity: "unreachable",
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "app.serverUnreachable",
+    );
+    expect(screen.queryByText("app.offline")).toBeNull();
+  });
+
+  it("shows no connectivity banner while connected", () => {
+    renderPage();
+
+    expect(screen.queryByText("app.offline")).toBeNull();
+    expect(screen.queryByText("app.serverUnreachable")).toBeNull();
   });
 
   it("renders waiting card (with share UI) whenever a code exists, even mid-creation", () => {

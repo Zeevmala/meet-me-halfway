@@ -48,6 +48,7 @@ interface Device {
 interface DeviceOptions {
   /** The browser's language, which is what picks the app's. */
   readonly locale?: string;
+  readonly viewport?: { readonly width: number; readonly height: number };
   /**
    * Open with the flag the RTDB SDK leaves in localStorage when a WebSocket
    * closes before it was proven healthy — what iOS does to the sockets of a
@@ -63,12 +64,17 @@ async function openDevice(
   browser: Browser,
   geolocation: { latitude: number; longitude: number },
   path: string,
-  { locale = "en-US", webSocketFailedBefore = false }: DeviceOptions = {},
+  {
+    locale = "en-US",
+    viewport,
+    webSocketFailedBefore = false,
+  }: DeviceOptions = {},
 ): Promise<Device> {
   const context = await browser.newContext({
     geolocation,
     permissions: ["geolocation"],
     locale,
+    ...(viewport === undefined ? {} : { viewport }),
   });
   openContexts.push(context);
   const page = await context.newPage();
@@ -237,3 +243,70 @@ test("two devices meet, and the map draws them where they are", async ({
     check(device.cspViolations, `${name}: no CSP violations`).toEqual([]);
   }
 });
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/**
+ * The connectivity banner sits under the badge, clear of Mapbox's controls,
+ * and says so in the browser's language.
+ *
+ * It used to run edge to edge on a phone, across the zoom and compass buttons,
+ * and took their taps. Mapbox pins its controls to the physical top-right
+ * whichever way the text runs, so logical insets put it over them in Hebrew
+ * as well — and on a wide screen in Hebrew it was pinned to that corner.
+ */
+for (const { locale, offline } of [
+  { locale: "en-US", offline: "You are offline" },
+  { locale: "he-IL", offline: "אין חיבור לאינטרנט" },
+] as const) {
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 800 },
+  ]) {
+    test(`the offline banner leaves the map controls clear (${locale}, ${viewport.width}px)`, async ({
+      browser,
+    }) => {
+      test.setTimeout(60_000);
+
+      const { context, page } = await openDevice(browser, TEL_AVIV, "/", {
+        locale,
+        viewport,
+      });
+      await expect(page.locator(".live-badge-code")).toHaveText(
+        /^[2-9A-HJKMNP-Z]{6}$/,
+        { timeout: 30_000 },
+      );
+      const controls = page.locator(".mapboxgl-ctrl-top-right");
+      await expect(controls).toBeVisible();
+
+      await context.setOffline(true);
+      const banner = page.locator(".live-offline-banner");
+      await expect(banner).toContainText(offline);
+
+      const bannerBox = await banner.boundingBox();
+      const controlsBox = await controls.boundingBox();
+      expect(bannerBox).not.toBeNull();
+      expect(controlsBox).not.toBeNull();
+      if (bannerBox !== null && controlsBox !== null) {
+        expect(
+          overlaps(bannerBox, controlsBox),
+          `banner ${JSON.stringify(bannerBox)} overlaps the controls ${JSON.stringify(controlsBox)}`,
+        ).toBe(false);
+      }
+    });
+  }
+}
