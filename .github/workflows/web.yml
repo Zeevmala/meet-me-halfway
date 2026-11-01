@@ -18,6 +18,12 @@ on:
   # GitHub refuses to re-run a workflow run older than ~30 days.
   workflow_dispatch:
 
+# Read-only unless a job says otherwise, and none needs to: nothing here
+# writes to the repository through GITHUB_TOKEN, and the deploy authenticates
+# to Firebase with its own secret. The default token was read-write.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest

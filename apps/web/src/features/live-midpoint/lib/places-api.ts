@@ -49,14 +49,18 @@ interface PlacesNearbyResponse {
 }
 
 function mapGooglePlace(gp: GooglePlace): PlaceResult | null {
-  if (!gp.id || !gp.location?.latitude || !gp.location?.longitude) {
+  // Typed checks, not truthiness: 0 is a real latitude (the equator) and a
+  // real longitude (Greenwich), and a falsy test dropped places on either.
+  const lat = gp.location?.latitude;
+  const lng = gp.location?.longitude;
+  if (!gp.id || typeof lat !== "number" || typeof lng !== "number") {
     return null;
   }
 
   return {
     id: gp.id,
     displayName: gp.displayName?.text ?? "Unknown",
-    location: { lat: gp.location.latitude, lng: gp.location.longitude },
+    location: { lat, lng },
     rating: gp.rating ?? 0,
     userRatingCount: gp.userRatingCount ?? 0,
     openNow: gp.currentOpeningHours?.openNow ?? false,

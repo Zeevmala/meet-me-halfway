@@ -117,6 +117,18 @@ describe("redact", () => {
     expect(redact(input)).toBe(expected);
   });
 
+  // A replay records the screen — positions and the session code with it —
+  // and does not pass through `scrub`. The sample rates once set here did
+  // nothing only because the integration was missing.
+  it("records no session replays", () => {
+    expect(captured.options).not.toHaveProperty("replaysOnErrorSampleRate");
+    expect(captured.options).not.toHaveProperty("replaysSessionSampleRate");
+    const names = (captured.options?.integrations as { name: string }[]).map(
+      (i) => i.name,
+    );
+    expect(names).not.toContain("Replay");
+  });
+
   it("leaves everything else alone", () => {
     const text = "[directions-api] HTTP 429: Too Many Requests (retry in 2.5s)";
     expect(redact(text)).toBe(text);

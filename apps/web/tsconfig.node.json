@@ -24,6 +24,7 @@
     "e2e-live",
     "src/lib/register-sw.test.ts",
     "vite.config.ts",
+    "sw-cache-bust.ts",
     "vitest.rules.config.ts",
     "playwright.config.ts",
     "playwright.live.config.ts"

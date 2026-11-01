@@ -2,9 +2,9 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { readFileSync, writeFileSync } from "fs";
+import { swCacheBust } from "./sw-cache-bust";
+import { readFileSync } from "fs";
 import { resolve } from "path";
-import { createHash } from "crypto";
 
 interface FirebaseHostingConfig {
   hosting: {
@@ -44,26 +44,6 @@ function productionHeaders(rtdbEmulatorHost: string | undefined) {
     );
   }
   return headers;
-}
-
-/** Replace __BUILD_HASH__ in sw.js after build so the cache version auto-bumps. */
-function swCacheBust() {
-  return {
-    name: "sw-cache-bust",
-    closeBundle() {
-      const swPath = resolve(__dirname, "dist/sw.js");
-      try {
-        const content = readFileSync(swPath, "utf-8");
-        const hash = createHash("md5")
-          .update(Date.now().toString())
-          .digest("hex")
-          .slice(0, 8);
-        writeFileSync(swPath, content.replace("__BUILD_HASH__", hash));
-      } catch {
-        // sw.js not present (e.g. test runs) — skip
-      }
-    },
-  };
 }
 
 export default defineConfig(({ mode }) => ({

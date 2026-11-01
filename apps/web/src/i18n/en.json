@@ -20,6 +20,7 @@
     "participantNamed": "{{name}}",
     "offline": "Offline",
     "midpoint": "Midpoint",
+    "mapUnavailable": "The map can't be shown on this device. Distances and navigation still work.",
     "yourDistance": "Your distance",
     "participantDistance": "P{{n}}'s distance",
     "participantDistanceNamed": "{{name}}'s distance",

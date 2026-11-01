@@ -99,8 +99,10 @@ if (dsn !== null) {
       environment: import.meta.env.MODE,
       integrations: [Sentry.browserTracingIntegration()],
       tracesSampleRate: 0.1,
-      replaysOnErrorSampleRate: 1.0,
-      replaysSessionSampleRate: 0,
+      // No session replay. The sample rates that used to sit here did
+      // nothing — the replay integration was never added — but enabling it
+      // later would record the screen, positions and session code included,
+      // past `scrub`. The privacy policy promises reports without them.
       dataCollection: DATA_COLLECTION,
       // Errors, breadcrumbs and (streamed) spans are the three payloads the
       // browser SDK sends that can hold a URL or a logged message.
