@@ -43,6 +43,16 @@ module.exports = {
           "Avoid physical margin/padding directional props in inline styles — use logical equivalents " +
           "(marginInlineStart, marginInlineEnd, paddingInlineStart, paddingInlineEnd) for RTL safety.",
       },
+      {
+        // Catches lazy(() => import(...)): a deploy removes the chunk, the
+        // stale-chunk reload cancels the failure, and React.lazy throws on
+        // the undefined module into the error boundary.
+        selector:
+          "CallExpression:matches([callee.name='lazy'], [callee.property.name='lazy']) > :function",
+        message:
+          "Wrap lazy imports in pendingWhileReloading (lib/stale-chunk-reload.ts): " +
+          "lazy(pendingWhileReloading(() => import(...))).",
+      },
     ],
   },
 };

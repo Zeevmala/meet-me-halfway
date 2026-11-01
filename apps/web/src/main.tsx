@@ -9,13 +9,18 @@ import { APP_CONFIG, validateAppConfig } from "./lib/config";
 import { createServices } from "./lib/services";
 import { ServicesProvider } from "./components/ServicesProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { reloadOnStaleChunk } from "./lib/stale-chunk-reload";
+import {
+  pendingWhileReloading,
+  reloadOnStaleChunk,
+} from "./lib/stale-chunk-reload";
 
 // Before the first lazy import below, which is itself the likeliest to miss.
 reloadOnStaleChunk(window);
 
 const LiveMidpointPage = lazy(
-  () => import("./features/live-midpoint/LiveMidpointPage"),
+  pendingWhileReloading(
+    () => import("./features/live-midpoint/LiveMidpointPage"),
+  ),
 );
 
 // Fail before anything renders if the deployment is misconfigured.
