@@ -54,6 +54,18 @@
 
 /* ── Mapbox controls — match the dark glass theme ── */
 
+/* In place of a map this device cannot draw (no WebGL). */
+.live-map-unavailable {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 24px;
+  text-align: center;
+  color: var(--live-text-muted);
+}
+
 .live-map-container .mapboxgl-ctrl-group {
   background: var(--live-surface);
   border: 1px solid var(--live-border);

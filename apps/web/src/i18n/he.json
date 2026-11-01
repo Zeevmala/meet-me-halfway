@@ -20,6 +20,7 @@
     "participantNamed": "{{name}}",
     "offline": "לא מחובר",
     "midpoint": "נקודת אמצע",
+    "mapUnavailable": "לא ניתן להציג את המפה במכשיר הזה. המרחקים והניווט עדיין עובדים.",
     "yourDistance": "המרחק שלך",
     "participantDistance": "מרחק מ{{n}}",
     "participantDistanceNamed": "המרחק של {{name}}",

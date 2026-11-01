@@ -72,6 +72,27 @@ describe("searchNearbyVenues", () => {
     expect(result.value[0]?.displayName).toBe("Cafe One");
   });
 
+  // Truthiness checks on the coordinates dropped any place at latitude or
+  // longitude exactly 0: the equator, and Greenwich.
+  it("keeps a place on the equator or the prime meridian", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        places: [
+          { id: "eq", location: { latitude: 0, longitude: 32.58 } },
+          { id: "gw", location: { latitude: 51.48, longitude: 0 } },
+          { id: "none", location: { latitude: 51.48 } },
+        ],
+      }),
+    );
+
+    const result = await searchNearbyVenues(CENTER, RADIUS_M, NEVER_ABORTED);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((p) => p.id)).toEqual(["eq", "gw"]);
+    expect(result.value[1]?.location).toEqual({ lat: 51.48, lng: 0 });
+  });
+
   it("treats an absent API key as a disabled feature, not a failure", async () => {
     const disabled = createPlacesClient(null);
 

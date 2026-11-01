@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — hardening
+
+- **No WebGL took the whole app down.** Mapbox throws from its constructor
+  on a device without WebGL, and the error boundary replaced the page —
+  cards, distances and share link included. The map area now says it cannot
+  be shown, and the rest works. Map errors (a rejected token, a style that
+  will not load) are reported to Sentry, once per map; they were silent
+- **Shared links had no preview image.** `og:image` was relative, which
+  WhatsApp, Telegram and Facebook do not resolve
+- **CSP:** `object-src 'none'` and `base-uri 'self'`, the two script vectors
+  `default-src` does not cover
+- **CI:** the workflow's token is read-only; no job writes to the repository
+- **The service-worker stamp could silently not happen.** The build plugin
+  assumed `dist/` and skipped otherwise, shipping a worker that unregisters
+  itself in production. It reads Vite's resolved output directory and fails
+  the build when it cannot stamp
+- Places on the equator or the prime meridian were dropped (a falsy check on
+  the coordinates); session codes were slightly biased towards their first 8
+  characters; and the Sentry setup no longer carries session-replay rates,
+  which did nothing but would record the screen if replay were ever enabled
+
 ### Fixed — locations only for the people in the session
 
 - **Anyone with the code could read every live location.** Including

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { swCacheBust } from "../../sw-cache-bust";
 
 // ── Service worker + Cache API doubles ──
 
@@ -205,9 +207,84 @@ describe("firebase.json caching of the app shell", () => {
     expect(cacheControl(source)).toBe("no-cache");
   });
 
+  // Plugins and <base> injection are the two script vectors the rest of the
+  // policy left open: `default-src` covers neither.
+  it("allows no plugins and no foreign <base>", () => {
+    const csp = hosting.headers
+      .find((rule) => rule.source === "**")
+      ?.headers.find((h) => h.key === "Content-Security-Policy")?.value;
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'self'");
+  });
+
   it("keeps hashed assets cacheable for good", () => {
     expect(cacheControl("**/*.@(js|css|woff2)")).toBe(
       "public,max-age=31536000,immutable",
     );
+  });
+});
+
+describe("index.html social preview", () => {
+  const html = readFileSync(resolve(__dirname, "../../index.html"), "utf-8");
+  const meta = (attr: string, name: string) =>
+    new RegExp(`<meta ${attr}="${name}" content="([^"]+)"`).exec(html)?.[1];
+
+  // Link previews (WhatsApp, Telegram, Facebook) do not resolve a relative
+  // image, and sharing the session link is how every session starts.
+  it("points at the preview image with an absolute URL on the app's origin", () => {
+    const origin = new URL(meta("property", "og:url") ?? "").origin;
+    for (const image of [
+      meta("property", "og:image"),
+      meta("name", "twitter:image"),
+    ]) {
+      expect(image && new URL(image).origin).toBe(origin);
+    }
+  });
+});
+
+describe("swCacheBust (build plugin)", () => {
+  type Hooks = {
+    configResolved(config: { root: string; build: { outDir: string } }): void;
+    closeBundle(): void;
+  };
+  const plugin = () => swCacheBust() as unknown as Hooks;
+
+  function outDir(name: string, sw: string | null): string {
+    const root = mkdtempSync(join(tmpdir(), "sw-cache-bust-"));
+    mkdirSync(join(root, name));
+    if (sw !== null) writeFileSync(join(root, name, "sw.js"), sw);
+    return root;
+  }
+
+  // It assumed `dist/` and skipped quietly otherwise; an unstamped worker is
+  // the dev build, which unregisters itself in production.
+  it("stamps sw.js wherever the build actually wrote it", () => {
+    const root = outDir(
+      "custom-out",
+      'const CACHE_VERSION = "mmh-__BUILD_HASH__";',
+    );
+    const p = plugin();
+
+    p.configResolved({ root, build: { outDir: "custom-out" } });
+    p.closeBundle();
+
+    const stamped = readFileSync(join(root, "custom-out", "sw.js"), "utf-8");
+    expect(stamped).toMatch(/^const CACHE_VERSION = "mmh-[0-9a-f]{8}";$/);
+  });
+
+  it("fails the build rather than ship a worker it could not stamp", () => {
+    const missing = plugin();
+    missing.configResolved({
+      root: outDir("out", null),
+      build: { outDir: "out" },
+    });
+    expect(() => missing.closeBundle()).toThrow();
+
+    const unmarked = plugin();
+    unmarked.configResolved({
+      root: outDir("out", 'const CACHE_VERSION = "mmh-abc";'),
+      build: { outDir: "out" },
+    });
+    expect(() => unmarked.closeBundle()).toThrow(/no __BUILD_HASH__/);
   });
 });

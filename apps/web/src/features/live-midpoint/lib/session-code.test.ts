@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { generateCode, isValidCode, normalizeCode } from "./session-code";
 
 // The exact alphabet used in session-code.ts
@@ -37,6 +37,27 @@ describe("generateCode", () => {
     }
     // With 29^6 ≈ 594M possibilities, 1000 codes should all be unique
     expect(codes.size).toBe(1000);
+  });
+
+  // `b % 31` over a byte favoured the first 8 characters; bytes past the
+  // last whole multiple of 31 are redrawn instead of folded back in.
+  it("redraws bytes that would bias the alphabet", () => {
+    const random = vi
+      .spyOn(crypto, "getRandomValues")
+      .mockImplementationOnce((array) => {
+        (array as Uint8Array).fill(250);
+        return array;
+      })
+      .mockImplementationOnce((array) => {
+        (array as Uint8Array).set([248, 0, 255, 1, 2, 3, 4, 5]);
+        return array;
+      });
+    try {
+      expect(generateCode()).toBe("234567");
+      expect(random).toHaveBeenCalledTimes(2);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("always returns uppercase", () => {

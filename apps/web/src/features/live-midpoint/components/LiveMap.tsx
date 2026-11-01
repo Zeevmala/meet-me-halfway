@@ -6,6 +6,8 @@ import mapboxgl from "mapbox-gl";
 // installed mapbox-gl rather than a hard-coded, older CDN version.
 import "mapbox-gl/dist/mapbox-gl.css";
 import { memo, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON } from "../lib/geo-math";
@@ -117,9 +119,11 @@ function LiveMap({
   venues,
   selectedVenue,
 }: LiveMapProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   const lastFitRef = useRef<Map<string, LatLng>>(new Map());
 
   // ── Map initialization ──
@@ -128,11 +132,32 @@ function LiveMap({
 
     const controlPos = "top-right" as const;
 
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: DARK_STYLE,
-      center: DEFAULT_CENTER,
-      zoom: DEFAULT_ZOOM,
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: containerRef.current,
+        style: DARK_STYLE,
+        center: DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+      });
+    } catch (err) {
+      // No WebGL: an old device, or a browser with it switched off. Mapbox
+      // throws from the constructor, and from this effect the error reached
+      // the boundary — "Something went wrong" over a session that works
+      // without a map. Distances, navigation and the share link need none.
+      Sentry.captureException(err, { tags: { phase: "map-init" } });
+      setUnavailable(true);
+      return;
+    }
+
+    // A rejected token or an unreachable style left a blank canvas and told
+    // nobody. Once per map: tile errors repeat for as long as the network is
+    // down, and the first says what the rest would.
+    let reported = false;
+    map.on("error", (event) => {
+      if (reported) return;
+      reported = true;
+      Sentry.captureException(event.error, { tags: { phase: "map" } });
     });
 
     map.addControl(new mapboxgl.NavigationControl(), controlPos);
@@ -244,7 +269,13 @@ function LiveMap({
         className="live-map-container"
         role="application"
         aria-label="Interactive live map showing participant locations and midpoint"
-      />
+      >
+        {unavailable && (
+          <div className="live-map-unavailable" role="status">
+            {t("live.mapUnavailable")}
+          </div>
+        )}
+      </div>
       {mapInstance &&
         participants.map((p) => (
           <LiveParticipantMarker
