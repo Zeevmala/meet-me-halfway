@@ -26,10 +26,13 @@ import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
 import SessionErrorPanel from "./components/SessionErrorPanel";
+import { pendingWhileReloading } from "../../lib/stale-chunk-reload";
 import "./styles/live-midpoint.css";
 
 // Lazy-load VenueListCard — only needed when Places API key is configured
-const VenueListCard = lazy(() => import("./components/VenueListCard"));
+const VenueListCard = lazy(
+  pendingWhileReloading(() => import("./components/VenueListCard")),
+);
 
 type GeoErrorStatus = Extract<GeoStatus, "denied" | "unavailable" | "error">;
 

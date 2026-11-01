@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — the reload after a deploy
+
+- **A deploy put the error screen up in open tabs.** The reload that
+  replaces a chunk a deploy removed left the lazy import to resolve to
+  nothing, and React threw on it: "Something went wrong", and a report to
+  Sentry, in every tab that reloaded, for as long as the reload took. The
+  page's own chunk, which has a stylesheet, failed twice, and the second
+  failure was not caught at all. Lazy imports now wait for the reload on the
+  loading screen, and ESLint requires that on every `lazy()` import
+
 ### Fixed — hardening
 
 - **No WebGL took the whole app down.** Mapbox throws from its constructor
