@@ -244,6 +244,21 @@ test("two devices meet, and the map draws them where they are", async ({
   }
 });
 
+// A link to a session the database never held. The rules deny that read rather
+// than answer empty, and the same denial greets a device that may read nothing
+// at all, so the join reads the `probe` rule before it blames the session.
+// This device may read: what it is told is that the session does not exist.
+test("a link to a session that was never created reads 'Session not found'", async ({
+  browser,
+}) => {
+  const { page } = await openDevice(browser, TEL_AVIV, "/?code=MCK234");
+
+  await expect(page.locator(".live-error-title")).toHaveText(
+    /^Session not found/,
+    { timeout: 30_000 },
+  );
+});
+
 interface Box {
   readonly x: number;
   readonly y: number;

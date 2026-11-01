@@ -191,6 +191,28 @@ function sessionContext(code: string | null, hasAppCheck: boolean) {
   };
 }
 
+/**
+ * Whether this connection may read anything at all — the question a denied
+ * session read leaves open.
+ *
+ * The rules deny reads of a missing or expired session on purpose: it keeps
+ * the code space opaque. So that denial normally means exactly "no such
+ * session". But the same denial comes back when it is the device being turned
+ * away — no auth token on the socket, or App Check enforcement refusing an
+ * unattested client — and "Session not found" then sent people off for a new
+ * link that would fail the same way, while nothing reached Sentry. `probe`
+ * holds nothing and any signed-in client may read it, so it answers for the
+ * device and never for a session.
+ */
+async function canReadAtAll(db: Database): Promise<boolean> {
+  try {
+    await get(ref(db, "probe"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** `sessions/{code}/slots` as RTDB stores it: slot key → holder uid. */
 type SlotMap = Partial<Record<string, string>>;
 
@@ -505,13 +527,17 @@ export function useLiveSession(uid: string): LiveSessionState {
         //
         // The `.read` rule is `created > now - 24h`. For a session that was
         // never written, `created` is null and RTDB compares null to a number
-        // as false — so a missing session is *denied*, not returned empty. A
-        // permission denial on these reads is therefore a statement about the
-        // session, not about the caller: it means the code is wrong or the
-        // session has aged out. Classifying it here rather than in the shared
-        // catch is what makes SESSION_NOT_FOUND reachable at all; the branch
-        // below could never fire against real rules, because `get` throws
-        // before it can return a null snapshot.
+        // as false — so a missing session is *denied*, not returned empty.
+        // Classifying that denial here rather than in the shared catch is what
+        // makes SESSION_NOT_FOUND reachable at all; the branch below could
+        // never fire against real rules, because `get` throws before it can
+        // return a null snapshot.
+        //
+        // But a denial is a statement about the session only if this device
+        // may read at all, so that is checked before the session is blamed —
+        // the same proof `claimSlot` demands before it calls a refused claim a
+        // lost race. A device that may not read goes to the shared catch,
+        // which reports it and calls it a permission failure.
         const field = (name: "created" | "creatorUid") =>
           get(ref(db, `sessions/${sessionCode}/${name}`));
         let snaps;
@@ -525,7 +551,8 @@ export function useLiveSession(uid: string): LiveSessionState {
         } catch (readRefused) {
           if (
             !signal.aborted &&
-            classifyJoinError(readRefused) === "JOIN_PERMISSION_DENIED"
+            classifyJoinError(readRefused) === "JOIN_PERMISSION_DENIED" &&
+            (await canReadAtAll(db))
           ) {
             return err(fail("SESSION_NOT_FOUND", describeError(readRefused)));
           }

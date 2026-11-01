@@ -1,5 +1,8 @@
 {
   "rules": {
+    "probe": {
+      ".read": "auth != null"
+    },
     "sessions": {
       "$code": {
         ".validate": "$code.matches(/^[2-9A-HJKMNP-Z]{6}$/)",

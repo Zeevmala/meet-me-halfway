@@ -113,6 +113,23 @@ function mockSession(
   });
 }
 
+/**
+ * Deny the join's session reads, as the rules do for a missing or expired
+ * session, and answer the read probe as the rules would for this device: any
+ * signed-in client may read it, a device turned away may read nothing.
+ */
+function denySessionReads({ deviceMayRead }: { deviceMayRead: boolean }) {
+  mockGet.mockImplementation((r: { path?: string }) =>
+    r?.path === "probe" && deviceMayRead
+      ? Promise.resolve({ val: () => null })
+      : Promise.reject(
+          Object.assign(new Error("Permission denied"), {
+            code: "PERMISSION_DENIED",
+          }),
+        ),
+  );
+}
+
 const TEST_UID = "user-abc-123";
 const PARTNER_UID = "user-xyz-789";
 const PARTNER_UID_2 = "user-def-456";
@@ -525,11 +542,7 @@ describe("useLiveSession", () => {
       // read is DENIED rather than resolving empty. Until this was classified
       // at the read itself, a mistyped code or a day-old link fell through to
       // the shared catch and told the user their browser was blocking storage.
-      mockGet.mockRejectedValue(
-        Object.assign(new Error("Permission denied"), {
-          code: "PERMISSION_DENIED",
-        }),
-      );
+      denySessionReads({ deviceMayRead: true });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -539,6 +552,26 @@ describe("useLiveSession", () => {
 
       expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
+    });
+
+    // The same denial comes back when it is the device being turned away — no
+    // auth token on the socket, App Check enforcement refusing it — and
+    // "Session not found" sent people off for a new link that would fail the
+    // same way. The probe is what tells the two apart.
+    it("blames the device, not the session, when it may read nothing at all", async () => {
+      denySessionReads({ deviceMayRead: false });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(mockGet).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "probe" }),
+      );
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
     });
 
     it("does not claim SESSION_FULL when a refused slot stays empty", async () => {

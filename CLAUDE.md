@@ -123,11 +123,14 @@ Tests are typechecked. Vitest strips types without checking them, so `tsc` is th
   creatorUid: string (write-once, must match auth.uid)
   slots/{0..4}: uid (write-once; exactly five keys may ever exist)
   participants/{slot}: { uid, lat, lng, accuracy, ts, name }   # ts: server timestamp
+/probe   (never holds data; readable by anyone signed in, writable by nobody)
 ```
 
 Security rules enforce: auth required for all reads, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`), session keys in the code generator's alphabet, no claim or position in a session that was never created or is over 24 hours old (a holder may still clear their own position), `created` and `ts` equal to the server's `now` — and **the participant cap**.
 
 Reads are per field, and there is no read rule on the session node itself, so nobody reads it whole. `created`, `creatorUid` and `slots` are readable by anyone signed in while the session is fresh: the join needs them before it holds a slot, and they carry no position or name. `participants` — the locations — is readable only by a holder of one of the five slots of a fresh session. Someone left out of a full session sees no one's location.
+
+A read of a session that does not exist, or is over 24 hours old, is **denied**, not answered empty: that keeps the code space opaque, so nobody signed in can probe codes for live sessions. The same denial greets a device that may read nothing at all (no auth token on its socket, App Check enforcement turning it away), so `joinSession` reads `/probe` before it blames the session. `/probe` names no session and holds nothing, so it answers only for the device: allowed means the session is missing or expired (`SESSION_NOT_FOUND`), denied means the device was refused (`JOIN_PERMISSION_DENIED`, reported to Sentry). It is the same discipline as `claimSlot`'s re-read. The rule is additive, so deploy order only matters for the ~30s between hosting and rules, during which a missing session reads as a permission failure. `e2e/live-session.spec.ts` opens a never-created code under the real rules and expects "Session not found".
 
 The client has the server stamp both timestamps (`serverTimestamp()`), never the device: every peer judges staleness from `ts`, and phones run minutes off. The rules require both to equal their `now`, so no client can backdate `created` to stretch the 24 hours, or game the 2s write throttle with a `ts` it chose. Liveness compares them against `Date.now()` plus `.info/serverTimeOffset` (`useServerTimeOffset` → the graph's `serverTimeOffsetMs` source), never the device clock alone.
 
