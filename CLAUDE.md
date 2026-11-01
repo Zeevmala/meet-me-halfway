@@ -52,8 +52,8 @@ No backend, no database server, no Docker, no Python.
 ## Core Flow
 
 1. App init → `signInAnonymously()` with retry (3 attempts, exponential backoff)
-2. **Creator** opens `/` → geolocation prompt → 6-char session code → URL becomes `/?code=XXXXX`
-3. **Joiners** (up to 4) open `/?code=XXXXX` → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
+2. **Creator** opens `/` → geolocation prompt → 6-char session code → once `created`, `creatorUid` and `slots/0` are written, the URL becomes `/?code=XXXXXX`. `created` is write-once, so a refusal there means the code is taken (sessions are never deleted) and a fresh one is drawn, up to three
+3. **Joiners** (up to 4) open `/?code=XXXXXX` → a code the generator could not have produced fails as `INVALID_CODE` before anything is read → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
 4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node, and re-sent every 10s while standing still — peers mark anyone silent for 30s as stale, and stop counting them toward the midpoint and routes after 2 minutes)
 5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
 6. Optional venue search around midpoint (Google Places, ranked by rating/proximity/popularity/open_now)
@@ -146,6 +146,8 @@ npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet
 The `deploy` job publishes hosting **and** `--only database`, in that order. The client's schema and `infra/database.rules.json` are two encodings of one contract; shipping either alone takes production down. That is not hypothetical — on 2026-09-11 the slot-schema client deployed while its rules stayed in the repo, and every slot claim was denied for three days. `infra/**` and `firebase.json` are in the workflow's `paths` filter for the same reason: they are deployable artifacts, and a rules-only change that starts no run can never reach production.
 
 Hosting deploys before rules deliberately. Either order leaves a window during a breaking schema change, but rules-first breaks every already-loaded client the moment the rules land and keeps them broken until they fetch a bundle that has not been published yet; hosting-first only strands clients that load inside the ~30s gap.
+
+Deploys run one at a time (a `concurrency` group on the job), so two quick pushes cannot interleave one's hosting with the other's rules. A deploy reaches open tabs through the service worker: `register-sw.ts` reloads the page when a new worker takes it over (`sw.js` deletes the previous bundle's cache as it does), and checks for one whenever the tab comes back into view, since a single-page tab never navigates. `/` and `/index.html` are served `no-cache`, so the worker's network-first fetch of the page cannot be answered by the HTTP cache. A tab still holding a chunk the deploy removed reloads on `vite:preloadError` (`lib/stale-chunk-reload.ts`). Tabs loaded before this mechanism shipped have none of it; they update when reloaded.
 
 **For the next breaking schema change, use expand/contract instead of relying on that ordering:** publish rules that accept both the old and new shapes, deploy, migrate the client, then drop the old shape in a later release. The window becomes zero. `2daf708` should have been shaped that way.
 

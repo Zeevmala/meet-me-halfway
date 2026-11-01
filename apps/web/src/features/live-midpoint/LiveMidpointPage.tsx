@@ -18,7 +18,7 @@ import { useLiveSession } from "./hooks/useLiveSession";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
-import { normalizeCode, isValidCode } from "./lib/session-code";
+import { normalizeCode } from "./lib/session-code";
 import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
 import type { MapParticipant } from "./components/LiveMap";
@@ -61,12 +61,16 @@ const GEO_ERROR_SCREENS: Record<
   },
 };
 
-/** Read ?code= from URL query string. */
+/**
+ * Read ?code= from the URL, normalised but not validated: `joinSession`
+ * validates, so a mangled code fails as INVALID_CODE. Filtered out here, it
+ * read as no code at all, and the page created a new session in place of the
+ * one the link named — the joiner sat alone, believing they had joined.
+ */
 function getCodeFromURL(): string | null {
   const raw = new URLSearchParams(window.location.search).get("code");
   if (!raw) return null;
-  const code = normalizeCode(raw);
-  return isValidCode(code) ? code : null;
+  return normalizeCode(raw);
 }
 
 /** Auth gate — waits for Firebase Anonymous Auth before rendering inner page. */
@@ -289,12 +293,20 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       geoStopRef.current();
       cleanupRef.current();
     };
+    // Restored from the back/forward cache, the page comes back without the
+    // listener and GPS that pagehide tore down, and nothing restarts them:
+    // the map froze on its last frame. A reload rebuilds both.
+    const handleShow = (event: PageTransitionEvent) => {
+      if (event.persisted) window.location.reload();
+    };
     // pagehide also fires on iOS Safari, where beforeunload is unreliable.
     window.addEventListener("beforeunload", handleUnload);
     window.addEventListener("pagehide", handleUnload);
+    window.addEventListener("pageshow", handleShow);
     return () => {
       window.removeEventListener("beforeunload", handleUnload);
       window.removeEventListener("pagehide", handleUnload);
+      window.removeEventListener("pageshow", handleShow);
       // Intentionally do NOT call handleUnload() here. The session and
       // geolocation hooks already tear themselves down on unmount via their
       // own cleanup effects. Running the full teardown on every React unmount
@@ -398,6 +410,16 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         </div>
       )}
 
+      {/* The graph knew, and nothing said so: the others saw this
+          participant go stale while their own screen looked fine. Offline
+          already has its banner. */}
+      {networkStatus.isOnline && graph.presenceFailed && (
+        <div className="live-offline-banner" role="status">
+          <span>&#9888;</span>
+          {t("live.presenceFailed")}
+        </div>
+      )}
+
       {session.code &&
         (isConnected && graph.midpoint && ownPosition ? (
           <div className="live-bottom-panel">
@@ -412,7 +434,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               </Suspense>
             )}
             <MidpointCard
-              midpoint={graph.midpoint}
               ownIndex={ownIndex}
               ownPosition={ownPosition}
               ownRoute={routes[ownIndex] ?? null}
@@ -421,6 +442,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               travelProfile={graph.travelProfile}
               onProfileChange={handleProfileChange}
               selectedVenueName={graph.selectedVenue?.displayName ?? null}
+              routesStale={graph.routesDegraded}
               code={session.code}
               participantCount={session.participants.length + 1}
             />

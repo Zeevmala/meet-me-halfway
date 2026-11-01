@@ -17,15 +17,22 @@ interface OtherParticipant {
 }
 
 interface MidpointCardProps {
-  midpoint: LatLng;
   ownIndex: ParticipantIndex;
   ownPosition: LatLng;
   ownRoute: RouteInfo | null;
   otherParticipants: readonly OtherParticipant[];
+  /**
+   * Where everyone is going: the picked venue, else the midpoint. The
+   * straight-line fallback measures to this too — it used to measure to the
+   * midpoint, so with a venue picked and no route yet, "Meet at X" listed
+   * distances to somewhere else.
+   */
   destination: LatLng;
   travelProfile: TravelProfile;
   onProfileChange: (profile: TravelProfile) => void;
   selectedVenueName: string | null;
+  /** The last routes are being served after a failed refresh. */
+  routesStale: boolean;
   code: string;
   participantCount: number;
 }
@@ -36,7 +43,6 @@ function formatDuration(seconds: number): string {
 
 /** Bottom card shown when participants are connected. */
 export default memo(function MidpointCard({
-  midpoint,
   ownIndex,
   ownPosition,
   ownRoute,
@@ -45,6 +51,7 @@ export default memo(function MidpointCard({
   travelProfile,
   onProfileChange,
   selectedVenueName,
+  routesStale,
   code,
   participantCount,
 }: MidpointCardProps) {
@@ -151,7 +158,7 @@ export default memo(function MidpointCard({
           <div className={`live-stat-value live-stat-value--p${ownIndex}`}>
             {ownRoute
               ? formatDistance(ownRoute.distance)
-              : formatDistance(haversineDistance(ownPosition, midpoint))}
+              : formatDistance(haversineDistance(ownPosition, destination))}
           </div>
           {ownRoute && (
             <div className="live-stat-sub">
@@ -170,7 +177,7 @@ export default memo(function MidpointCard({
             <div className={`live-stat-value live-stat-value--p${p.index}`}>
               {p.route
                 ? formatDistance(p.route.distance)
-                : formatDistance(haversineDistance(p.position, midpoint))}
+                : formatDistance(haversineDistance(p.position, destination))}
             </div>
             {p.route && (
               <div className="live-stat-sub">
@@ -182,6 +189,12 @@ export default memo(function MidpointCard({
           </div>
         ))}
       </div>
+
+      {routesStale && (
+        <div className="live-routes-stale" role="status">
+          {t("live.routesStale")}
+        </div>
+      )}
 
       <div className="live-nav-buttons">
         <a

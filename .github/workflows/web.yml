@@ -220,6 +220,14 @@ jobs:
   # runbook nobody runs.
   deploy:
     runs-on: ubuntu-latest
+    # One deploy at a time, in push order. Two quick pushes to main could
+    # otherwise interleave, one run's hosting landing between the other's
+    # hosting and rules, and leave production on a client and rules from
+    # different commits: the mismatch the ordering below exists to prevent.
+    # Not cancelled in progress, so a deploy is never cut off between steps.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     # `rules` gates this job now that the job publishes them: the emulator
     # suite is the only thing standing between a malformed rule and prod.
     needs: [build, lighthouse, e2e, rules]

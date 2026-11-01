@@ -62,10 +62,21 @@ vi.mock("../../../components/ServicesProvider", () => ({
 /** Handshakes take a signal now, so an unmount can cancel the retry loop. */
 const live = () => new AbortController().signal;
 
-// ── Mock session-code to return deterministic codes ──
-vi.mock("../lib/session-code", () => ({
-  generateCode: () => "ABC234",
+// ── Mock session-code: deterministic codes, the real validation ──
+const mockGenerateCode = vi.fn(() => "ABC234");
+vi.mock("../lib/session-code", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/session-code")>()),
+  generateCode: () => mockGenerateCode(),
 }));
+
+/** Refuse writes to one path, as the write-once rules do to a taken code. */
+function refuseWritesTo(test: (path: string) => boolean) {
+  mockSet.mockImplementation((r: { path?: string }) =>
+    test(r?.path ?? "")
+      ? Promise.reject(new Error("Permission denied"))
+      : Promise.resolve(undefined),
+  );
+}
 
 /**
  * Resolve `get` per path.
@@ -187,7 +198,105 @@ describe("useLiveSession", () => {
         await result.current.createSession(live());
       });
 
-      expect(history.replaceState).toHaveBeenCalled();
+      expect(history.replaceState).toHaveBeenCalledWith(
+        null,
+        "",
+        "http://localhost:5173/?code=ABC234",
+      );
+    });
+
+    // Written up front, the code stayed in the URL after a failed create, so
+    // Retry reloaded into a join of a session that was never created.
+    it("leaves the URL alone when the create fails", async () => {
+      mockSet.mockRejectedValue(new Error("Permission denied"));
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      expect(result.current.error).toBe("CREATE_FAILED");
+      expect(history.replaceState).not.toHaveBeenCalled();
+    });
+
+    // A taken code used to fail the create, and the Retry after it reloaded
+    // into that code — joining a stranger's session while it was live.
+    it("draws another code when the first is already taken", async () => {
+      mockGenerateCode
+        .mockReturnValueOnce("ABC234")
+        .mockReturnValueOnce("XYZ789");
+      refuseWritesTo((path) => path === "sessions/ABC234/created");
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let created: Result<string, SessionFailure> | undefined;
+      await act(async () => {
+        created = await result.current.createSession(live());
+      });
+
+      expect(created).toEqual({ ok: true, value: "XYZ789" });
+      expect(result.current.code).toBe("XYZ789");
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "sessions/XYZ789/creatorUid" }),
+        TEST_UID,
+      );
+      expect(mockSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({ path: "sessions/ABC234/creatorUid" }),
+        expect.anything(),
+      );
+      expect(history.replaceState).toHaveBeenCalledWith(
+        null,
+        "",
+        "http://localhost:5173/?code=XYZ789",
+      );
+    });
+
+    it("gives up after three taken codes", async () => {
+      refuseWritesTo((path) => path.endsWith("/created"));
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      expect(result.current.error).toBe("CREATE_FAILED");
+      expect(mockGenerateCode).toHaveBeenCalledTimes(3);
+      expect(mockSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({ path: expect.stringMatching(/creatorUid$/) }),
+        expect.anything(),
+      );
+    });
+
+    // All three writes are write-once. Retried as a group, a transient
+    // failure on a later one re-sent the earlier ones, which the rules then
+    // refused — failing a create that had nearly succeeded.
+    it("retries a failed write on its own, not the ones before it", async () => {
+      vi.useFakeTimers();
+      try {
+        let slotAttempts = 0;
+        mockSet.mockImplementation((r: { path?: string }) =>
+          r?.path === "sessions/ABC234/slots/0" && ++slotAttempts === 1
+            ? Promise.reject({ code: "unavailable" })
+            : Promise.resolve(undefined),
+        );
+        const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+        let created: Result<string, SessionFailure> | undefined;
+        await act(async () => {
+          const pending = result.current.createSession(live());
+          await vi.runAllTimersAsync();
+          created = await pending;
+        });
+
+        expect(created).toEqual({ ok: true, value: "ABC234" });
+        const writes = mockSet.mock.calls.map(
+          ([r]) => (r as { path: string }).path,
+        );
+        expect(writes.filter((p) => p.endsWith("/created"))).toHaveLength(1);
+        expect(writes.filter((p) => p.endsWith("/creatorUid"))).toHaveLength(1);
+        expect(writes.filter((p) => p.endsWith("/slots/0"))).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("starts listening for participants after create", async () => {
@@ -244,6 +353,27 @@ describe("useLiveSession", () => {
   });
 
   describe("joinSession", () => {
+    // The code becomes a database path, and a mangled one used to fall
+    // through to creating a session instead — the joiner sat alone, believing
+    // they had joined.
+    it("refuses a code the app could not have generated, before reading anything", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let joined: Result<string, SessionFailure> | undefined;
+      await act(async () => {
+        joined = await result.current.joinSession("!!INVALID", live());
+      });
+
+      expect(joined).toEqual({
+        ok: false,
+        error: { code: "INVALID_CODE", details: null },
+      });
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("INVALID_CODE");
+      expect(mockGet).not.toHaveBeenCalled();
+      expect(mockSet).not.toHaveBeenCalled();
+    });
+
     // The next rules release lets only slot holders read `participants`, and a
     // joiner holds no slot until the claim. A read of the whole session node
     // would include `participants` and be refused for every joiner, so the

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import SessionErrorPanel from "./SessionErrorPanel";
 
 // Stub react-i18next: return the key as-is for assertion stability.
@@ -50,6 +50,37 @@ describe("SessionErrorPanel", () => {
       <SessionErrorPanel errorCode="SESSION_NOT_FOUND" errorDetails={null} />,
     );
     expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+  });
+
+  // These screens had no action at all: a reload cannot change a session
+  // that is missing, expired or full, so the user was stuck on them.
+  it.each([
+    "INVALID_CODE",
+    "SESSION_NOT_FOUND",
+    "SESSION_EXPIRED",
+    "SESSION_FULL",
+  ] as const)("offers a new session of one's own on %s", (errorCode) => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    try {
+      render(<SessionErrorPanel errorCode={errorCode} errorDetails={null} />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "live.startNewSession" }),
+      );
+
+      expect(assign).toHaveBeenCalledWith("/");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not offer a new session where a retry can recover", () => {
+    render(<SessionErrorPanel errorCode="JOIN_FAILED" errorDetails={null} />);
+
+    expect(
+      screen.queryByRole("button", { name: "live.startNewSession" }),
+    ).toBeNull();
   });
 
   it("renders Details expander when errorDetails is provided", () => {

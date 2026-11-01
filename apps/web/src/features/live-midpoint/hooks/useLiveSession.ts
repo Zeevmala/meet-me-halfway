@@ -5,7 +5,7 @@ import type { Unsubscribe } from "firebase/database";
 import * as Sentry from "@sentry/react";
 import { useFirebase } from "../../../hooks/useFirebase";
 import { useServices } from "../../../components/ServicesProvider";
-import { generateCode } from "../lib/session-code";
+import { generateCode, isValidCode } from "../lib/session-code";
 import {
   getOrCreateDisplayName,
   sanitizeName,
@@ -23,6 +23,8 @@ import { detectInAppBrowser } from "../lib/in-app-browser";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
+  /** The link's code is not one the app could have generated. */
+  | "INVALID_CODE"
   | "SESSION_NOT_FOUND"
   | "SESSION_FULL"
   | "SESSION_EXPIRED"
@@ -107,6 +109,13 @@ export interface LiveSessionState {
 // beyond 24h will continue operating — acceptable for MVP since RTDB
 // security rules can enforce server-side TTL in a future iteration.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Fresh codes a create tries before giving up. `created` is write-once, so
+ * the rules refuse it under a code that is already taken — and since sessions
+ * are never deleted, every code ever used stays taken.
+ */
+const MAX_CODE_ATTEMPTS = 3;
 
 // Retry transient Firebase failures with exponential backoff (1s, 2s)
 // before surfacing the error. Most flake on iOS Safari resolves within
@@ -369,7 +378,7 @@ export function useLiveSession(uid: string): LiveSessionState {
       setError(null);
       setErrorDetails(null);
 
-      const sessionCode = generateCode();
+      let sessionCode = generateCode();
 
       // Make the UI usable immediately — the share button works even if RTDB
       // is slow or offline. The code is generated locally; the writes below
@@ -381,9 +390,16 @@ export function useLiveSession(uid: string): LiveSessionState {
       setOwnIndex(0);
       setStatus("ready");
 
-      const url = new URL(window.location.href);
-      url.searchParams.set("code", sessionCode);
-      history.replaceState(null, "", url.toString());
+      // One write at a time, each retried on its own: all three are
+      // write-once, so retrying the group after a later write failed would
+      // re-send an earlier one the rules now refuse.
+      const write = (path: string, value: unknown) =>
+        withRetry(
+          () => set(ref(db, `sessions/${sessionCode}/${path}`), value),
+          signal,
+          3,
+          isTransientError,
+        );
 
       try {
         // Shared with every other RTDB consumer and already in flight since
@@ -395,21 +411,34 @@ export function useLiveSession(uid: string): LiveSessionState {
         // rules in production until then refuse it. The server stamps
         // `created`, so a phone with a wrong clock cannot shorten or extend
         // the session's 24 hours.
-        await withRetry(
-          async () => {
-            await set(
-              ref(db, `sessions/${sessionCode}/created`),
-              serverTimestamp(),
-            );
-            await set(ref(db, `sessions/${sessionCode}/creatorUid`), uid);
-            // Slot 0 must be written after creatorUid: its rule validates the
-            // value against it, so claiming first would be rejected.
-            await set(ref(db, `sessions/${sessionCode}/slots/0`), uid);
-          },
-          signal,
-          3,
-          isTransientError,
-        );
+        //
+        // `created` claims the code. A refusal there means somebody holds it
+        // already, so draw another rather than fail: reported as
+        // CREATE_FAILED, the Retry that followed reloaded into the taken
+        // code — and joined a stranger's session when it was still live.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await write("created", serverTimestamp());
+            break;
+          } catch (refused) {
+            if (isTransientError(refused) || attempt >= MAX_CODE_ATTEMPTS) {
+              throw refused;
+            }
+            sessionCode = generateCode();
+            setCode(sessionCode);
+          }
+        }
+        await write("creatorUid", uid);
+        // Slot 0 must be written after creatorUid: its rule validates the
+        // value against it, so claiming first would be rejected.
+        await write("slots/0", uid);
+
+        // Only now does the code name a session, so only now does it go in
+        // the URL. Written up front, a failed create left it there, and Retry
+        // reloaded into a join of a session that did not exist.
+        const url = new URL(window.location.href);
+        url.searchParams.set("code", sessionCode);
+        history.replaceState(null, "", url.toString());
 
         // Attach the listener only after `created` exists: the `.read` rule
         // requires `created > now - 24h`, so a listener attached before the
@@ -443,6 +472,13 @@ export function useLiveSession(uid: string): LiveSessionState {
       setStatus("connecting");
       setError(null);
       setErrorDetails(null);
+
+      // Before anything reaches the database: the code becomes a path, and
+      // a mangled link used to fall through to creating a new session, so
+      // the joiner sat alone believing they had joined.
+      if (!isValidCode(sessionCode)) {
+        return err(fail("INVALID_CODE", null));
+      }
 
       let attestation = "pending";
       try {

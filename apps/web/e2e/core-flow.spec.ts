@@ -28,7 +28,7 @@ test("app shows auth or session state after load", async ({ page }) => {
 });
 
 test("joiner can open a session link without crashing", async ({ page }) => {
-  await page.goto("/?code=MOCK01");
+  await page.goto("/?code=MCK234");
   await expect(page.locator(".live-page")).toBeVisible({ timeout: 10_000 });
 });
 

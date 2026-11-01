@@ -20,8 +20,11 @@ import type { ParticipantIndex } from "../lib/participant-config";
 
 const ownPosition: LatLng = { lat: 32.08, lng: 34.78 };
 const otherPosition: LatLng = { lat: 31.77, lng: 35.21 };
+// A venue off to one side, as a picked one usually is. The straight-line
+// fallback must measure to it rather than to the midpoint, and only a fixture
+// that gives all four distances different values can tell the two apart.
 const midpoint: LatLng = { lat: 31.95, lng: 34.85 };
-const destination: LatLng = { lat: 31.93, lng: 35.0 };
+const destination: LatLng = { lat: 31.85, lng: 35.15 };
 
 const dummyGeometry: GeoJSON.LineString = {
   type: "LineString",
@@ -60,7 +63,6 @@ function renderCard(
     // file was outside tsc.
     code: "ABC123",
     participantCount: 2,
-    midpoint,
     ownIndex: 0 as ParticipantIndex,
     ownPosition,
     ownRoute: null as RouteInfo | null,
@@ -77,6 +79,7 @@ function renderCard(
     travelProfile: "driving" as const,
     onProfileChange: vi.fn(),
     selectedVenueName: null as string | null,
+    routesStale: false,
   };
   return render(<MidpointCard {...defaults} {...overrides} />);
 }
@@ -89,10 +92,10 @@ describe("MidpointCard", () => {
     expect(screen.getByText('live.participantDistance:{"n":2}')).toBeTruthy();
 
     const expectedOwn = formatDistance(
-      haversineDistance(ownPosition, midpoint),
+      haversineDistance(ownPosition, destination),
     );
     const expectedOther = formatDistance(
-      haversineDistance(otherPosition, midpoint),
+      haversineDistance(otherPosition, destination),
     );
     expect(screen.getByText(expectedOwn)).toBeTruthy();
     expect(screen.getByText(expectedOther)).toBeTruthy();
@@ -204,9 +207,37 @@ describe("MidpointCard", () => {
     // Without routes — haversine fallback
     renderCard({ ownRoute: null });
     const haversineOwn = formatDistance(
-      haversineDistance(ownPosition, midpoint),
+      haversineDistance(ownPosition, destination),
     );
     expect(screen.getByText(haversineOwn)).toBeTruthy();
     expect(screen.queryByText(/live\.driveTime/)).toBeNull();
+  });
+
+  // The graph knew the routes were left over from before a failed refresh,
+  // and the card presented them as current.
+  it("notes when the routes shown could not be refreshed", () => {
+    const { unmount } = renderCard({ ownRoute });
+    expect(screen.queryByText("live.routesStale")).toBeNull();
+    unmount();
+
+    renderCard({ ownRoute, routesStale: true });
+    expect(screen.getByText("live.routesStale")).toBeTruthy();
+  });
+
+  // With a venue picked and no route yet, the card said "Meet at X" over
+  // straight-line distances to the midpoint.
+  it("measures the straight-line fallback to the destination, not the midpoint", () => {
+    renderCard({ ownRoute: null, selectedVenueName: "Cafe One" });
+
+    expect(
+      screen.queryByText(
+        formatDistance(haversineDistance(ownPosition, midpoint)),
+      ),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        formatDistance(haversineDistance(ownPosition, destination)),
+      ),
+    ).toBeTruthy();
   });
 });

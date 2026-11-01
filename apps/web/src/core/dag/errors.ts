@@ -15,6 +15,12 @@ export type ResourceError =
   | { readonly kind: "NETWORK"; readonly detail: string }
   /** The node's own deadline elapsed before the request settled. */
   | { readonly kind: "TIMEOUT"; readonly afterMs: number }
+  /**
+   * The server answered, and the answer was no — a security-rules denial.
+   * Sending the same request again gets the same answer, and the dependency
+   * is healthy, so it is neither retried nor held against the breaker.
+   */
+  | { readonly kind: "DENIED"; readonly detail: string }
   /** The circuit breaker refused the call; no request was made. */
   | { readonly kind: "OPEN_CIRCUIT"; readonly retryAtMs: number };
 
@@ -36,6 +42,7 @@ export function isRetryableError(error: ResourceError): boolean {
     case "HTTP":
       // 5xx is worth another attempt; 4xx means the request itself is wrong.
       return error.status >= 500;
+    case "DENIED":
     case "OPEN_CIRCUIT":
       return false;
   }
@@ -56,6 +63,7 @@ export function countsAgainstBreaker(error: ResourceError): boolean {
       return true;
     case "HTTP":
       return error.status >= 500;
+    case "DENIED":
     case "OPEN_CIRCUIT":
       return false;
   }
@@ -72,6 +80,8 @@ export function describeResourceError(error: ResourceError): string {
       return `network: ${error.detail}`;
     case "TIMEOUT":
       return `timeout after ${error.afterMs}ms`;
+    case "DENIED":
+      return `denied: ${error.detail}`;
     case "OPEN_CIRCUIT":
       return `circuit open until ${error.retryAtMs}`;
   }
