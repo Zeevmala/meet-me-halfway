@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as Sentry from "@sentry/react";
 import {
   APP_CHECK_TIMEOUT_MS,
   createFirebaseServices,
   parseEmulatorHost,
   primeAppCheck,
+  readWebSocketHistory,
 } from "./firebase-factory";
 import type { AppConfig } from "./config";
 
@@ -36,10 +38,12 @@ vi.mock("firebase/auth", () => ({
 // against when App Check was initialized.
 const mockGetDatabase = vi.fn(() => ({ _db: true }));
 const mockConnectDatabaseEmulator = vi.fn();
+const mockForceWebSockets = vi.fn();
 vi.mock("firebase/database", () => ({
   getDatabase: () => mockGetDatabase(),
   connectDatabaseEmulator: (...args: unknown[]) =>
     mockConnectDatabaseEmulator(...args),
+  forceWebSockets: () => mockForceWebSockets(),
 }));
 
 const mockInitializeAppCheck = vi.fn();
@@ -253,6 +257,55 @@ describe("createFirebaseServices", () => {
       "127.0.0.1",
       9000,
     );
+  });
+
+  // The SDK's fallback, JSONP long-polling, is script the CSP refuses, and a
+  // browser whose last socket died young is routed to it on every connection
+  // after — never connecting, never upgrading, never clearing the flag that
+  // put it there. Forced before the handle exists, so before any connection.
+  it("forces WebSockets before it builds the Database handle", () => {
+    createFirebaseServices(config());
+
+    expect(mockForceWebSockets).toHaveBeenCalledTimes(1);
+    expect(mockForceWebSockets.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGetDatabase.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("tags reports with the WebSocket history the SDK would have read", () => {
+    window.localStorage.setItem("firebase:previous_websocket_failure", "true");
+    try {
+      createFirebaseServices(config());
+    } finally {
+      window.localStorage.removeItem("firebase:previous_websocket_failure");
+    }
+
+    expect(Sentry.setTag).toHaveBeenCalledWith(
+      "rtdb_ws_history",
+      "previously-failed",
+    );
+  });
+});
+
+describe("readWebSocketHistory", () => {
+  const storageWith = (value: string | null) => () =>
+    ({ getItem: () => value }) as unknown as Storage;
+
+  it("reads a set flag as previously-failed", () => {
+    expect(readWebSocketHistory(storageWith("true"))).toBe("previously-failed");
+  });
+
+  it("reads no flag as clean", () => {
+    expect(readWebSocketHistory(storageWith(null))).toBe("clean");
+  });
+
+  // The SDK falls back to in-memory storage here and treats that as a failed
+  // socket too, so this is the long-polling trap as well — just a different door.
+  it("reports storage that throws as storage-blocked", () => {
+    const blocked = () => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    };
+    expect(readWebSocketHistory(blocked)).toBe("storage-blocked");
   });
 });
 

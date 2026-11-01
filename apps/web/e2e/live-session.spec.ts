@@ -39,24 +39,46 @@ test.afterEach(async () => {
 });
 
 interface Device {
+  readonly context: BrowserContext;
   readonly page: Page;
   /** CSP violations, from the DOM event and from the browser's own report. */
   readonly cspViolations: string[];
+}
+
+interface DeviceOptions {
+  /** The browser's language, which is what picks the app's. */
+  readonly locale?: string;
+  /**
+   * Open with the flag the RTDB SDK leaves in localStorage when a WebSocket
+   * closes before it was proven healthy — what iOS does to the sockets of a
+   * page its user switched away from. With the flag set the SDK used to open
+   * with JSONP long-polling, which the CSP refuses, so the device never
+   * connected: a creator handed out a link to a session that was never
+   * written, and a joiner sat on a bare map under "You are offline".
+   */
+  readonly webSocketFailedBefore?: boolean;
 }
 
 async function openDevice(
   browser: Browser,
   geolocation: { latitude: number; longitude: number },
   path: string,
+  { locale = "en-US", webSocketFailedBefore = false }: DeviceOptions = {},
 ): Promise<Device> {
   const context = await browser.newContext({
     geolocation,
     permissions: ["geolocation"],
-    locale: "en-US",
+    locale,
   });
   openContexts.push(context);
   const page = await context.newPage();
   const cspViolations: string[] = [];
+
+  if (webSocketFailedBefore) {
+    await page.addInitScript(() => {
+      localStorage.setItem("firebase:previous_websocket_failure", "true");
+    });
+  }
 
   await page.addInitScript(() => {
     document.addEventListener("securitypolicyviolation", (event) => {
@@ -75,7 +97,7 @@ async function openDevice(
   await setupFirebaseMocks(page);
   await setupMapboxMocks(page);
   await page.goto(path);
-  return { page, cspViolations };
+  return { context, page, cspViolations };
 }
 
 interface Point {
@@ -152,8 +174,14 @@ test("two devices meet, and the map draws them where they are", async ({
 }) => {
   test.setTimeout(120_000);
 
-  // Creator: anonymous sign-in, a session created under the real rules.
-  const creator = await openDevice(browser, TEL_AVIV, "/");
+  // Creator: anonymous sign-in, a session created under the real rules — by a
+  // browser whose last WebSocket died young. Before RTDB was forced onto
+  // WebSockets, this device's long-polling was refused by `script-src` and its
+  // session never reached the database, so the joiner below read "Session not
+  // found". The joiner stays clean, so both histories are covered.
+  const creator = await openDevice(browser, TEL_AVIV, "/", {
+    webSocketFailedBefore: true,
+  });
   const codeBadge = creator.page.locator(".live-badge-code");
   await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
     timeout: 30_000,
