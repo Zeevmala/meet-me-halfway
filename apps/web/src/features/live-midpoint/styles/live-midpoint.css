@@ -304,6 +304,12 @@
   margin-bottom: 12px;
 }
 
+/* The handshake has not reached the database yet: no code, nothing to share. */
+.live-handshake {
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .live-waiting-subtitle {
   font-size: 11px;
   color: var(--live-text-muted);

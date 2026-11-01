@@ -423,6 +423,20 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         </div>
       )}
 
+      {/* Until the database holds the session there is nothing to share and
+          nobody to wait for, and a bare map said neither. A joiner sat on one
+          for as long as its handshake took — forever, on a device that could
+          not connect — and a creator would too, now that its code appears
+          only once the session is written. */}
+      {session.code === null && graph.phase === "creating" && (
+        <div
+          className="live-card live-glass live-waiting-shimmer live-handshake"
+          role="status"
+        >
+          {t(urlCode === null ? "live.creating" : "live.connecting")}
+        </div>
+      )}
+
       {session.code &&
         (isConnected && graph.midpoint && ownPosition ? (
           <div className="live-bottom-panel">

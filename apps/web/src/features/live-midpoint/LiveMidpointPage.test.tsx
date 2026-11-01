@@ -489,6 +489,47 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
   });
 
+  // The hook holds the code back until the database has the session, so this
+  // is what a creator sees until then — a status, and nothing to share.
+  it("says it is setting up, with nothing to share, while a create is pending", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "connecting",
+      code: null,
+      ownIndex: null,
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toBe("live.creating");
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+    expect(screen.queryByTestId("session-badge")).toBeNull();
+  });
+
+  // A joiner whose handshake had not finished used to look at a bare map — for
+  // good, on the devices that could not connect.
+  it("says it is connecting while a join is pending", () => {
+    vi.stubGlobal("location", { ...window.location, search: "?code=ABC234" });
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "connecting",
+      code: null,
+      ownIndex: null,
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toBe("live.connecting");
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+  });
+
+  it("drops the status once the session is ready", () => {
+    renderPage();
+
+    expect(screen.queryByText("live.creating")).toBeNull();
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
+  });
+
   it("falls back to waiting card when connected but no peer positions yet", () => {
     // phase === "connected" can briefly coexist with empty participants during
     // reconnect or a peer leaving, leaving midpoint null. WaitingCard should

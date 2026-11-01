@@ -52,7 +52,7 @@ No backend, no database server, no Docker, no Python.
 ## Core Flow
 
 1. App init → `signInAnonymously()` with retry (3 attempts, exponential backoff)
-2. **Creator** opens `/` → geolocation prompt → 6-char session code → `created`, `creatorUid` and `slots/0` are written in one atomic update, and only then does the URL become `/?code=XXXXXX`. `created` is write-once, so a refusal means the code is taken (sessions are never deleted) and a fresh one is drawn, up to three
+2. **Creator** opens `/` → geolocation prompt → 6-char session code → `created`, `creatorUid` and `slots/0` are written in one atomic update, and only then do the code, its share buttons and the URL (`/?code=XXXXXX`) appear — until the database holds the session the page says "Setting up…" and there is nothing to share, because a link to a session that was never written can only read "Session not found". `created` is write-once, so a refusal means the code is taken (sessions are never deleted) and a fresh one is drawn, up to three
 3. **Joiners** (up to 4) open `/?code=XXXXXX` → a code the generator could not have produced fails as `INVALID_CODE` before anything is read → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
 4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node, and re-sent every 10s while standing still — peers mark anyone silent for 30s as stale, and stop counting them toward the midpoint and routes after 2 minutes)
 5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
