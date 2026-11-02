@@ -287,10 +287,12 @@ describe("session metadata", () => {
     // learn which sessions are live, and a live session is the real-time
     // location of real people. Anonymous auth is free, so the probe is cheap.
     //
-    // The cost is that "no such session", "expired" and "forbidden" are one
-    // observable. `joinSession` pays it on the client by classifying a denied
-    // session read as SESSION_NOT_FOUND instead of blaming the browser. Relax
-    // this rule and that trade — privacy over message fidelity — is reversed.
+    // The cost is that "no such session" and "expired" are one observable.
+    // "Forbidden" no longer joins them: before `joinSession` calls a denied
+    // session read SESSION_NOT_FOUND, it reads `probe` (below), which answers
+    // for the device and never for a session — so a device that may read
+    // nothing is told that instead. Relax this rule and the trade — privacy
+    // over message fidelity — is reversed.
     await testEnv.clearDatabase();
     await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/created`).get());
     await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/creatorUid`).get());
@@ -314,6 +316,29 @@ describe("session metadata", () => {
         .ref(`sessions/${CODE}/participantUids/${JOINERS[0]}`)
         .set(true),
     );
+  });
+});
+
+describe("probe — whether this device may read at all", () => {
+  // A denied session read means "no such session" only if the device may read
+  // anything. `joinSession` reads this to tell the two apart: without it, a
+  // device turned away (no auth token, App Check enforcement) was told the
+  // session did not exist. It holds nothing and names no session, so the code
+  // space stays as opaque as the test above requires.
+  it("is readable by any signed-in client, and holds nothing", async () => {
+    const snapshot = await assertSucceeds(as(JOINERS[0]).ref("probe").get());
+    expect(snapshot.val()).toBeNull();
+  });
+
+  it("refuses an unauthenticated read", async () => {
+    await assertFails(
+      testEnv.unauthenticatedContext().database().ref("probe").get(),
+    );
+  });
+
+  it("cannot be written, so it can only ever answer for the device", async () => {
+    await assertFails(as(JOINERS[0]).ref("probe").set(true));
+    await assertFails(as(JOINERS[0]).ref("probe/session").set(CODE));
   });
 });
 

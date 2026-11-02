@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLiveSession } from "./useLiveSession";
 import type { SessionFailure } from "./useLiveSession";
 import type { Result } from "../../../core/dag/result";
@@ -113,6 +113,23 @@ function mockSession(
   });
 }
 
+/**
+ * Deny the join's session reads, as the rules do for a missing or expired
+ * session, and answer the read probe as the rules would for this device: any
+ * signed-in client may read it, a device turned away may read nothing.
+ */
+function denySessionReads({ deviceMayRead }: { deviceMayRead: boolean }) {
+  mockGet.mockImplementation((r: { path?: string }) =>
+    r?.path === "probe" && deviceMayRead
+      ? Promise.resolve({ val: () => null })
+      : Promise.reject(
+          Object.assign(new Error("Permission denied"), {
+            code: "PERMISSION_DENIED",
+          }),
+        ),
+  );
+}
+
 const TEST_UID = "user-abc-123";
 const PARTNER_UID = "user-xyz-789";
 const PARTNER_UID_2 = "user-def-456";
@@ -167,6 +184,106 @@ describe("useLiveSession", () => {
         },
       );
       expect(mockSet).not.toHaveBeenCalled();
+    });
+
+    /** An `update` that lands only when the test says so. */
+    function deferredUpdate() {
+      let land: () => void = () => {};
+      const write = () =>
+        new Promise<void>((resolve) => {
+          land = () => resolve();
+        });
+      return { write, land: () => land() };
+    }
+
+    // The code and its share buttons used to appear before this write. A
+    // creator whose write had not landed — slow, unable to connect at all —
+    // handed out a link the rules refuse to every joiner, and the other phone
+    // read "Session not found".
+    it("exposes no code, so nothing to share, until the create has landed", async () => {
+      const update = deferredUpdate();
+      mockUpdate.mockImplementation(update.write);
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let pending!: Promise<Result<string, SessionFailure>>;
+      act(() => {
+        pending = result.current.createSession(live());
+      });
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+
+      expect(result.current.status).toBe("connecting");
+      expect(result.current.code).toBeNull();
+      expect(result.current.ownIndex).toBeNull();
+      expect(history.replaceState).not.toHaveBeenCalled();
+
+      await act(async () => {
+        update.land();
+        await pending;
+      });
+
+      expect(result.current.status).toBe("ready");
+      expect(result.current.code).toBe("ABC234");
+      expect(result.current.ownIndex).toBe(0);
+    });
+
+    // A taken code is redrawn; a link to the first one would have named a
+    // stranger's session, or nobody's.
+    it("never shows a code it had to redraw", async () => {
+      mockGenerateCode
+        .mockReturnValueOnce("ABC234")
+        .mockReturnValueOnce("XYZ789");
+      const update = deferredUpdate();
+      mockUpdate
+        .mockRejectedValueOnce(new Error("Permission denied"))
+        .mockImplementationOnce(update.write);
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let pending!: Promise<Result<string, SessionFailure>>;
+      act(() => {
+        pending = result.current.createSession(live());
+      });
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(2));
+
+      expect(result.current.code).toBeNull();
+
+      await act(async () => {
+        update.land();
+        await pending;
+      });
+
+      expect(result.current.code).toBe("XYZ789");
+    });
+
+    it("publishes nothing when torn down while the write was in flight", async () => {
+      const update = deferredUpdate();
+      mockUpdate.mockImplementation(update.write);
+      const controller = new AbortController();
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let pending!: Promise<Result<string, SessionFailure>>;
+      act(() => {
+        pending = result.current.createSession(controller.signal);
+      });
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+      controller.abort();
+
+      let outcome: Result<string, SessionFailure> | undefined;
+      await act(async () => {
+        update.land();
+        outcome = await pending;
+      });
+
+      expect(outcome).toEqual({
+        ok: false,
+        error: { code: "CREATE_FAILED", details: "aborted" },
+      });
+      expect(result.current.code).toBeNull();
+      expect(result.current.error).toBeNull();
+      expect(history.replaceState).not.toHaveBeenCalled();
+      expect(mockRef).not.toHaveBeenCalledWith(
+        mockDb,
+        "sessions/ABC234/participants",
+      );
     });
 
     it("sets ownIndex to 0 and phase to 'waiting'", async () => {
@@ -425,11 +542,7 @@ describe("useLiveSession", () => {
       // read is DENIED rather than resolving empty. Until this was classified
       // at the read itself, a mistyped code or a day-old link fell through to
       // the shared catch and told the user their browser was blocking storage.
-      mockGet.mockRejectedValue(
-        Object.assign(new Error("Permission denied"), {
-          code: "PERMISSION_DENIED",
-        }),
-      );
+      denySessionReads({ deviceMayRead: true });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -439,6 +552,26 @@ describe("useLiveSession", () => {
 
       expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("SESSION_NOT_FOUND");
+    });
+
+    // The same denial comes back when it is the device being turned away — no
+    // auth token on the socket, App Check enforcement refusing it — and
+    // "Session not found" sent people off for a new link that would fail the
+    // same way. The probe is what tells the two apart.
+    it("blames the device, not the session, when it may read nothing at all", async () => {
+      denySessionReads({ deviceMayRead: false });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(mockGet).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "probe" }),
+      );
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
     });
 
     it("does not claim SESSION_FULL when a refused slot stays empty", async () => {

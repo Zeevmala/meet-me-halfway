@@ -28,6 +28,7 @@ import {
 } from "firebase/auth";
 import {
   connectDatabaseEmulator,
+  forceWebSockets,
   getDatabase,
   type Database,
 } from "firebase/database";
@@ -245,11 +246,59 @@ export function parseEmulatorHost(value: string): {
 }
 
 /**
+ * What the Realtime Database SDK would read on this device when it picks a
+ * transport: the flag it leaves in localStorage when a WebSocket closes before
+ * it was proven healthy, or storage that throws, which it treats the same.
+ *
+ * Reported, not acted on — `forceWebSockets` below makes it moot. It is there
+ * so the field can say how many devices the long-polling trap would have held.
+ */
+export type WebSocketHistory =
+  "clean" | "previously-failed" | "storage-blocked";
+
+/** The SDK's storage prefix plus the flag's name, as `WebSocketConnection` writes it. */
+const WEBSOCKET_FAILURE_KEY = "firebase:previous_websocket_failure";
+
+export function readWebSocketHistory(
+  storage: () => Storage = () => window.localStorage,
+): WebSocketHistory {
+  try {
+    return storage().getItem(WEBSOCKET_FAILURE_KEY) === "true"
+      ? "previously-failed"
+      : "clean";
+  } catch {
+    // Safari with all cookies blocked throws on the localStorage accessor.
+    return "storage-blocked";
+  }
+}
+
+/**
  * The Database handle, pointed at the emulator when the e2e build asks for it.
  * `connectDatabaseEmulator` must run before the first `ref()` starts the
  * connection, which is why it lives here and nowhere downstream.
+ *
+ * WebSockets only. The SDK's other transport is long-polling over JSONP —
+ * `<script src="https://<ns>.firebaseio.com/.lp?…">` — and our CSP's
+ * `script-src` refuses it, so in this app it can never connect. The SDK picks
+ * it more often than it looks: every WebSocket it opens first sets
+ * `firebase:previous_websocket_failure`, which only a socket that has answered
+ * twice clears, and while the flag is set (or storage throws) every connection
+ * starts with long-polling. Long-polling upgrades to a WebSocket only once it
+ * has connected, so under our CSP it never upgrades and the flag never clears.
+ * One socket that died young — iOS closes a backgrounded page's sockets, say
+ * while its user is in WhatsApp sharing the link — left that browser
+ * permanently "offline": its creates and joins pending forever, and every link
+ * it handed out naming a session that was never written.
+ *
+ * Admitting the fallback instead would mean running script from
+ * *.firebaseio.com in our origin. A network that blocks WebSockets loses
+ * nothing: the CSP already denied it the fallback.
  */
 function createDatabase(app: FirebaseApp, config: AppConfig): Database {
+  Sentry.setTag("rtdb_ws_history", readWebSocketHistory());
+  // A process-wide switch, and it must precede the first connection, which the
+  // composition root guarantees: nothing has a Database handle yet.
+  forceWebSockets();
   const db = getDatabase(app);
   if (config.rtdbEmulatorHost !== null) {
     const { host, port } = parseEmulatorHost(config.rtdbEmulatorHost);

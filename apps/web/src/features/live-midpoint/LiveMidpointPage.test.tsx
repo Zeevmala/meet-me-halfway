@@ -188,7 +188,7 @@ beforeEach(() => {
   mockNetworkStatus.mockReturnValue({
     browserOnline: true,
     firebaseConnected: true,
-    isOnline: true,
+    connectivity: "online",
   });
   mockServerTimeOffset.mockReturnValue(0);
   mockGeo.mockReturnValue(defaultGeo());
@@ -466,12 +466,36 @@ describe("LiveMidpointPage", () => {
     mockNetworkStatus.mockReturnValue({
       browserOnline: false,
       firebaseConnected: false,
-      isOnline: false,
+      connectivity: "offline",
     });
 
     renderPage();
 
-    expect(screen.getByText("app.offline")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("app.offline");
+  });
+
+  // The iPhone in the bug report was told "You are offline" while the map
+  // loaded its tiles: the network was fine, the database was not reachable.
+  it("says the server cannot be reached, not that the device is offline", () => {
+    mockNetworkStatus.mockReturnValue({
+      browserOnline: true,
+      firebaseConnected: false,
+      connectivity: "unreachable",
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "app.serverUnreachable",
+    );
+    expect(screen.queryByText("app.offline")).toBeNull();
+  });
+
+  it("shows no connectivity banner while connected", () => {
+    renderPage();
+
+    expect(screen.queryByText("app.offline")).toBeNull();
+    expect(screen.queryByText("app.serverUnreachable")).toBeNull();
   });
 
   it("renders waiting card (with share UI) whenever a code exists, even mid-creation", () => {
@@ -486,6 +510,47 @@ describe("LiveMidpointPage", () => {
 
     renderPage();
 
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
+  });
+
+  // The hook holds the code back until the database has the session, so this
+  // is what a creator sees until then — a status, and nothing to share.
+  it("says it is setting up, with nothing to share, while a create is pending", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "connecting",
+      code: null,
+      ownIndex: null,
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toBe("live.creating");
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+    expect(screen.queryByTestId("session-badge")).toBeNull();
+  });
+
+  // A joiner whose handshake had not finished used to look at a bare map — for
+  // good, on the devices that could not connect.
+  it("says it is connecting while a join is pending", () => {
+    vi.stubGlobal("location", { ...window.location, search: "?code=ABC234" });
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      status: "connecting",
+      code: null,
+      ownIndex: null,
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toBe("live.connecting");
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+  });
+
+  it("drops the status once the session is ready", () => {
+    renderPage();
+
+    expect(screen.queryByText("live.creating")).toBeNull();
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
   });
 

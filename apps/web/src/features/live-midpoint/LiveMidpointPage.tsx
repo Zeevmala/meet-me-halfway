@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import type { Connectivity } from "../../hooks/useNetworkStatus";
 import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import type { GeoStatus } from "./hooks/useLiveGeolocation";
@@ -33,6 +34,16 @@ import "./styles/live-midpoint.css";
 const VenueListCard = lazy(
   pendingWhileReloading(() => import("./components/VenueListCard")),
 );
+
+/**
+ * What the banner says when the page cannot talk to the database. Two
+ * messages, because "You are offline" over a map still loading its tiles told
+ * the user to fix a network that was working.
+ */
+const CONNECTIVITY_BANNER: Record<Exclude<Connectivity, "online">, string> = {
+  offline: "app.offline",
+  unreachable: "app.serverUnreachable",
+};
 
 type GeoErrorStatus = Extract<GeoStatus, "denied" | "unavailable" | "error">;
 
@@ -406,20 +417,34 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         />
       )}
 
-      {!networkStatus.isOnline && (
-        <div className="live-offline-banner">
-          <span>&#9888;</span>
-          {t("app.offline")}
+      {networkStatus.connectivity !== "online" && (
+        <div className="live-offline-banner" role="status">
+          <span aria-hidden="true">&#9888;</span>
+          {t(CONNECTIVITY_BANNER[networkStatus.connectivity])}
         </div>
       )}
 
       {/* The graph knew, and nothing said so: the others saw this
-          participant go stale while their own screen looked fine. Offline
-          already has its banner. */}
-      {networkStatus.isOnline && graph.presenceFailed && (
+          participant go stale while their own screen looked fine. A lost
+          connection already has its banner. */}
+      {networkStatus.connectivity === "online" && graph.presenceFailed && (
         <div className="live-offline-banner" role="status">
-          <span>&#9888;</span>
+          <span aria-hidden="true">&#9888;</span>
           {t("live.presenceFailed")}
+        </div>
+      )}
+
+      {/* Until the database holds the session there is nothing to share and
+          nobody to wait for, and a bare map said neither. A joiner sat on one
+          for as long as its handshake took — forever, on a device that could
+          not connect — and a creator would too, now that its code appears
+          only once the session is written. */}
+      {session.code === null && graph.phase === "creating" && (
+        <div
+          className="live-card live-glass live-waiting-shimmer live-handshake"
+          role="status"
+        >
+          {t(urlCode === null ? "live.creating" : "live.connecting")}
         </div>
       )}
 

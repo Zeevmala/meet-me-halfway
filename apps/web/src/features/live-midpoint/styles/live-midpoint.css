@@ -20,6 +20,10 @@
   --live-font:
     system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Hebrew", sans-serif;
   --live-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
+  /* Mapbox's top-right control column, and a gap: its 10px margin, its 32px
+     buttons inside our 1px border, then 12px. Overlays at the top of the map
+     stop this far short of the right edge. */
+  --live-map-ctrl-reserve: calc(10px + 34px + 12px);
 }
 
 /* ── Page container ── */
@@ -304,6 +308,12 @@
   margin-bottom: 12px;
 }
 
+/* The handshake has not reached the database yet: no code, nothing to share. */
+.live-handshake {
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .live-waiting-subtitle {
   font-size: 11px;
   color: var(--live-text-muted);
@@ -566,8 +576,12 @@
 .live-offline-banner {
   position: absolute;
   top: max(60px, calc(env(safe-area-inset-top, 12px) + 48px));
-  inset-inline-start: 12px;
-  inset-inline-end: 12px;
+  /* Physical, like .live-badge: Mapbox pins its controls to the top-right
+     corner whichever way the text runs, so the column to keep clear is on the
+     right in Hebrew too. Logical insets laid the banner across the zoom and
+     compass buttons in both directions. */
+  left: 12px;
+  right: var(--live-map-ctrl-reserve);
   z-index: 12;
   display: flex;
   align-items: center;
@@ -578,7 +592,8 @@
   border: 1px solid rgba(255, 179, 0, 0.3);
   font-size: 13px;
   color: var(--live-amber);
-  pointer-events: auto;
+  /* Nothing in it to tap, so it must not take the map's taps either. */
+  pointer-events: none;
   max-width: 420px;
 }
 
@@ -1242,8 +1257,10 @@
 /* ── Wider viewports: offline banner constraint ── */
 
 @media (min-width: 600px) {
+  /* Left in both directions, under the badge: a logical end inset pinned it
+     to the right edge in Hebrew, over the controls. */
   .live-offline-banner {
-    inset-inline-end: auto;
+    right: auto;
     max-width: 360px;
   }
 }

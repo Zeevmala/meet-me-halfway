@@ -39,24 +39,52 @@ test.afterEach(async () => {
 });
 
 interface Device {
+  readonly context: BrowserContext;
   readonly page: Page;
   /** CSP violations, from the DOM event and from the browser's own report. */
   readonly cspViolations: string[];
+}
+
+interface DeviceOptions {
+  /** The browser's language, which is what picks the app's. */
+  readonly locale?: string;
+  readonly viewport?: { readonly width: number; readonly height: number };
+  /**
+   * Open with the flag the RTDB SDK leaves in localStorage when a WebSocket
+   * closes before it was proven healthy — what iOS does to the sockets of a
+   * page its user switched away from. With the flag set the SDK used to open
+   * with JSONP long-polling, which the CSP refuses, so the device never
+   * connected: a creator handed out a link to a session that was never
+   * written, and a joiner sat on a bare map under "You are offline".
+   */
+  readonly webSocketFailedBefore?: boolean;
 }
 
 async function openDevice(
   browser: Browser,
   geolocation: { latitude: number; longitude: number },
   path: string,
+  {
+    locale = "en-US",
+    viewport,
+    webSocketFailedBefore = false,
+  }: DeviceOptions = {},
 ): Promise<Device> {
   const context = await browser.newContext({
     geolocation,
     permissions: ["geolocation"],
-    locale: "en-US",
+    locale,
+    ...(viewport === undefined ? {} : { viewport }),
   });
   openContexts.push(context);
   const page = await context.newPage();
   const cspViolations: string[] = [];
+
+  if (webSocketFailedBefore) {
+    await page.addInitScript(() => {
+      localStorage.setItem("firebase:previous_websocket_failure", "true");
+    });
+  }
 
   await page.addInitScript(() => {
     document.addEventListener("securitypolicyviolation", (event) => {
@@ -75,7 +103,7 @@ async function openDevice(
   await setupFirebaseMocks(page);
   await setupMapboxMocks(page);
   await page.goto(path);
-  return { page, cspViolations };
+  return { context, page, cspViolations };
 }
 
 interface Point {
@@ -152,8 +180,14 @@ test("two devices meet, and the map draws them where they are", async ({
 }) => {
   test.setTimeout(120_000);
 
-  // Creator: anonymous sign-in, a session created under the real rules.
-  const creator = await openDevice(browser, TEL_AVIV, "/");
+  // Creator: anonymous sign-in, a session created under the real rules — by a
+  // browser whose last WebSocket died young. Before RTDB was forced onto
+  // WebSockets, this device's long-polling was refused by `script-src` and its
+  // session never reached the database, so the joiner below read "Session not
+  // found". The joiner stays clean, so both histories are covered.
+  const creator = await openDevice(browser, TEL_AVIV, "/", {
+    webSocketFailedBefore: true,
+  });
   const codeBadge = creator.page.locator(".live-badge-code");
   await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
     timeout: 30_000,
@@ -209,3 +243,85 @@ test("two devices meet, and the map draws them where they are", async ({
     check(device.cspViolations, `${name}: no CSP violations`).toEqual([]);
   }
 });
+
+// A link to a session the database never held. The rules deny that read rather
+// than answer empty, and the same denial greets a device that may read nothing
+// at all, so the join reads the `probe` rule before it blames the session.
+// This device may read: what it is told is that the session does not exist.
+test("a link to a session that was never created reads 'Session not found'", async ({
+  browser,
+}) => {
+  const { page } = await openDevice(browser, TEL_AVIV, "/?code=MCK234");
+
+  await expect(page.locator(".live-error-title")).toHaveText(
+    /^Session not found/,
+    { timeout: 30_000 },
+  );
+});
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/**
+ * The connectivity banner sits under the badge, clear of Mapbox's controls,
+ * and says so in the browser's language.
+ *
+ * It used to run edge to edge on a phone, across the zoom and compass buttons,
+ * and took their taps. Mapbox pins its controls to the physical top-right
+ * whichever way the text runs, so logical insets put it over them in Hebrew
+ * as well — and on a wide screen in Hebrew it was pinned to that corner.
+ */
+for (const { locale, offline } of [
+  { locale: "en-US", offline: "You are offline" },
+  { locale: "he-IL", offline: "אין חיבור לאינטרנט" },
+] as const) {
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 800 },
+  ]) {
+    test(`the offline banner leaves the map controls clear (${locale}, ${viewport.width}px)`, async ({
+      browser,
+    }) => {
+      test.setTimeout(60_000);
+
+      const { context, page } = await openDevice(browser, TEL_AVIV, "/", {
+        locale,
+        viewport,
+      });
+      await expect(page.locator(".live-badge-code")).toHaveText(
+        /^[2-9A-HJKMNP-Z]{6}$/,
+        { timeout: 30_000 },
+      );
+      const controls = page.locator(".mapboxgl-ctrl-top-right");
+      await expect(controls).toBeVisible();
+
+      await context.setOffline(true);
+      const banner = page.locator(".live-offline-banner");
+      await expect(banner).toContainText(offline);
+
+      const bannerBox = await banner.boundingBox();
+      const controlsBox = await controls.boundingBox();
+      expect(bannerBox).not.toBeNull();
+      expect(controlsBox).not.toBeNull();
+      if (bannerBox !== null && controlsBox !== null) {
+        expect(
+          overlaps(bannerBox, controlsBox),
+          `banner ${JSON.stringify(bannerBox)} overlaps the controls ${JSON.stringify(controlsBox)}`,
+        ).toBe(false);
+      }
+    });
+  }
+}

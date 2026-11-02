@@ -2,6 +2,7 @@
   "app": {
     "title": "Meet Me Halfway",
     "offline": "You are offline",
+    "serverUnreachable": "Can't reach the server. Retrying...",
     "errorTitle": "Something went wrong",
     "errorMessage": "The app ran into an unexpected error. Please reload to try again.",
     "reload": "Reload"
