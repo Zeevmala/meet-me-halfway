@@ -98,36 +98,82 @@ function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
   };
 }
 
-function addSourcesAndLayers(map: mapboxgl.Map): void {
-  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
-    if (map.getSource(`accuracy-${i}`)) continue; // already added (style.load re-entry)
-    const color = PARTICIPANT_COLORS[i].hex;
+/** Below this zoom an accuracy circle is a pixel or two of smear. */
+const ACCURACY_MIN_ZOOM = 12;
+/** Just darker than the basemap, so a route reads as one stroke over its roads. */
+const CASING_COLOR = "#05050a";
 
-    // Accuracy circle
-    map.addSource(`accuracy-${i}`, { type: "geojson", data: EMPTY_FC });
-    map.addLayer({
+type LayerSpec = Parameters<mapboxgl.Map["addLayer"]>[0];
+
+/**
+ * The style's first label layer. Data goes beneath it: added on top of the
+ * whole style, the routes struck through the names of the towns they crossed.
+ * A style with no labels (the e2e suite's) takes data on top.
+ */
+function firstSymbolLayerId(map: mapboxgl.Map): string | undefined {
+  return map.getStyle()?.layers?.find((layer) => layer.type === "symbol")?.id;
+}
+
+function addSourcesAndLayers(map: mapboxgl.Map): void {
+  const beforeId = firstSymbolLayerId(map);
+  // Guarded one by one, so a style.load re-entry adds only what is missing.
+  const add = (layer: LayerSpec) => {
+    if (!map.getLayer(layer.id)) map.addLayer(layer, beforeId);
+  };
+
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    if (!map.getSource(`accuracy-${i}`)) {
+      map.addSource(`accuracy-${i}`, { type: "geojson", data: EMPTY_FC });
+    }
+    if (!map.getSource(`route-${i}`)) {
+      map.addSource(`route-${i}`, { type: "geojson", data: EMPTY_FC });
+    }
+  }
+
+  // In passes, each just beneath the labels and so above the one before:
+  // every accuracy circle, then every route casing, then every route. Added
+  // slot by slot instead, slot 1's casing cut a dark gap through slot 0's
+  // route where the two converge on the destination.
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    const color = PARTICIPANT_COLORS[i].hex;
+    add({
       id: `accuracy-${i}-fill`,
       type: "fill",
       source: `accuracy-${i}`,
+      minzoom: ACCURACY_MIN_ZOOM,
       paint: { "fill-color": color, "fill-opacity": 0.12 },
     });
-    map.addLayer({
+    add({
       id: `accuracy-${i}-outline`,
       type: "line",
       source: `accuracy-${i}`,
+      minzoom: ACCURACY_MIN_ZOOM,
       paint: { "line-color": color, "line-width": 1, "line-opacity": 0.3 },
     });
-
-    // Route line
-    map.addSource(`route-${i}`, { type: "geojson", data: EMPTY_FC });
-    map.addLayer({
+  }
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    add({
+      id: `route-${i}-casing`,
+      type: "line",
+      source: `route-${i}`,
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: {
+        "line-color": CASING_COLOR,
+        "line-width": 8,
+        "line-opacity": 0.9,
+      },
+    });
+  }
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    add({
       id: `route-${i}-layer`,
       type: "line",
       source: `route-${i}`,
+      layout: { "line-join": "round", "line-cap": "round" },
       paint: {
-        "line-color": color,
-        "line-width": 4,
-        "line-opacity": 0.8,
+        "line-color": PARTICIPANT_COLORS[i].hex,
+        "line-width": 4.5,
+        "line-opacity": 0.95,
       },
     });
   }

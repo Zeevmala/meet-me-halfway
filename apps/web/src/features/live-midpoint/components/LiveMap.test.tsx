@@ -69,9 +69,14 @@ interface Control {
  * A stand-in for the map, holding what LiveMap asks of a real one. Controls
  * get `onAdd` as Mapbox calls it, so Show everyone has a button to press.
  */
-function fakeMap(width = 390, height = 700) {
+function fakeMap(
+  width = 390,
+  height = 700,
+  styleLayers: { id: string; type: string }[] = [],
+) {
   const handlers = new Map<string, ((event: unknown) => void)[]>();
   const controls: unknown[] = [];
+  const added: { id: string; minzoom?: number; beforeId?: string }[] = [];
   const map = {
     on: (event: string, handler: (event: unknown) => void) => {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -83,11 +88,15 @@ function fakeMap(width = 390, height = 700) {
     remove: vi.fn(),
     touchZoomRotate: { disableRotation: vi.fn() },
     keyboard: { disableRotation: vi.fn() },
-    getStyle: () => ({ layers: [] }),
+    getStyle: () => ({ layers: styleLayers }),
     getSource: () => undefined,
-    getLayer: () => undefined,
+    getLayer: (id: string) => added.find((layer) => layer.id === id),
     addSource: vi.fn(),
-    addLayer: vi.fn(),
+    addLayer: vi.fn(
+      (layer: { id: string; minzoom?: number }, beforeId?: string) => {
+        added.push({ ...layer, beforeId });
+      },
+    ),
     fitBounds: vi.fn(),
     easeTo: vi.fn(),
     getContainer: () => ({ clientWidth: width, clientHeight: height }),
@@ -97,7 +106,7 @@ function fakeMap(width = 390, height = 700) {
       for (const handler of handlers.get(event) ?? []) handler(payload);
     });
   };
-  return { map, controls, fire };
+  return { map, controls, added, fire };
 }
 
 function participant(
@@ -228,6 +237,80 @@ describe("LiveMap", () => {
         (c) => c instanceof mapboxgl.NavigationControl,
       ) as { options?: Record<string, unknown> } | undefined;
       expect(zoom?.options).toEqual({ showCompass: false });
+    });
+  });
+
+  describe("layers", () => {
+    const DARK_STYLE_LAYERS = [
+      { id: "land", type: "background" },
+      { id: "road-primary", type: "line" },
+      { id: "road-label", type: "symbol" },
+      { id: "settlement-label", type: "symbol" },
+    ];
+
+    // Added on top of the whole style, routes struck through the names of
+    // the towns they crossed.
+    it("draws routes and accuracy beneath the basemap's labels", () => {
+      const fake = fakeMap(390, 700, DARK_STYLE_LAYERS);
+      mapbox.construct = () => fake.map;
+      render(<LiveMap {...PROPS} />);
+      fake.fire("load");
+
+      expect(fake.added.length).toBe(20);
+      for (const layer of fake.added) {
+        expect(layer.beforeId).toBe("road-label");
+      }
+    });
+
+    // Slot by slot, a later casing cut a dark gap through an earlier route
+    // where the two converge on the destination.
+    it("adds every casing before any route, and accuracy before both", () => {
+      const fake = fakeMap(390, 700, DARK_STYLE_LAYERS);
+      mapbox.construct = () => fake.map;
+      render(<LiveMap {...PROPS} />);
+      fake.fire("load");
+
+      const ids = fake.added.map((layer) => layer.id);
+      const lastAccuracy = Math.max(
+        ...ids.flatMap((id, i) => (id.startsWith("accuracy-") ? [i] : [])),
+      );
+      const casings = ids.flatMap((id, i) =>
+        id.endsWith("-casing") ? [i] : [],
+      );
+      const routes = ids.flatMap((id, i) => (id.endsWith("-layer") ? [i] : []));
+      expect(casings).toHaveLength(5);
+      expect(routes).toHaveLength(5);
+      expect(lastAccuracy).toBeLessThan(Math.min(...casings));
+      expect(Math.max(...casings)).toBeLessThan(Math.min(...routes));
+    });
+
+    it("hides accuracy circles at regional zoom, where they are a smear", () => {
+      const fake = fakeMap();
+      mapbox.construct = () => fake.map;
+      render(<LiveMap {...PROPS} />);
+      fake.fire("load");
+
+      const accuracy = fake.added.filter((l) => l.id.startsWith("accuracy-"));
+      expect(accuracy).toHaveLength(10);
+      for (const layer of accuracy) expect(layer.minzoom).toBe(12);
+    });
+
+    // The e2e suite's mock style has no layers at all.
+    it("puts data on top of a style with no labels", () => {
+      const fake = fakeMap();
+      mapbox.construct = () => fake.map;
+      render(<LiveMap {...PROPS} />);
+      fake.fire("load");
+      for (const layer of fake.added) expect(layer.beforeId).toBeUndefined();
+    });
+
+    it("adds nothing twice when the style loads again", () => {
+      const fake = fakeMap(390, 700, DARK_STYLE_LAYERS);
+      mapbox.construct = () => fake.map;
+      render(<LiveMap {...PROPS} />);
+      fake.fire("load");
+      fake.fire("style.load");
+      expect(fake.added.length).toBe(20);
     });
   });
 
