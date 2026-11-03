@@ -114,7 +114,14 @@ function participant(
   position: LatLng,
   isOwn = false,
 ): MapParticipant {
-  return { index, position, accuracy: 0, isOwn, stale: false };
+  return {
+    index,
+    position,
+    accuracy: 0,
+    isOwn,
+    stale: false,
+    label: isOwn ? null : String(index + 1),
+  };
 }
 
 const TEL_AVIV = { lat: 32.0853, lng: 34.7818 };

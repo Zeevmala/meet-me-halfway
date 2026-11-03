@@ -65,6 +65,18 @@ export function firstLetter(name: string | null | undefined): string | null {
 }
 
 /**
+ * The letter that stands for a participant wherever there is no room for a
+ * name — their badge pill and their map marker, which must agree: their
+ * name's first letter, else their 1-based slot number.
+ */
+export function participantInitial(
+  name: string | null | undefined,
+  index: number,
+): string {
+  return firstLetter(name) ?? String(index + 1);
+}
+
+/**
  * True when `name` is an auto-derived device label (e.g. "Windows", "iPhone")
  * rather than a name the user explicitly chose. Used to decide whether to
  * show the name or a generic "You" for the current user.

@@ -22,6 +22,7 @@ import { useGraph, useGraphRuntime } from "./graph/useGraph";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
 import { normalizeCode } from "./lib/session-code";
+import { participantInitial } from "./lib/display-name";
 import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
 import type { MapParticipant } from "./components/LiveMap";
@@ -221,12 +222,14 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     for (const slot of slots.occupied) {
       const position = slots.positions[slot];
       if (!position) continue;
+      const isOwn = slot === slots.ownSlot;
       out.push({
         position,
         accuracy: slots.accuracy[slot] ?? 0,
         index: slot,
-        isOwn: slot === slots.ownSlot,
+        isOwn,
         stale: slots.stale[slot] ?? false,
+        label: isOwn ? null : participantInitial(slots.names[slot], slot),
       });
     }
     return out;

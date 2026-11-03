@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
-import { firstLetter, isDerivedName } from "../lib/display-name";
+import { isDerivedName, participantInitial } from "../lib/display-name";
 import "../styles/live-midpoint.css";
 
 interface SessionBadgeProps {
@@ -117,7 +117,7 @@ export default memo(function SessionBadge({
           </button>
         )}
         {participants.map((p) => {
-          const letter = firstLetter(p.name) ?? String(p.index + 1);
+          const letter = participantInitial(p.name, p.index);
           return (
             <div key={p.index} className="live-pill">
               <span

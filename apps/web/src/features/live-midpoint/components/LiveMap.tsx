@@ -439,6 +439,8 @@ function LiveMap({
             lng={p.position.lng}
             participantIndex={p.index}
             stale={p.stale}
+            label={p.label}
+            isOwn={p.isOwn}
           />
         ))}
       {mapInstance && midpoint && (
@@ -446,6 +448,7 @@ function LiveMap({
           map={mapInstance}
           lat={midpoint.lat}
           lng={midpoint.lng}
+          muted={selectedVenue !== null}
         />
       )}
       {mapInstance &&

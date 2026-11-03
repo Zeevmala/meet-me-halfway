@@ -772,12 +772,29 @@
 
 /* ── Marker styles ── */
 
+/* On the map the palette belongs to people. The destination — the midpoint,
+   or the venue picked in its place — is the neutral target glyph below. */
 .live-marker {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   position: relative;
   cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Who it is, by the badge pill's rule: colour alone fails anyone who cannot
+   tell the green from the orange. */
+.live-marker-initial {
+  position: relative;
+  font-family: var(--live-font);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--live-bg);
+  pointer-events: none;
 }
 
 .live-marker--p0 {
@@ -805,11 +822,46 @@
   box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.3);
 }
 
+/* You: no letter, the white ring every map app has taught means "you". */
+.live-marker--own {
+  box-shadow:
+    0 0 0 3px #fff,
+    0 1px 8px rgba(0, 0, 0, 0.6);
+}
+
+/* The meeting point: a place, not a person, so it looks like neither. It was
+   a pulsing pink dot — a participant's shape and pulse, in participant 5's
+   pink. Now it is the app's own target mark in white, and still: a pulse is
+   how the map says someone is live. */
 .live-marker--mid {
-  width: 24px;
-  height: 24px;
-  background: var(--live-pink);
-  box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.3);
+  width: 26px;
+  height: 26px;
+  background: var(--live-bg);
+  box-shadow:
+    0 0 0 3px #fff,
+    0 2px 10px rgba(0, 0, 0, 0.7);
+}
+
+.live-marker--mid::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* A venue is picked and is the destination now; the midpoint stays only as a
+   reference. */
+.live-marker--mid-muted {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.live-marker--mid-muted::after {
+  width: 4px;
+  height: 4px;
 }
 
 .live-marker-ring {
@@ -845,11 +897,6 @@
   animation: live-pulse-ring 2s ease-out infinite 1.6s;
 }
 
-.live-marker--mid .live-marker-ring {
-  border-color: var(--live-pink);
-  animation: live-pulse-ring 2s ease-out infinite 1s;
-}
-
 /* ── Venue markers ── */
 
 .live-marker--venue {
@@ -865,18 +912,32 @@
     transform 0.2s;
 }
 
+/* The picked venue is the destination, so it takes the destination's glyph.
+   It was green, the creator's colour: two green dots, one of them a cafe. */
 .live-marker--venue-selected {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: var(--live-green);
-  border: 2px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 8px rgba(0, 212, 170, 0.5);
+  background: var(--live-bg);
+  box-shadow:
+    0 0 0 3px #fff,
+    0 2px 10px rgba(0, 0, 0, 0.7);
   cursor: pointer;
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition:
     background 0.2s,
     transform 0.2s;
+}
+
+.live-marker--venue-selected::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
 }
 
 .live-marker-label {

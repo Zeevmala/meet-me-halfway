@@ -100,6 +100,60 @@ describe("marker elements", () => {
     expect(root.firstElementChild?.classList).toContain("live-marker--mid");
   });
 
+  // Colour alone told people apart, and it fails anyone who cannot tell the
+  // green from the orange.
+  it("letters each participant by the badge pill's rule, and follows a rename", () => {
+    const props = { map, lat: 32, lng: 34, participantIndex: 2 as const };
+    const { rerender } = render(<LiveParticipantMarker {...props} label="A" />);
+    const dot = onlyRoot().firstElementChild;
+    expect(dot?.textContent).toBe("A");
+
+    rerender(<LiveParticipantMarker {...props} label="D" />);
+    expect(onlyRoot().firstElementChild?.textContent).toBe("D");
+    expect(handedToMapbox).toHaveLength(1);
+  });
+
+  it("marks your own dot as yours instead of lettering it", () => {
+    render(
+      <LiveParticipantMarker
+        map={map}
+        lat={32}
+        lng={34}
+        participantIndex={0}
+        label={null}
+        isOwn
+      />,
+    );
+    const dot = onlyRoot().firstElementChild;
+    expect(dot?.classList).toContain("live-marker--own");
+    expect(dot?.classList).toContain("live-marker--p0");
+    expect(dot?.textContent).toBe("");
+  });
+
+  // It was a pulsing dot like a participant's, in participant 5's pink.
+  it("draws the meeting point still: no pulse ring, which means someone live", () => {
+    render(<LiveMidpointMarker map={map} lat={32} lng={34} />);
+    const dot = onlyRoot().firstElementChild;
+    expect(dot?.querySelector(".live-marker-ring")).toBeNull();
+  });
+
+  it("mutes the midpoint while a venue is the destination, on the child", () => {
+    const { rerender } = render(
+      <LiveMidpointMarker map={map} lat={32} lng={34} muted={false} />,
+    );
+    const root = onlyRoot();
+    const dot = root.firstElementChild;
+    expect(dot?.classList).not.toContain("live-marker--mid-muted");
+
+    rerender(<LiveMidpointMarker map={map} lat={32} lng={34} muted />);
+    expect(dot?.classList).toContain("live-marker--mid-muted");
+    expect(dot?.classList).toContain("live-marker--mid");
+    expect(root.classList).toContain("mapboxgl-marker");
+
+    rerender(<LiveMidpointMarker map={map} lat={32} lng={34} muted={false} />);
+    expect(dot?.classList).not.toContain("live-marker--mid-muted");
+  });
+
   it("keeps Mapbox's classes when a venue is selected and deselected", () => {
     // Selection used to assign `className` on the element Mapbox positions,
     // which removed `mapboxgl-marker` and its absolute positioning with it.

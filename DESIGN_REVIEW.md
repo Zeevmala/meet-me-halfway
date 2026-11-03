@@ -13,7 +13,7 @@ Audit of UI/UX quality across color consistency, typography, accessibility, resp
 - **Typography hierarchy** — Clear scale: 18px titles, 14px body, 13px subtitles, 12px meta, 11px labels
 - **Micro-interactions** — Button press scale(0.97), marker pulse rings, card slide-up animation, dot blink
 - **i18n complete** — 45+ keys in en/he/ar, all UI strings translated
-- **Marker differentiation** — Green (you), blue (partner), pink (midpoint), gray (venue), green (selected venue) with distinct sizes and glows
+- **Marker differentiation** — The five palette colours are people only, each with their initial (the own marker gets a white ring); the destination — midpoint or picked venue — is a static white target glyph; venues are gray. (Pink once marked the midpoint and green the picked venue: participant 5's and the creator's colours.)
 - **Stale partner UX** — Dimmed grayscale marker + warning banner with hint sublabel
 - **Navigation deep links** — Waze and Google Maps one-tap links point to selected venue or midpoint
 

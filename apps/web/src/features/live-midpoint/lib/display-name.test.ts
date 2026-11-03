@@ -5,6 +5,7 @@ import {
   saveDisplayName,
   firstLetter,
   isDerivedName,
+  participantInitial,
 } from "./display-name";
 
 const STORAGE_KEY = "mmhw:displayName";
@@ -187,5 +188,17 @@ describe("isDerivedName", () => {
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     });
     expect(isDerivedName("Zeev")).toBe(false);
+  });
+});
+
+describe("participantInitial", () => {
+  it("is the name's first letter", () => {
+    expect(participantInitial("Android", 2)).toBe("A");
+    expect(participantInitial("דני", 1)).toBe("ד");
+  });
+
+  it("falls back to the 1-based slot number for a participant with no name", () => {
+    expect(participantInitial(null, 0)).toBe("1");
+    expect(participantInitial("   ", 4)).toBe("5");
   });
 });

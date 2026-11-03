@@ -17,6 +17,7 @@ function participant(
     accuracy: 10,
     isOwn: index === 0,
     stale: false,
+    label: null,
   };
 }
 
