@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -16,6 +16,10 @@ import SessionBadge from "./SessionBadge";
 import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("SessionBadge", () => {
   const CODE = "XYZ789";
 
@@ -27,6 +31,7 @@ describe("SessionBadge", () => {
       ownIndex: ParticipantIndex;
       ownName: string;
       onNameChange: (name: string) => void;
+      canInvite: boolean;
       participants: Array<{
         index: ParticipantIndex;
         connected: boolean;
@@ -42,6 +47,7 @@ describe("SessionBadge", () => {
         ownIndex={overrides.ownIndex ?? 0}
         ownName={overrides.ownName ?? "Mac"}
         onNameChange={overrides.onNameChange ?? vi.fn()}
+        canInvite={overrides.canInvite ?? true}
         participants={
           overrides.participants ?? [{ index: 1, connected: false, name: null }]
         }
@@ -51,6 +57,77 @@ describe("SessionBadge", () => {
   it("renders session code", () => {
     renderBadge();
     expect(screen.getByText(CODE)).toBeTruthy();
+  });
+
+  describe("invite", () => {
+    // The e2e suite reads the code off .live-badge-code: nothing else in it.
+    it("makes the code the invite button, holding just the code", () => {
+      const { container } = renderBadge();
+      const button = screen.getByRole("button", {
+        name: `live.inviteCode:{"code":"${CODE}"}`,
+      });
+      expect(button.querySelector(".live-badge-code")?.textContent).toBe(CODE);
+      expect(container.querySelectorAll(".live-badge-code")).toHaveLength(1);
+    });
+
+    it("opens the share sheet with the session link where there is one", async () => {
+      const share = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", {
+        ...navigator,
+        share,
+        canShare: () => true,
+      });
+      renderBadge();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /inviteCode/ }));
+      });
+
+      expect(share).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: `${window.location.origin}?code=${CODE}`,
+        }),
+      );
+    });
+
+    it("copies the link where there is no share sheet, and says so", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      renderBadge();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /inviteCode/ }));
+      });
+
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}?code=${CODE}`,
+      );
+      expect(screen.getByRole("status").textContent).toBe("live.linkCopied");
+    });
+
+    // A closed share sheet is the user's answer, not a failure to recover from.
+    it("does nothing more when the share sheet is dismissed", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", {
+        ...navigator,
+        share: vi.fn().mockRejectedValue(new DOMException("", "AbortError")),
+        canShare: () => true,
+        clipboard: { writeText },
+      });
+      renderBadge();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /inviteCode/ }));
+      });
+
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it("shows the code but no invite once all five slots are taken", () => {
+      renderBadge({ canInvite: false });
+      expect(screen.getByText(CODE)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /inviteCode/ })).toBeNull();
+    });
   });
 
   it('shows live dot when phase is "connected"', () => {
@@ -77,6 +154,7 @@ describe("SessionBadge", () => {
         ownIndex={0}
         ownName="Mac"
         onNameChange={vi.fn()}
+        canInvite
         participants={[]}
       />,
     );
@@ -92,6 +170,7 @@ describe("SessionBadge", () => {
         ownIndex={0}
         ownName="Mac"
         onNameChange={vi.fn()}
+        canInvite
         participants={[]}
       />,
     );
@@ -122,6 +201,7 @@ describe("SessionBadge", () => {
         ownIndex={0}
         ownName="Zeev"
         onNameChange={vi.fn()}
+        canInvite
         participants={[
           { index: 1, connected: true, name: "Alex" },
           { index: 2, connected: false, name: null },

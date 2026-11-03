@@ -24,6 +24,7 @@ import type { RankedVenue } from "./lib/venue-ranking";
 import { normalizeCode } from "./lib/session-code";
 import { participantInitial } from "./lib/display-name";
 import type { ParticipantIndex } from "./lib/participant-config";
+import { MAX_PARTICIPANTS } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
 import type { MapParticipant } from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
@@ -439,6 +440,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             ownIndex={ownIndex}
             ownName={session.ownName}
             onNameChange={session.setOwnName}
+            canInvite={session.participants.length + 1 < MAX_PARTICIPANTS}
             participants={badgeParticipants}
           />
         )}
@@ -499,8 +501,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
                 onProfileChange={handleProfileChange}
                 selectedVenueName={graph.selectedVenue?.displayName ?? null}
                 routesStale={graph.routesDegraded}
-                code={session.code}
-                participantCount={session.participants.length + 1}
               />
             </>
           ) : (

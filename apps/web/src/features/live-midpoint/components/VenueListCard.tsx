@@ -77,8 +77,11 @@ export default memo(function VenueListCard({
                   &#9733; {v.rating.toFixed(1)}
                 </span>
               )}
+              {/* bdi: in a Hebrew row "1.2 km" was laid out "km 1.2". */}
               {v.distanceFromMidpoint != null && (
-                <span>{formatDistance(v.distanceFromMidpoint)}</span>
+                <span>
+                  <bdi>{formatDistance(v.distanceFromMidpoint)}</bdi>
+                </span>
               )}
               {v.openNow && (
                 <span className="live-venue-open">{t("live.openNow")}</span>
