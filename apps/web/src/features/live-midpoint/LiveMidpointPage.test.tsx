@@ -103,6 +103,7 @@ interface RecordedMapProps {
   midpoint: unknown;
   venues: unknown;
   selectedVenue: unknown;
+  insets: unknown;
 }
 const liveMapProps: RecordedMapProps[] = [];
 vi.mock("./components/LiveMap", () => ({
@@ -681,6 +682,9 @@ describe("LiveMidpointPage — render-path stability", () => {
     expect(second.routes).toBe(first.routes);
     expect(second.midpoint).toBe(first.midpoint);
     expect(second.venues).toBe(first.venues);
+    // The overlays' footprint changes only when the layout does; a fresh
+    // object per render would refit the map on every heartbeat.
+    expect(second.insets).toBe(first.insets);
   });
 
   it("hands LiveMap new projections when the roster actually changes", () => {

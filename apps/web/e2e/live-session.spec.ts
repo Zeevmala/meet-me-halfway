@@ -12,13 +12,18 @@ import { setupMapboxMocks } from "./helpers/mock-mapbox";
  * share, join, meet — against the RTDB emulator, under the CSP read straight
  * from firebase.json (see `productionHeaders` in vite.config.ts), and then
  * checks what a user actually looks at: that each marker is drawn where its
- * coordinates put it.
+ * coordinates put it, and that none of them is hidden under the top bar or the
+ * sheet. The creator is a phone and the joiner a wide screen, so both layouts
+ * are framed in one run.
  *
  * That is the gap that let three production defects through: the CSP blocked
  * Mapbox's stylesheet (markers rendered below the canvas, off-screen) and its
  * RTL text plugin, and the marker CSS offset every marker by the height of
  * the ones before it. None of them is visible to jsdom or to a page served
- * without the production headers.
+ * without the production headers. A fourth needed a phone-sized viewport:
+ * padding sized for an older layout exceeded the map's height, Mapbox dropped
+ * every fit, and participants sat half under the panel — with their centres
+ * still inside the map, which is all this used to check.
  *
  * Right-to-left labels are not asserted here. Since mapbox-gl 3.33 they need
  * no plugin; Mapbox fetches its shaping module only once RTL text is on
@@ -106,40 +111,58 @@ async function openDevice(
   return { context, page, cspViolations };
 }
 
-interface Point {
+interface Box {
   readonly x: number;
   readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+function centre(box: Box): { x: number; y: number } {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
 interface MarkerLayout {
-  readonly map: { left: number; top: number; right: number; bottom: number };
-  readonly p0: Point | null;
-  readonly p1: Point | null;
-  readonly mid: Point | null;
+  readonly map: Box | null;
+  /** What is drawn over the map: the top bar and the sheet. */
+  readonly overlays: readonly Box[];
+  readonly p0: Box | null;
+  readonly p1: Box | null;
+  readonly mid: Box | null;
 }
 
-/** Screen-space centres of the two participant dots and the midpoint dot. */
+/** Screen-space boxes of the two participant dots, the midpoint and the overlays. */
 function markerLayout(page: Page): Promise<MarkerLayout> {
   return page.evaluate(() => {
-    const centre = (selector: string) => {
-      const element = document.querySelector(selector);
+    const box = (element: Element | null) => {
       if (element === null) return null;
       const rect = element.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
     };
-    const map = document
-      .querySelector(".live-map-container")
-      ?.getBoundingClientRect();
+    const at = (selector: string) => box(document.querySelector(selector));
+    const overlays = [".live-topbar", ".live-sheet"]
+      .map(at)
+      .filter((b) => b !== null && b.width > 0 && b.height > 0);
     return {
-      map: {
-        left: map?.left ?? 0,
-        top: map?.top ?? 0,
-        right: map?.right ?? 0,
-        bottom: map?.bottom ?? 0,
-      },
-      p0: centre(".live-marker--p0"),
-      p1: centre(".live-marker--p1"),
-      mid: centre(".live-marker--mid"),
+      map: at(".live-map-container"),
+      overlays: overlays as {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }[],
+      p0: at(".live-marker--p0"),
+      p1: at(".live-marker--p1"),
+      mid: at(".live-marker--mid"),
     };
   });
 }
@@ -153,27 +176,36 @@ function markerLayout(page: Page): Promise<MarkerLayout> {
  * here — without the test reaching into the map instance for `project()`.
  */
 function midpointOffsetPx(layout: MarkerLayout): number {
-  const { p0, p1, mid } = layout;
-  if (p0 === null || p1 === null || mid === null) {
+  if (layout.p0 === null || layout.p1 === null || layout.mid === null) {
     return Number.POSITIVE_INFINITY;
   }
+  const p0 = centre(layout.p0);
+  const p1 = centre(layout.p1);
+  const mid = centre(layout.mid);
   return Math.hypot(mid.x - (p0.x + p1.x) / 2, mid.y - (p0.y + p1.y) / 2);
 }
 
-/** The markers that are not inside the visible map. */
-function markersOffMap(layout: MarkerLayout): string[] {
-  const { map } = layout;
+/**
+ * The markers a user cannot fully see: not drawn, not wholly inside the map,
+ * or partly under the top bar or the sheet. A centre inside the map is not
+ * enough — the clipped markers of the phone layout all had one.
+ */
+function markersOutOfSight(layout: MarkerLayout): string[] {
+  const { map, overlays } = layout;
   return (["p0", "p1", "mid"] as const).filter((key) => {
-    const point = layout[key];
-    return (
-      point === null ||
-      point.x < map.left ||
-      point.x > map.right ||
-      point.y < map.top ||
-      point.y > map.bottom
-    );
+    const marker = layout[key];
+    if (marker === null || map === null) return true;
+    const inside =
+      marker.x >= map.x &&
+      marker.y >= map.y &&
+      marker.x + marker.width <= map.x + map.width &&
+      marker.y + marker.height <= map.y + map.height;
+    return !inside || overlays.some((overlay) => overlaps(marker, overlay));
   });
 }
+
+/** The layouts the two devices are laid out in: a phone, and a wide screen. */
+const PHONE = { width: 390, height: 844 } as const;
 
 test("two devices meet, and the map draws them where they are", async ({
   browser,
@@ -187,6 +219,7 @@ test("two devices meet, and the map draws them where they are", async ({
   // found". The joiner stays clean, so both histories are covered.
   const creator = await openDevice(browser, TEL_AVIV, "/", {
     webSocketFailedBefore: true,
+    viewport: PHONE,
   });
   const codeBadge = creator.page.locator(".live-badge-code");
   await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
@@ -227,8 +260,8 @@ test("two devices meet, and the map draws them where they are", async ({
       .toBe("absolute");
 
     await check
-      .poll(async () => markersOffMap(await markerLayout(page)), {
-        message: `${name}: every marker is inside the visible map`,
+      .poll(async () => markersOutOfSight(await markerLayout(page)), {
+        message: `${name}: every marker is in sight — inside the map, clear of the top bar and the sheet`,
         timeout: 15_000,
       })
       .toEqual([]);
@@ -259,22 +292,6 @@ test("a link to a session that was never created reads 'Session not found'", asy
   );
 });
 
-interface Box {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-function overlaps(a: Box, b: Box): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
-  );
-}
-
 /**
  * The connectivity banner sits under the badge, clear of Mapbox's controls,
  * and says so in the browser's language.
@@ -288,10 +305,7 @@ for (const { locale, offline } of [
   { locale: "en-US", offline: "You are offline" },
   { locale: "he-IL", offline: "אין חיבור לאינטרנט" },
 ] as const) {
-  for (const viewport of [
-    { width: 390, height: 844 },
-    { width: 1280, height: 800 },
-  ]) {
+  for (const viewport of [PHONE, { width: 1280, height: 800 }]) {
     test(`the offline banner leaves the map controls clear (${locale}, ${viewport.width}px)`, async ({
       browser,
     }) => {

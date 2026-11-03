@@ -35,8 +35,6 @@
   width: 100%;
   height: 100vh;
   height: 100dvh;
-  display: flex;
-  flex-direction: column;
   background: var(--live-bg);
   font-family: var(--live-font);
   color: var(--live-text);
@@ -48,12 +46,29 @@
   line-height: 1.5;
 }
 
-.live-map-container {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
+/* Full-bleed on every viewport: the top bar and the sheet float over it, and
+   the camera pads its fits by what they cover (hooks/useOverlayInsets.ts).
+   It used to be a flex child that got only what the panel left — under half
+   of a phone's screen.
+   Two classes deep on purpose: Mapbox puts `.mapboxgl-map { position:
+   relative }` on this element, and its stylesheet arrives with the lazily
+   loaded page chunk, after this one — at equal specificity it won, and the
+   map collapsed to zero height. */
+.live-page > .live-map-container {
+  position: absolute;
+  inset: 0;
   z-index: 1;
+}
+
+/* Mapbox's wordmark and attribution must stay visible (its terms), and the
+   sheet covers the bottom corners it reaches. The page sets how far each one
+   has to rise from the sheet's measured box. */
+.live-map-container .mapboxgl-ctrl-bottom-left {
+  bottom: var(--live-lift-left, 0px);
+}
+
+.live-map-container .mapboxgl-ctrl-bottom-right {
+  bottom: var(--live-lift-right, 0px);
 }
 
 /* ── Mapbox controls — match the dark glass theme ── */
@@ -119,12 +134,32 @@
 
 /* ── Session Badge (top bar) ── */
 
-.live-badge {
+/* ── Top bar: the badge, then any banner, down the top-left of the map ──
+   Physical left, like Mapbox's controls are physical top-right whichever way
+   the text runs; it stops short of them by the control column's reserve. */
+
+.live-topbar {
   position: absolute;
   top: max(8px, env(safe-area-inset-top, 8px));
   left: 10px;
+  max-width: calc(100% - 10px - var(--live-map-ctrl-reserve));
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  /* Only the badge takes taps; the gaps and the banners leave them to the
+     map. */
+  pointer-events: none;
+}
+
+.live-topbar .live-badge {
+  pointer-events: auto;
+}
+
+.live-badge {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
@@ -250,54 +285,39 @@
   background: var(--live-gray);
 }
 
-/* ── Bottom panel container ── */
+/* ── Sheet: every card at the bottom of the map ──
+   One measured container whatever it holds — the handshake status, the
+   waiting card, or the venues and the midpoint card — so the camera always
+   knows what it covers. The gutters stay map: only the cards take taps. */
 
-.live-bottom-panel {
-  position: relative;
-  flex: 0 0 auto;
-  margin: 0 14px max(14px, env(safe-area-inset-bottom, 14px));
-  max-height: 55dvh;
-  overflow-y: auto;
+.live-sheet {
+  position: absolute;
+  inset-inline: 8px;
+  bottom: max(8px, env(safe-area-inset-bottom, 8px));
   z-index: 10;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  max-width: 480px;
+  margin-inline: auto;
+  max-height: 55dvh;
+  overflow-y: auto;
   pointer-events: none;
-  max-width: 420px;
   contain: layout style;
 }
 
-.live-bottom-panel > * {
+.live-sheet > * {
   pointer-events: auto;
 }
 
-/* Override .live-card positioning when inside bottom panel */
-.live-bottom-panel .live-card {
-  position: relative;
-  bottom: auto;
-  inset-inline-start: auto;
-  inset-inline-end: auto;
-}
-
-/* ── Bottom cards (standalone, e.g. WaitingCard) ── */
+/* ── Cards ── */
 
 .live-card {
   position: relative;
-  margin: auto 14px max(14px, env(safe-area-inset-bottom, 14px));
   flex: 0 0 auto;
-  max-height: 55dvh;
-  overflow-y: auto;
-  z-index: 10;
-  padding: 16px 18px;
+  padding: 14px 16px;
   animation: live-card-slide-up 0.3s ease-out;
-  max-width: 420px;
   will-change: transform, opacity;
-}
-
-.live-bottom-panel .live-card {
-  margin: 0;
-  max-height: none;
-  overflow-y: visible;
 }
 
 /* ── Waiting Card ── */
@@ -573,16 +593,10 @@
 
 /* ── Offline banner ── */
 
+/* Laid out by .live-topbar, under the badge: a fixed top of 60px overlapped
+   the badge, which is 56px tall below its 8px (or safe-area) inset. The top
+   bar is what keeps it off Mapbox's controls, in both text directions. */
 .live-offline-banner {
-  position: absolute;
-  top: max(60px, calc(env(safe-area-inset-top, 12px) + 48px));
-  /* Physical, like .live-badge: Mapbox pins its controls to the top-right
-     corner whichever way the text runs, so the column to keep clear is on the
-     right in Hebrew too. Logical insets laid the banner across the zoom and
-     compass buttons in both directions. */
-  left: 12px;
-  right: var(--live-map-ctrl-reserve);
-  z-index: 12;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1112,19 +1126,17 @@
   outline-offset: 2px;
 }
 
-/* ── Tablet/desktop layout: float card as side-anchored overlay over the map ── */
+/* ── Tablet/desktop layout: the sheet docks in the inline-end bottom corner ── */
 
 @media (min-width: 600px) {
-  .live-bottom-panel,
-  .live-card:not(.live-bottom-panel .live-card) {
-    position: absolute;
-    inset-inline-end: 16px;
+  .live-sheet {
     inset-inline-start: auto;
+    inset-inline-end: 16px;
     bottom: max(16px, env(safe-area-inset-bottom, 16px));
     width: 420px;
     max-width: 420px;
-    max-height: calc(100dvh - 80px);
-    margin: 0;
+    max-height: calc(100dvh - 96px);
+    margin-inline: 0;
   }
 }
 
@@ -1142,17 +1154,13 @@
 /* ── Legal links footer (shown beneath WaitingCard) ── */
 
 .live-legal-links {
-  position: relative;
   flex: 0 0 auto;
-  margin: 0 14px max(12px, env(safe-area-inset-bottom, 12px));
   display: flex;
   justify-content: center;
   align-items: center;
   gap: 10px;
   font-size: 12px;
   color: var(--live-text-muted);
-  z-index: 10;
-  pointer-events: auto;
 }
 
 .live-legal-links a {
@@ -1174,26 +1182,6 @@
   outline: 2px solid var(--live-blue);
   outline-offset: 2px;
   border-radius: 2px;
-}
-
-/* When card has legal-links sibling, let legal-links own the bottom safe-area inset */
-.live-card:has(+ .live-legal-links) {
-  margin-bottom: 6px;
-}
-
-@media (min-width: 600px) {
-  .live-legal-links {
-    position: absolute;
-    inset-inline-start: 0;
-    inset-inline-end: 0;
-    bottom: max(10px, env(safe-area-inset-bottom, 10px));
-    margin: 0;
-  }
-
-  /* Push the card up so the legal-links bar doesn't overlap it */
-  .live-card:has(+ .live-legal-links):not(.live-bottom-panel .live-card) {
-    bottom: max(48px, calc(env(safe-area-inset-bottom, 16px) + 32px));
-  }
 }
 
 /* ── Custom scrollbar for venue list ── */
@@ -1257,10 +1245,7 @@
 /* ── Wider viewports: offline banner constraint ── */
 
 @media (min-width: 600px) {
-  /* Left in both directions, under the badge: a logical end inset pinned it
-     to the right edge in Hebrew, over the controls. */
   .live-offline-banner {
-    right: auto;
     max-width: 360px;
   }
 }

@@ -12,6 +12,9 @@ import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON } from "../lib/geo-math";
 import { fitSignature, hasSettled } from "../lib/fit-bounds";
+import type { FitSignature } from "../lib/fit-bounds";
+import type { Insets } from "../lib/camera-insets";
+import { fitPadding, NO_INSETS, sameInsets } from "../lib/camera-insets";
 import type { MapParticipant } from "../graph/types";
 import {
   PARTICIPANT_COLORS,
@@ -30,6 +33,11 @@ const DEFAULT_CENTER: [number, number] = [35.2137, 31.7683]; // Israel
 const DEFAULT_ZOOM = 8;
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
+/** Room around the framed markers, inside what the overlays leave visible. */
+const MARKER_MARGIN_PX = 40;
+const FIT_MAX_ZOOM = 16;
+const SINGLE_POINT_ZOOM = 14;
+const FIT_DURATION_MS = 800;
 
 // mapbox-gl exposes one global access token, not a per-instance one, so
 // this cannot be injected. Sourcing it from the config module still keeps
@@ -48,6 +56,11 @@ interface LiveMapProps {
   routes: readonly (GeoJSON.LineString | null)[];
   venues: readonly RankedVenue[];
   selectedVenue: RankedVenue | null;
+  /**
+   * What the overlays cover of the full-bleed map (`useOverlayInsets`). Fits
+   * frame inside the rest, so nothing they frame lands under the sheet.
+   */
+  insets: Insets;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = {
@@ -105,6 +118,47 @@ function addSourcesAndLayers(map: mapboxgl.Map): void {
 }
 
 /**
+ * Frame every point in `signature` inside what the overlays leave visible.
+ *
+ * The padding is the overlays' insets plus a margin, clamped by `fitPadding`
+ * so it can never exceed the map: Mapbox drops a fit whose padding leaves no
+ * room, which on a phone was every fit. Mapbox keeps the padding as the map's
+ * own afterwards, so a later single-point `easeTo` centres in the same area.
+ */
+function frame(map: mapboxgl.Map, signature: FitSignature, insets: Insets) {
+  const container = map.getContainer();
+  const padding = fitPadding(
+    insets,
+    MARKER_MARGIN_PX,
+    container.clientWidth,
+    container.clientHeight,
+  );
+  const points = [...signature.values()];
+  const first = points[0];
+  if (first === undefined) return;
+
+  if (points.length === 1) {
+    map.easeTo({
+      center: [first.lng, first.lat],
+      zoom: SINGLE_POINT_ZOOM,
+      padding,
+      duration: FIT_DURATION_MS,
+    });
+    return;
+  }
+
+  const lngs = points.map((p) => p.lng);
+  const lats = points.map((p) => p.lat);
+  map.fitBounds(
+    [
+      [Math.min(...lngs), Math.min(...lats)],
+      [Math.max(...lngs), Math.max(...lats)],
+    ],
+    { padding, maxZoom: FIT_MAX_ZOOM, duration: FIT_DURATION_MS },
+  );
+}
+
+/**
  * memo() is load-bearing, not decoration. The page re-renders on every GPS fix
  * and every RTDB heartbeat; without it each render re-ran the effects below,
  * and `GeoJSONSource.setData` re-serialises a whole route geometry — thousands
@@ -118,13 +172,15 @@ function LiveMap({
   routes,
   venues,
   selectedVenue,
+  insets,
 }: LiveMapProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
   const [unavailable, setUnavailable] = useState(false);
-  const lastFitRef = useRef<Map<string, LatLng>>(new Map());
+  const lastFitRef = useRef<FitSignature>(new Map<string, LatLng>());
+  const lastInsetsRef = useRef<Insets>(NO_INSETS);
 
   // ── Map initialization ──
   useEffect(() => {
@@ -224,43 +280,24 @@ function LiveMap({
   }, [mapInstance, participants]);
 
   // ── Fit bounds to all points (with jitter suppression) ──
+  // A change in what the overlays cover refits too: the sheet growing a line
+  // would otherwise slide over markers framed for the shorter one.
   useEffect(() => {
     if (!mapInstance) return;
 
     // Keyed by identity, not by array position — see lib/fit-bounds.ts.
     const current = fitSignature(participants, midpoint, selectedVenue);
     if (current.size === 0) return;
-    if (hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)) {
+    if (
+      sameInsets(lastInsetsRef.current, insets) &&
+      hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)
+    ) {
       return;
     }
     lastFitRef.current = current;
-
-    const points = [...current.values()];
-    const first = points[0];
-    if (points.length === 1 && first !== undefined) {
-      mapInstance.easeTo({
-        center: [first.lng, first.lat],
-        zoom: 14,
-        duration: 800,
-      });
-      return;
-    }
-
-    const lngs = points.map((p) => p.lng);
-    const lats = points.map((p) => p.lat);
-
-    mapInstance.fitBounds(
-      [
-        [Math.min(...lngs), Math.min(...lats)],
-        [Math.max(...lngs), Math.max(...lats)],
-      ],
-      {
-        padding: { top: 80, left: 40, right: 40, bottom: 350 },
-        maxZoom: 16,
-        duration: 800,
-      },
-    );
-  }, [mapInstance, participants, midpoint, selectedVenue]);
+    lastInsetsRef.current = insets;
+    frame(mapInstance, current, insets);
+  }, [mapInstance, participants, midpoint, selectedVenue, insets]);
 
   return (
     <>

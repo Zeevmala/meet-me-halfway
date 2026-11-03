@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
@@ -16,6 +17,7 @@ import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import type { GeoStatus } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
+import { useOverlayInsets } from "./hooks/useOverlayInsets";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
@@ -126,6 +128,23 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   const runtime = useGraphRuntime(graphPorts);
   const placesEnabled = graphPorts.placesEnabled;
   const graph = useGraph(runtime);
+
+  // ── Overlay footprint ──
+  // The map runs full-bleed under the top bar and the sheet, so the camera
+  // has to be told what they cover or it frames people underneath. Callback
+  // refs held in state, so the measurement follows the elements themselves.
+  const [pageEl, setPageEl] = useState<HTMLElement | null>(null);
+  const [topbarEl, setTopbarEl] = useState<HTMLDivElement | null>(null);
+  const [sheetEl, setSheetEl] = useState<HTMLDivElement | null>(null);
+  const overlay = useOverlayInsets(pageEl, topbarEl, sheetEl);
+  const overlayStyle = useMemo(
+    () =>
+      ({
+        "--live-lift-left": `${overlay.liftLeft}px`,
+        "--live-lift-right": `${overlay.liftRight}px`,
+      }) as CSSProperties,
+    [overlay.liftLeft, overlay.liftRight],
+  );
 
   // Feed session and GPS state in. These are event streams, not graph nodes:
   // the graph derives from them, never the other way round.
@@ -396,88 +415,95 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     slots.ownSlot === null ? null : (slots.positions[slots.ownSlot] ?? null);
 
   return (
-    <main className="live-page">
+    <main className="live-page" ref={setPageEl} style={overlayStyle}>
       <LiveMap
         participants={mapParticipants}
         midpoint={graph.midpoint}
         routes={routeGeometries}
         venues={graph.venues}
         selectedVenue={graph.selectedVenue}
+        insets={overlay.insets}
       />
 
-      {session.code && (
-        <SessionBadge
-          code={session.code}
-          phase={graph.phase}
-          ownConnected={geo.status === "watching"}
-          ownIndex={ownIndex}
-          ownName={session.ownName}
-          onNameChange={session.setOwnName}
-          participants={badgeParticipants}
-        />
-      )}
+      {/* Everything drawn over the top of the map. Measured, like the sheet:
+          an overlay outside these two is one the camera cannot see. */}
+      <div className="live-topbar" ref={setTopbarEl}>
+        {session.code && (
+          <SessionBadge
+            code={session.code}
+            phase={graph.phase}
+            ownConnected={geo.status === "watching"}
+            ownIndex={ownIndex}
+            ownName={session.ownName}
+            onNameChange={session.setOwnName}
+            participants={badgeParticipants}
+          />
+        )}
 
-      {networkStatus.connectivity !== "online" && (
-        <div className="live-offline-banner" role="status">
-          <span aria-hidden="true">&#9888;</span>
-          {t(CONNECTIVITY_BANNER[networkStatus.connectivity])}
-        </div>
-      )}
-
-      {/* The graph knew, and nothing said so: the others saw this
-          participant go stale while their own screen looked fine. A lost
-          connection already has its banner. */}
-      {networkStatus.connectivity === "online" && graph.presenceFailed && (
-        <div className="live-offline-banner" role="status">
-          <span aria-hidden="true">&#9888;</span>
-          {t("live.presenceFailed")}
-        </div>
-      )}
-
-      {/* Until the database holds the session there is nothing to share and
-          nobody to wait for, and a bare map said neither. A joiner sat on one
-          for as long as its handshake took — forever, on a device that could
-          not connect — and a creator would too, now that its code appears
-          only once the session is written. */}
-      {session.code === null && graph.phase === "creating" && (
-        <div
-          className="live-card live-glass live-waiting-shimmer live-handshake"
-          role="status"
-        >
-          {t(urlCode === null ? "live.creating" : "live.connecting")}
-        </div>
-      )}
-
-      {session.code &&
-        (isConnected && graph.midpoint && ownPosition ? (
-          <div className="live-bottom-panel">
-            {placesEnabled && (
-              <Suspense fallback={null}>
-                <VenueListCard
-                  venues={graph.venues}
-                  loading={graph.venuesLoading}
-                  selectedVenue={graph.selectedVenue}
-                  onSelectVenue={handleSelectVenue}
-                />
-              </Suspense>
-            )}
-            <MidpointCard
-              ownIndex={ownIndex}
-              ownPosition={ownPosition}
-              ownRoute={routes[ownIndex] ?? null}
-              otherParticipants={otherParticipants}
-              destination={graph.destination ?? graph.midpoint}
-              travelProfile={graph.travelProfile}
-              onProfileChange={handleProfileChange}
-              selectedVenueName={graph.selectedVenue?.displayName ?? null}
-              routesStale={graph.routesDegraded}
-              code={session.code}
-              participantCount={session.participants.length + 1}
-            />
+        {networkStatus.connectivity !== "online" && (
+          <div className="live-offline-banner" role="status">
+            <span aria-hidden="true">&#9888;</span>
+            {t(CONNECTIVITY_BANNER[networkStatus.connectivity])}
           </div>
-        ) : (
-          <WaitingCard code={session.code} />
-        ))}
+        )}
+
+        {/* The graph knew, and nothing said so: the others saw this
+            participant go stale while their own screen looked fine. A lost
+            connection already has its banner. */}
+        {networkStatus.connectivity === "online" && graph.presenceFailed && (
+          <div className="live-offline-banner" role="status">
+            <span aria-hidden="true">&#9888;</span>
+            {t("live.presenceFailed")}
+          </div>
+        )}
+      </div>
+
+      <div className="live-sheet" ref={setSheetEl}>
+        {/* Until the database holds the session there is nothing to share
+            and nobody to wait for, and a bare map said neither. A joiner sat
+            on one for as long as its handshake took — forever, on a device
+            that could not connect — and a creator would too, now that its
+            code appears only once the session is written. */}
+        {session.code === null && graph.phase === "creating" && (
+          <div
+            className="live-card live-glass live-waiting-shimmer live-handshake"
+            role="status"
+          >
+            {t(urlCode === null ? "live.creating" : "live.connecting")}
+          </div>
+        )}
+
+        {session.code &&
+          (isConnected && graph.midpoint && ownPosition ? (
+            <>
+              {placesEnabled && (
+                <Suspense fallback={null}>
+                  <VenueListCard
+                    venues={graph.venues}
+                    loading={graph.venuesLoading}
+                    selectedVenue={graph.selectedVenue}
+                    onSelectVenue={handleSelectVenue}
+                  />
+                </Suspense>
+              )}
+              <MidpointCard
+                ownIndex={ownIndex}
+                ownPosition={ownPosition}
+                ownRoute={routes[ownIndex] ?? null}
+                otherParticipants={otherParticipants}
+                destination={graph.destination ?? graph.midpoint}
+                travelProfile={graph.travelProfile}
+                onProfileChange={handleProfileChange}
+                selectedVenueName={graph.selectedVenue?.displayName ?? null}
+                routesStale={graph.routesDegraded}
+                code={session.code}
+                participantCount={session.participants.length + 1}
+              />
+            </>
+          ) : (
+            <WaitingCard code={session.code} />
+          ))}
+      </div>
     </main>
   );
 }

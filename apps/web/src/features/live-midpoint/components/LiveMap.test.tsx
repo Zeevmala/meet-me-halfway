@@ -33,6 +33,7 @@ vi.mock("mapbox-gl", () => {
 });
 
 import LiveMap from "./LiveMap";
+import { NO_INSETS } from "../lib/camera-insets";
 
 function fakeMap() {
   const handlers = new Map<string, (event: unknown) => void>();
@@ -54,6 +55,7 @@ const PROPS = {
   routes: [],
   venues: [],
   selectedVenue: null,
+  insets: NO_INSETS,
 };
 
 describe("LiveMap", () => {
