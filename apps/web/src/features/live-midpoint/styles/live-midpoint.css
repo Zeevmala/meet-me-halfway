@@ -85,20 +85,22 @@
   color: var(--live-text-muted);
 }
 
+/* No backdrop-filter: over a 92% opaque surface the blur showed nothing, and
+   WebKit painted nothing of the `filter: invert(1)` icons inside a blurred,
+   clipped group — every control was a blank tile on iOS. */
 .live-map-container .mapboxgl-ctrl-group {
   background: var(--live-surface);
   border: 1px solid var(--live-border);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: none;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .live-map-container .mapboxgl-ctrl-group button + button {
   border-top: 1px solid var(--live-border);
 }
 
+/* The zoom buttons (fine pointers only): Mapbox's dark icons, inverted. */
 .live-map-container .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
   filter: invert(1);
 }
@@ -107,6 +109,28 @@
   .live-map-container .mapboxgl-ctrl-group button:not(:disabled):hover {
     background-color: rgba(255, 255, 255, 0.08);
   }
+}
+
+/* Inside the clipped group an outline would be cut off. */
+.live-map-container .mapboxgl-ctrl-group button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--live-blue);
+}
+
+/* Show everyone: an inline SVG in currentColor, so nothing has to invert it. */
+.live-fit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--live-text);
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+/* The user holds the camera: tapping hands it back. */
+.live-map-container .mapboxgl-ctrl-group button.live-fit-btn--attention {
+  background-color: var(--live-text);
+  color: var(--live-bg);
 }
 
 .live-map-container .mapboxgl-ctrl-attrib {
@@ -1235,6 +1259,7 @@
   .live-profile-btn,
   .live-venue-item,
   .live-venues-clear,
+  .live-fit-btn,
   .live-marker--venue,
   .live-marker--venue-selected,
   .live-marker--stale {

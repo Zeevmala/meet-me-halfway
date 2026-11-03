@@ -11,7 +11,7 @@ import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON } from "../lib/geo-math";
-import { fitSignature, hasSettled } from "../lib/fit-bounds";
+import { fitSignature, hasSettled, sameMembers } from "../lib/fit-bounds";
 import type { FitSignature } from "../lib/fit-bounds";
 import type { Insets } from "../lib/camera-insets";
 import { fitPadding, NO_INSETS, sameInsets } from "../lib/camera-insets";
@@ -24,6 +24,7 @@ import type { RankedVenue } from "../lib/venue-ranking";
 import { APP_CONFIG } from "../../../lib/config";
 export type { MapParticipant };
 
+import { FitControl } from "./fit-control";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
 import VenueMarker from "./VenueMarker";
@@ -38,6 +39,21 @@ const MARKER_MARGIN_PX = 40;
 const FIT_MAX_ZOOM = 16;
 const SINGLE_POINT_ZOOM = 14;
 const FIT_DURATION_MS = 800;
+
+/** Zoom buttons only where there is a mouse: on a touch screen they repeat a pinch. */
+function hasFinePointer(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: hover) and (pointer: fine)").matches
+  );
+}
+
+function fitDuration(): number {
+  const reduce =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduce ? 0 : FIT_DURATION_MS;
+}
 
 // mapbox-gl exposes one global access token, not a per-instance one, so
 // this cannot be injected. Sourcing it from the config module still keeps
@@ -142,7 +158,7 @@ function frame(map: mapboxgl.Map, signature: FitSignature, insets: Insets) {
       center: [first.lng, first.lat],
       zoom: SINGLE_POINT_ZOOM,
       padding,
-      duration: FIT_DURATION_MS,
+      duration: fitDuration(),
     });
     return;
   }
@@ -154,7 +170,7 @@ function frame(map: mapboxgl.Map, signature: FitSignature, insets: Insets) {
       [Math.min(...lngs), Math.min(...lats)],
       [Math.max(...lngs), Math.max(...lats)],
     ],
-    { padding, maxZoom: FIT_MAX_ZOOM, duration: FIT_DURATION_MS },
+    { padding, maxZoom: FIT_MAX_ZOOM, duration: fitDuration() },
   );
 }
 
@@ -182,6 +198,19 @@ function LiveMap({
   const lastFitRef = useRef<FitSignature>(new Map<string, LatLng>());
   const lastInsetsRef = useRef<Insets>(NO_INSETS);
 
+  // Whether the map frames everyone by itself. A gesture hands the camera to
+  // the user — a refit every time someone moved 50m used to yank them back
+  // from wherever they had panned — and Show everyone hands it back.
+  const [following, setFollowing] = useState(true);
+  const fitControlRef = useRef<FitControl | null>(null);
+
+  // What Show everyone frames, read when it is tapped: the control outlives
+  // every render, so it cannot close over one render's props.
+  const framingRef = useRef({ participants, midpoint, selectedVenue, insets });
+  framingRef.current = { participants, midpoint, selectedVenue, insets };
+  const fitLabelRef = useRef(t("live.fitAll"));
+  fitLabelRef.current = t("live.fitAll");
+
   // ── Map initialization ──
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -195,6 +224,11 @@ function LiveMap({
         style: DARK_STYLE,
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
+        // North stays up. Rotation and pitch tell nobody where to meet, and
+        // they were what the compass button existed to undo.
+        dragRotate: false,
+        pitchWithRotate: false,
+        touchPitch: false,
       });
     } catch (err) {
       // No WebGL: an old device, or a browser with it switched off. Mapbox
@@ -216,14 +250,38 @@ function LiveMap({
       Sentry.captureException(event.error, { tags: { phase: "map" } });
     });
 
-    map.addControl(new mapboxgl.NavigationControl(), controlPos);
-    map.addControl(
-      new mapboxgl.GeolocateControl({
-        positionOptions: { enableHighAccuracy: true },
-        trackUserLocation: false,
-      }),
-      controlPos,
-    );
+    map.touchZoomRotate.disableRotation();
+    map.keyboard.disableRotation();
+
+    if (hasFinePointer()) {
+      map.addControl(
+        new mapboxgl.NavigationControl({ showCompass: false }),
+        controlPos,
+      );
+    }
+    const fitControl = new FitControl(fitLabelRef.current, () => {
+      const framing = framingRef.current;
+      const signature = fitSignature(
+        framing.participants,
+        framing.midpoint,
+        framing.selectedVenue,
+      );
+      if (signature.size === 0) return;
+      lastFitRef.current = signature;
+      lastInsetsRef.current = framing.insets;
+      frame(map, signature, framing.insets);
+      setFollowing(true);
+    });
+    map.addControl(fitControl, controlPos);
+    fitControlRef.current = fitControl;
+
+    // A gesture carries the input event that began it; a camera move of our
+    // own carries none. mapbox-gl's window-resize handler passes its `resize`
+    // event the same way, and turning the phone is not taking the camera.
+    map.on("movestart", (event: { originalEvent?: Event }) => {
+      const input = event.originalEvent;
+      if (input !== undefined && input.type !== "resize") setFollowing(false);
+    });
 
     let loaded = false;
     map.on("load", () => {
@@ -240,9 +298,14 @@ function LiveMap({
     return () => {
       map.remove();
       mapRef.current = null;
+      fitControlRef.current = null;
       setMapInstance(null);
     };
   }, []);
+
+  useEffect(() => {
+    fitControlRef.current?.setAttention(!following);
+  }, [following]);
 
   // ── Update route polylines ──
   useEffect(() => {
@@ -288,16 +351,24 @@ function LiveMap({
     // Keyed by identity, not by array position — see lib/fit-bounds.ts.
     const current = fitSignature(participants, midpoint, selectedVenue);
     if (current.size === 0) return;
-    if (
-      sameInsets(lastInsetsRef.current, insets) &&
-      hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)
-    ) {
-      return;
+    // Someone joined or left, or a venue was picked or cleared: news worth
+    // taking the camera back for. Movement alone never takes it from a user
+    // who is holding it.
+    const membersChanged = !sameMembers(lastFitRef.current, current);
+    if (!membersChanged) {
+      if (!following) return;
+      if (
+        sameInsets(lastInsetsRef.current, insets) &&
+        hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)
+      ) {
+        return;
+      }
     }
     lastFitRef.current = current;
     lastInsetsRef.current = insets;
     frame(mapInstance, current, insets);
-  }, [mapInstance, participants, midpoint, selectedVenue, insets]);
+    if (!following) setFollowing(true);
+  }, [mapInstance, participants, midpoint, selectedVenue, insets, following]);
 
   return (
     <>
@@ -305,7 +376,7 @@ function LiveMap({
         ref={containerRef}
         className="live-map-container"
         role="application"
-        aria-label="Interactive live map showing participant locations and midpoint"
+        aria-label={t("live.mapLabel")}
       >
         {unavailable && (
           <div className="live-map-unavailable" role="status">

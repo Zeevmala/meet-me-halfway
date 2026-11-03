@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fitSignature, hasSettled } from "./fit-bounds";
+import { fitSignature, hasSettled, sameMembers } from "./fit-bounds";
 import type { MapParticipant } from "../graph/types";
 import type { RankedVenue } from "./venue-ranking";
 import type { ParticipantIndex } from "./participant-config";
@@ -123,5 +123,56 @@ describe("hasSettled", () => {
   it("refits from an empty previous signature", () => {
     const after = fitSignature([participant(0, TLV.lat, TLV.lng)], null, null);
     expect(hasSettled(new Map(), after, 50)).toBe(false);
+  });
+});
+
+describe("sameMembers", () => {
+  // Movement is not news: a user who panned away keeps the camera.
+  it("holds while the same entities move, however far", () => {
+    const before = fitSignature(
+      [participant(0, TLV.lat, TLV.lng), participant(1, 31.77, 35.21)],
+      { lat: 31.9, lng: 35.0 },
+      null,
+    );
+    const after = fitSignature(
+      [participant(0, TLV.lat + 0.5, TLV.lng), participant(1, 31.77, 35.21)],
+      { lat: 32.1, lng: 35.0 },
+      null,
+    );
+    expect(sameMembers(before, after)).toBe(true);
+  });
+
+  it("breaks when someone joins or leaves", () => {
+    const two = fitSignature(
+      [participant(0, TLV.lat, TLV.lng), participant(1, 31.77, 35.21)],
+      null,
+      null,
+    );
+    const three = fitSignature(
+      [
+        participant(0, TLV.lat, TLV.lng),
+        participant(1, 31.77, 35.21),
+        participant(2, 32.79, 34.99),
+      ],
+      null,
+      null,
+    );
+    expect(sameMembers(two, three)).toBe(false);
+    expect(sameMembers(three, two)).toBe(false);
+  });
+
+  // Same size, different members: a joiner arriving as a venue is cleared.
+  it("breaks when a venue is swapped for a participant", () => {
+    const withVenue = fitSignature(
+      [participant(0, TLV.lat, TLV.lng)],
+      null,
+      venue("cafe", 32.0, 34.8),
+    );
+    const withJoiner = fitSignature(
+      [participant(0, TLV.lat, TLV.lng), participant(1, 32.0, 34.8)],
+      null,
+      null,
+    );
+    expect(sameMembers(withVenue, withJoiner)).toBe(false);
   });
 });

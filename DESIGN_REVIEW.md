@@ -27,6 +27,7 @@ Audit of UI/UX quality across color consistency, typography, accessibility, resp
 | Venue rating color `#ffb800` hardcoded | `--live-gold` CSS variable |
 | Venue marker color `#888` hardcoded | `--live-gray` CSS variable |
 | Gray pill dot `#555` hardcoded | `--live-gray` CSS variable |
+| Mapbox controls blank on iOS, no focus indicator, compass and geolocate redundant on a phone | Rotation off; one Show everyone control (inline SVG, focus ring); zoom buttons on fine pointers only |
 
 ## What Needs Work
 
@@ -34,7 +35,6 @@ Audit of UI/UX quality across color consistency, typography, accessibility, resp
 |----------|-------|--------|-------|
 | P2 | No loading state for initial map render | M | Add skeleton/shimmer while Mapbox GL JS loads (~1-2s on slow connections) |
 | P2 | Badge still overlaps lang switcher at desktop when both pills show "Partner" text | S | Lang switcher overlays badge at z-index 15 vs 10 — consider integrating switcher into badge |
-| P2 | No focus indicators on Mapbox GL zoom/compass controls | S | Mapbox controls are outside our CSS scope — would need `.mapboxgl-ctrl button:focus-visible` |
 | P3 | Bottom sheet not draggable | L | Cards are fixed-position, not gesture-aware. Would need a gesture library (react-spring, framer-motion) |
 | P3 | Accuracy circles may clutter at low zoom | S | Hide below zoom level 12 |
 | P3 | Map markers may overlap at certain zoom levels | M | Implement Mapbox symbol-sort-key or marker clustering |
