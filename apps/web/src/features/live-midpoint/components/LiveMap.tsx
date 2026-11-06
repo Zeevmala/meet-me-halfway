@@ -11,7 +11,10 @@ import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import { accuracyCircleGeoJSON } from "../lib/geo-math";
-import { fitSignature, hasSettled } from "../lib/fit-bounds";
+import { fitSignature, hasSettled, sameMembers } from "../lib/fit-bounds";
+import type { FitSignature } from "../lib/fit-bounds";
+import type { Insets } from "../lib/camera-insets";
+import { fitPadding, NO_INSETS, sameInsets } from "../lib/camera-insets";
 import type { MapParticipant } from "../graph/types";
 import {
   PARTICIPANT_COLORS,
@@ -21,6 +24,7 @@ import type { RankedVenue } from "../lib/venue-ranking";
 import { APP_CONFIG } from "../../../lib/config";
 export type { MapParticipant };
 
+import { FitControl } from "./fit-control";
 import LiveParticipantMarker from "./LiveParticipantMarker";
 import LiveMidpointMarker from "./LiveMidpointMarker";
 import VenueMarker from "./VenueMarker";
@@ -30,6 +34,26 @@ const DEFAULT_CENTER: [number, number] = [35.2137, 31.7683]; // Israel
 const DEFAULT_ZOOM = 8;
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 const FIT_MOVEMENT_THRESHOLD_M = 50; // Skip refit if all points moved < 50m
+/** Room around the framed markers, inside what the overlays leave visible. */
+const MARKER_MARGIN_PX = 40;
+const FIT_MAX_ZOOM = 16;
+const SINGLE_POINT_ZOOM = 14;
+const FIT_DURATION_MS = 800;
+
+/** Zoom buttons only where there is a mouse: on a touch screen they repeat a pinch. */
+function hasFinePointer(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: hover) and (pointer: fine)").matches
+  );
+}
+
+function fitDuration(): number {
+  const reduce =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduce ? 0 : FIT_DURATION_MS;
+}
 
 // mapbox-gl exposes one global access token, not a per-instance one, so
 // this cannot be injected. Sourcing it from the config module still keeps
@@ -48,6 +72,11 @@ interface LiveMapProps {
   routes: readonly (GeoJSON.LineString | null)[];
   venues: readonly RankedVenue[];
   selectedVenue: RankedVenue | null;
+  /**
+   * What the overlays cover of the full-bleed map (`useOverlayInsets`). Fits
+   * frame inside the rest, so nothing they frame lands under the sheet.
+   */
+  insets: Insets;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = {
@@ -69,39 +98,126 @@ function polygonFeature(geom: GeoJSON.Polygon): GeoJSON.FeatureCollection {
   };
 }
 
-function addSourcesAndLayers(map: mapboxgl.Map): void {
-  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
-    if (map.getSource(`accuracy-${i}`)) continue; // already added (style.load re-entry)
-    const color = PARTICIPANT_COLORS[i].hex;
+/** Below this zoom an accuracy circle is a pixel or two of smear. */
+const ACCURACY_MIN_ZOOM = 12;
+/** Just darker than the basemap, so a route reads as one stroke over its roads. */
+const CASING_COLOR = "#05050a";
 
-    // Accuracy circle
-    map.addSource(`accuracy-${i}`, { type: "geojson", data: EMPTY_FC });
-    map.addLayer({
+type LayerSpec = Parameters<mapboxgl.Map["addLayer"]>[0];
+
+/**
+ * The style's first label layer. Data goes beneath it: added on top of the
+ * whole style, the routes struck through the names of the towns they crossed.
+ * A style with no labels (the e2e suite's) takes data on top.
+ */
+function firstSymbolLayerId(map: mapboxgl.Map): string | undefined {
+  return map.getStyle()?.layers?.find((layer) => layer.type === "symbol")?.id;
+}
+
+function addSourcesAndLayers(map: mapboxgl.Map): void {
+  const beforeId = firstSymbolLayerId(map);
+  // Guarded one by one, so a style.load re-entry adds only what is missing.
+  const add = (layer: LayerSpec) => {
+    if (!map.getLayer(layer.id)) map.addLayer(layer, beforeId);
+  };
+
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    if (!map.getSource(`accuracy-${i}`)) {
+      map.addSource(`accuracy-${i}`, { type: "geojson", data: EMPTY_FC });
+    }
+    if (!map.getSource(`route-${i}`)) {
+      map.addSource(`route-${i}`, { type: "geojson", data: EMPTY_FC });
+    }
+  }
+
+  // In passes, each just beneath the labels and so above the one before:
+  // every accuracy circle, then every route casing, then every route. Added
+  // slot by slot instead, slot 1's casing cut a dark gap through slot 0's
+  // route where the two converge on the destination.
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    const color = PARTICIPANT_COLORS[i].hex;
+    add({
       id: `accuracy-${i}-fill`,
       type: "fill",
       source: `accuracy-${i}`,
+      minzoom: ACCURACY_MIN_ZOOM,
       paint: { "fill-color": color, "fill-opacity": 0.12 },
     });
-    map.addLayer({
+    add({
       id: `accuracy-${i}-outline`,
       type: "line",
       source: `accuracy-${i}`,
+      minzoom: ACCURACY_MIN_ZOOM,
       paint: { "line-color": color, "line-width": 1, "line-opacity": 0.3 },
     });
-
-    // Route line
-    map.addSource(`route-${i}`, { type: "geojson", data: EMPTY_FC });
-    map.addLayer({
-      id: `route-${i}-layer`,
+  }
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    add({
+      id: `route-${i}-casing`,
       type: "line",
       source: `route-${i}`,
+      layout: { "line-join": "round", "line-cap": "round" },
       paint: {
-        "line-color": color,
-        "line-width": 4,
-        "line-opacity": 0.8,
+        "line-color": CASING_COLOR,
+        "line-width": 8,
+        "line-opacity": 0.9,
       },
     });
   }
+  for (let i = 0; i < MAX_PARTICIPANTS; i++) {
+    add({
+      id: `route-${i}-layer`,
+      type: "line",
+      source: `route-${i}`,
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: {
+        "line-color": PARTICIPANT_COLORS[i].hex,
+        "line-width": 4.5,
+        "line-opacity": 0.95,
+      },
+    });
+  }
+}
+
+/**
+ * Frame every point in `signature` inside what the overlays leave visible.
+ *
+ * The padding is the overlays' insets plus a margin, clamped by `fitPadding`
+ * so it can never exceed the map: Mapbox drops a fit whose padding leaves no
+ * room, which on a phone was every fit. Mapbox keeps the padding as the map's
+ * own afterwards, so a later single-point `easeTo` centres in the same area.
+ */
+function frame(map: mapboxgl.Map, signature: FitSignature, insets: Insets) {
+  const container = map.getContainer();
+  const padding = fitPadding(
+    insets,
+    MARKER_MARGIN_PX,
+    container.clientWidth,
+    container.clientHeight,
+  );
+  const points = [...signature.values()];
+  const first = points[0];
+  if (first === undefined) return;
+
+  if (points.length === 1) {
+    map.easeTo({
+      center: [first.lng, first.lat],
+      zoom: SINGLE_POINT_ZOOM,
+      padding,
+      duration: fitDuration(),
+    });
+    return;
+  }
+
+  const lngs = points.map((p) => p.lng);
+  const lats = points.map((p) => p.lat);
+  map.fitBounds(
+    [
+      [Math.min(...lngs), Math.min(...lats)],
+      [Math.max(...lngs), Math.max(...lats)],
+    ],
+    { padding, maxZoom: FIT_MAX_ZOOM, duration: fitDuration() },
+  );
 }
 
 /**
@@ -118,13 +234,28 @@ function LiveMap({
   routes,
   venues,
   selectedVenue,
+  insets,
 }: LiveMapProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
   const [unavailable, setUnavailable] = useState(false);
-  const lastFitRef = useRef<Map<string, LatLng>>(new Map());
+  const lastFitRef = useRef<FitSignature>(new Map<string, LatLng>());
+  const lastInsetsRef = useRef<Insets>(NO_INSETS);
+
+  // Whether the map frames everyone by itself. A gesture hands the camera to
+  // the user — a refit every time someone moved 50m used to yank them back
+  // from wherever they had panned — and Show everyone hands it back.
+  const [following, setFollowing] = useState(true);
+  const fitControlRef = useRef<FitControl | null>(null);
+
+  // What Show everyone frames, read when it is tapped: the control outlives
+  // every render, so it cannot close over one render's props.
+  const framingRef = useRef({ participants, midpoint, selectedVenue, insets });
+  framingRef.current = { participants, midpoint, selectedVenue, insets };
+  const fitLabelRef = useRef(t("live.fitAll"));
+  fitLabelRef.current = t("live.fitAll");
 
   // ── Map initialization ──
   useEffect(() => {
@@ -139,6 +270,11 @@ function LiveMap({
         style: DARK_STYLE,
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
+        // North stays up. Rotation and pitch tell nobody where to meet, and
+        // they were what the compass button existed to undo.
+        dragRotate: false,
+        pitchWithRotate: false,
+        touchPitch: false,
       });
     } catch (err) {
       // No WebGL: an old device, or a browser with it switched off. Mapbox
@@ -160,14 +296,38 @@ function LiveMap({
       Sentry.captureException(event.error, { tags: { phase: "map" } });
     });
 
-    map.addControl(new mapboxgl.NavigationControl(), controlPos);
-    map.addControl(
-      new mapboxgl.GeolocateControl({
-        positionOptions: { enableHighAccuracy: true },
-        trackUserLocation: false,
-      }),
-      controlPos,
-    );
+    map.touchZoomRotate.disableRotation();
+    map.keyboard.disableRotation();
+
+    if (hasFinePointer()) {
+      map.addControl(
+        new mapboxgl.NavigationControl({ showCompass: false }),
+        controlPos,
+      );
+    }
+    const fitControl = new FitControl(fitLabelRef.current, () => {
+      const framing = framingRef.current;
+      const signature = fitSignature(
+        framing.participants,
+        framing.midpoint,
+        framing.selectedVenue,
+      );
+      if (signature.size === 0) return;
+      lastFitRef.current = signature;
+      lastInsetsRef.current = framing.insets;
+      frame(map, signature, framing.insets);
+      setFollowing(true);
+    });
+    map.addControl(fitControl, controlPos);
+    fitControlRef.current = fitControl;
+
+    // A gesture carries the input event that began it; a camera move of our
+    // own carries none. mapbox-gl's window-resize handler passes its `resize`
+    // event the same way, and turning the phone is not taking the camera.
+    map.on("movestart", (event: { originalEvent?: Event }) => {
+      const input = event.originalEvent;
+      if (input !== undefined && input.type !== "resize") setFollowing(false);
+    });
 
     let loaded = false;
     map.on("load", () => {
@@ -184,9 +344,14 @@ function LiveMap({
     return () => {
       map.remove();
       mapRef.current = null;
+      fitControlRef.current = null;
       setMapInstance(null);
     };
   }, []);
+
+  useEffect(() => {
+    fitControlRef.current?.setAttention(!following);
+  }, [following]);
 
   // ── Update route polylines ──
   useEffect(() => {
@@ -224,43 +389,32 @@ function LiveMap({
   }, [mapInstance, participants]);
 
   // ── Fit bounds to all points (with jitter suppression) ──
+  // A change in what the overlays cover refits too: the sheet growing a line
+  // would otherwise slide over markers framed for the shorter one.
   useEffect(() => {
     if (!mapInstance) return;
 
     // Keyed by identity, not by array position — see lib/fit-bounds.ts.
     const current = fitSignature(participants, midpoint, selectedVenue);
     if (current.size === 0) return;
-    if (hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)) {
-      return;
+    // Someone joined or left, or a venue was picked or cleared: news worth
+    // taking the camera back for. Movement alone never takes it from a user
+    // who is holding it.
+    const membersChanged = !sameMembers(lastFitRef.current, current);
+    if (!membersChanged) {
+      if (!following) return;
+      if (
+        sameInsets(lastInsetsRef.current, insets) &&
+        hasSettled(lastFitRef.current, current, FIT_MOVEMENT_THRESHOLD_M)
+      ) {
+        return;
+      }
     }
     lastFitRef.current = current;
-
-    const points = [...current.values()];
-    const first = points[0];
-    if (points.length === 1 && first !== undefined) {
-      mapInstance.easeTo({
-        center: [first.lng, first.lat],
-        zoom: 14,
-        duration: 800,
-      });
-      return;
-    }
-
-    const lngs = points.map((p) => p.lng);
-    const lats = points.map((p) => p.lat);
-
-    mapInstance.fitBounds(
-      [
-        [Math.min(...lngs), Math.min(...lats)],
-        [Math.max(...lngs), Math.max(...lats)],
-      ],
-      {
-        padding: { top: 80, left: 40, right: 40, bottom: 350 },
-        maxZoom: 16,
-        duration: 800,
-      },
-    );
-  }, [mapInstance, participants, midpoint, selectedVenue]);
+    lastInsetsRef.current = insets;
+    frame(mapInstance, current, insets);
+    if (!following) setFollowing(true);
+  }, [mapInstance, participants, midpoint, selectedVenue, insets, following]);
 
   return (
     <>
@@ -268,7 +422,7 @@ function LiveMap({
         ref={containerRef}
         className="live-map-container"
         role="application"
-        aria-label="Interactive live map showing participant locations and midpoint"
+        aria-label={t("live.mapLabel")}
       >
         {unavailable && (
           <div className="live-map-unavailable" role="status">
@@ -285,6 +439,8 @@ function LiveMap({
             lng={p.position.lng}
             participantIndex={p.index}
             stale={p.stale}
+            label={p.label}
+            isOwn={p.isOwn}
           />
         ))}
       {mapInstance && midpoint && (
@@ -292,6 +448,7 @@ function LiveMap({
           map={mapInstance}
           lat={midpoint.lat}
           lng={midpoint.lng}
+          muted={selectedVenue !== null}
         />
       )}
       {mapInstance &&

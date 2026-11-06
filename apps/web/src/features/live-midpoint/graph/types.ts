@@ -140,6 +140,12 @@ export interface MapParticipant {
   readonly index: ParticipantIndex;
   readonly isOwn: boolean;
   readonly stale: boolean;
+  /**
+   * The letter on the marker, by the badge pill's rule (`participantInitial`),
+   * so colour is not the only way to tell people apart. Null on the own
+   * marker, which is marked as yours instead.
+   */
+  readonly label: string | null;
 }
 
 export interface OtherParticipantView {

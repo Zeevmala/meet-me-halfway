@@ -35,8 +35,6 @@
   width: 100%;
   height: 100vh;
   height: 100dvh;
-  display: flex;
-  flex-direction: column;
   background: var(--live-bg);
   font-family: var(--live-font);
   color: var(--live-text);
@@ -48,12 +46,29 @@
   line-height: 1.5;
 }
 
-.live-map-container {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
+/* Full-bleed on every viewport: the top bar and the sheet float over it, and
+   the camera pads its fits by what they cover (hooks/useOverlayInsets.ts).
+   It used to be a flex child that got only what the panel left — under half
+   of a phone's screen.
+   Two classes deep on purpose: Mapbox puts `.mapboxgl-map { position:
+   relative }` on this element, and its stylesheet arrives with the lazily
+   loaded page chunk, after this one — at equal specificity it won, and the
+   map collapsed to zero height. */
+.live-page > .live-map-container {
+  position: absolute;
+  inset: 0;
   z-index: 1;
+}
+
+/* Mapbox's wordmark and attribution must stay visible (its terms), and the
+   sheet covers the bottom corners it reaches. The page sets how far each one
+   has to rise from the sheet's measured box. */
+.live-map-container .mapboxgl-ctrl-bottom-left {
+  bottom: var(--live-lift-left, 0px);
+}
+
+.live-map-container .mapboxgl-ctrl-bottom-right {
+  bottom: var(--live-lift-right, 0px);
 }
 
 /* ── Mapbox controls — match the dark glass theme ── */
@@ -70,20 +85,22 @@
   color: var(--live-text-muted);
 }
 
+/* No backdrop-filter: over a 92% opaque surface the blur showed nothing, and
+   WebKit painted nothing of the `filter: invert(1)` icons inside a blurred,
+   clipped group — every control was a blank tile on iOS. */
 .live-map-container .mapboxgl-ctrl-group {
   background: var(--live-surface);
   border: 1px solid var(--live-border);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: none;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .live-map-container .mapboxgl-ctrl-group button + button {
   border-top: 1px solid var(--live-border);
 }
 
+/* The zoom buttons (fine pointers only): Mapbox's dark icons, inverted. */
 .live-map-container .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
   filter: invert(1);
 }
@@ -92,6 +109,28 @@
   .live-map-container .mapboxgl-ctrl-group button:not(:disabled):hover {
     background-color: rgba(255, 255, 255, 0.08);
   }
+}
+
+/* Inside the clipped group an outline would be cut off. */
+.live-map-container .mapboxgl-ctrl-group button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--live-blue);
+}
+
+/* Show everyone: an inline SVG in currentColor, so nothing has to invert it. */
+.live-fit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--live-text);
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+/* The user holds the camera: tapping hands it back. */
+.live-map-container .mapboxgl-ctrl-group button.live-fit-btn--attention {
+  background-color: var(--live-text);
+  color: var(--live-bg);
 }
 
 .live-map-container .mapboxgl-ctrl-attrib {
@@ -119,12 +158,32 @@
 
 /* ── Session Badge (top bar) ── */
 
-.live-badge {
+/* ── Top bar: the badge, then any banner, down the top-left of the map ──
+   Physical left, like Mapbox's controls are physical top-right whichever way
+   the text runs; it stops short of them by the control column's reserve. */
+
+.live-topbar {
   position: absolute;
   top: max(8px, env(safe-area-inset-top, 8px));
   left: 10px;
+  max-width: calc(100% - 10px - var(--live-map-ctrl-reserve));
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  /* Only the badge takes taps; the gaps and the banners leave them to the
+     map. */
+  pointer-events: none;
+}
+
+.live-topbar .live-badge {
+  pointer-events: auto;
+}
+
+.live-badge {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
@@ -136,6 +195,53 @@
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--live-text);
+}
+
+/* The code is the invite: there in every phase that has one. The share
+   button kept vanishing from the bottom card through gaps between phases. */
+.live-badge-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-inline-start: -6px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--live-text);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.live-badge-share svg {
+  flex: none;
+  color: var(--live-green);
+}
+
+@media (hover: hover) {
+  .live-badge-share:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.live-badge-share:focus-visible {
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+}
+
+/* Read out, not shown: the badge has no room for a toast. */
+.live-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .live-badge-dot {
@@ -250,54 +356,39 @@
   background: var(--live-gray);
 }
 
-/* ── Bottom panel container ── */
+/* ── Sheet: every card at the bottom of the map ──
+   One measured container whatever it holds — the handshake status, the
+   waiting card, or the venues and the midpoint card — so the camera always
+   knows what it covers. The gutters stay map: only the cards take taps. */
 
-.live-bottom-panel {
-  position: relative;
-  flex: 0 0 auto;
-  margin: 0 14px max(14px, env(safe-area-inset-bottom, 14px));
-  max-height: 55dvh;
-  overflow-y: auto;
+.live-sheet {
+  position: absolute;
+  inset-inline: 8px;
+  bottom: max(8px, env(safe-area-inset-bottom, 8px));
   z-index: 10;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  max-width: 480px;
+  margin-inline: auto;
+  max-height: 55dvh;
+  overflow-y: auto;
   pointer-events: none;
-  max-width: 420px;
   contain: layout style;
 }
 
-.live-bottom-panel > * {
+.live-sheet > * {
   pointer-events: auto;
 }
 
-/* Override .live-card positioning when inside bottom panel */
-.live-bottom-panel .live-card {
-  position: relative;
-  bottom: auto;
-  inset-inline-start: auto;
-  inset-inline-end: auto;
-}
-
-/* ── Bottom cards (standalone, e.g. WaitingCard) ── */
+/* ── Cards ── */
 
 .live-card {
   position: relative;
-  margin: auto 14px max(14px, env(safe-area-inset-bottom, 14px));
   flex: 0 0 auto;
-  max-height: 55dvh;
-  overflow-y: auto;
-  z-index: 10;
-  padding: 16px 18px;
+  padding: 14px 16px;
   animation: live-card-slide-up 0.3s ease-out;
-  max-width: 420px;
   will-change: transform, opacity;
-}
-
-.live-bottom-panel .live-card {
-  margin: 0;
-  max-height: none;
-  overflow-y: visible;
 }
 
 /* ── Waiting Card ── */
@@ -367,50 +458,76 @@
   color: var(--live-text);
 }
 
+/* Navigate is the sheet's main action now that inviting moved to the top
+   bar: tinted with the accent, a glyph, and the app's name — the accessible
+   name still says "Navigate with …". */
 .live-btn--nav {
-  background: var(--live-glass);
+  background: rgba(0, 212, 170, 0.14);
   color: var(--live-text);
-  border: 1px solid var(--live-border);
-  padding: 10px 14px;
-  font-size: 13px;
+  border: 1px solid rgba(0, 212, 170, 0.32);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 8px;
   min-height: 44px;
+  text-decoration: none;
+}
+
+.live-btn--nav svg {
+  flex: none;
+  color: var(--live-green);
 }
 
 @media (hover: hover) {
   .live-btn--nav:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(0, 212, 170, 0.22);
   }
 }
 
-/* ── Midpoint Card ── */
+/* ── Midpoint card: where, how, when everyone arrives, and go ── */
 
-.live-destination-name {
-  font-size: 13px;
+.live-trip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.live-trip-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.live-trip-dest {
+  font-size: 14px;
   font-weight: 600;
-  color: var(--live-green);
-  margin-bottom: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.live-trip-spread {
+  font-size: 12px;
+  color: var(--live-text-muted);
+}
+
 .live-profile-toggle {
+  flex: none;
   display: flex;
-  gap: 0;
-  margin-bottom: 14px;
   border-radius: 10px;
   overflow: hidden;
-  padding: 3px;
   background: var(--live-glass);
 }
 
 .live-profile-btn {
-  flex: 1;
-  padding: 8px 14px;
   min-height: 44px;
+  padding: 6px 12px;
   background: transparent;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--live-text-muted);
   font-size: 13px;
   font-weight: 500;
@@ -422,167 +539,145 @@
 }
 
 .live-profile-btn--active {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   color: var(--live-text);
 }
 
-.live-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+/* One row per person, time first: whether to leave now depends on how long
+   the trip takes. The numbers are the system font's tabular figures — the
+   letter-spaced monospace they replace spread "22.1 km" into "2 2 . 1  k m". */
+.live-eta-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-eta-row {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
+  min-height: 34px;
 }
 
-.live-stat {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--live-glass);
-}
-
-.live-stat--full {
-  grid-column: 1 / -1;
-}
-
-/* Odd stat count in the 2-column grid → last stat spans the full row
-   instead of leaving a lopsided empty cell. */
-.live-stat:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
-}
-
-.live-stat-label {
-  font-size: 11px;
-  line-height: 1.2;
-  color: var(--live-text-muted);
-  margin-bottom: 4px;
-}
-
-.live-stat-value {
-  font-size: 17px;
-  line-height: 1.2;
-  font-weight: 600;
-  font-family: var(--live-mono);
-}
-
-.live-stat-value--p0 {
-  color: var(--live-green);
-}
-
-.live-stat-value--p1 {
-  color: var(--live-blue);
-}
-
-.live-stat-value--p2 {
-  color: var(--live-orange);
-}
-
-.live-stat-value--p3 {
-  color: var(--live-purple);
-}
-
-.live-stat-value--p4 {
-  color: var(--live-pink);
-}
-
-.live-stat-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
+.live-eta-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  margin-inline-end: 4px;
-  vertical-align: middle;
 }
 
-.live-stat-dot--p0 {
+.live-eta-dot--p0 {
   background: var(--live-green);
 }
-.live-stat-dot--p1 {
+.live-eta-dot--p1 {
   background: var(--live-blue);
 }
-.live-stat-dot--p2 {
+.live-eta-dot--p2 {
   background: var(--live-orange);
 }
-.live-stat-dot--p3 {
+.live-eta-dot--p3 {
   background: var(--live-purple);
 }
-.live-stat-dot--p4 {
+.live-eta-dot--p4 {
   background: var(--live-pink);
 }
 
-.live-stat-sub {
+.live-eta-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-eta-row--own .live-eta-name {
+  font-weight: 600;
+}
+
+.live-eta-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(255, 179, 0, 0.12);
+  color: var(--live-amber);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.live-eta-time {
+  flex: none;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-eta-time--p0 {
+  color: var(--live-green);
+}
+.live-eta-time--p1 {
+  color: var(--live-blue);
+}
+.live-eta-time--p2 {
+  color: var(--live-orange);
+}
+.live-eta-time--p3 {
+  color: var(--live-purple);
+}
+.live-eta-time--p4 {
+  color: var(--live-pink);
+}
+
+.live-eta-dist {
+  flex: none;
+  min-width: 60px;
+  text-align: end;
   font-size: 12px;
   color: var(--live-text-muted);
-  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Their last position, dimmed, on their own row — the warning used to be a
+   red block at the top of the card, away from whoever it was about. */
+.live-eta-row--stale .live-eta-dot {
+  background: var(--live-gray);
+}
+
+.live-eta-row--stale .live-eta-name,
+.live-eta-row--stale .live-eta-time,
+.live-eta-row--stale .live-eta-dist {
+  opacity: 0.55;
+}
+
+.live-eta-hint {
+  font-size: 11px;
+  color: var(--live-text-muted);
+  margin-block-start: 2px;
 }
 
 .live-nav-buttons {
   display: flex;
-  gap: 10px;
+  gap: 8px;
+  margin-block-start: 10px;
 }
 
-/* ── Share / Invite row ── */
-
-.live-share-row {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--live-border);
-}
-
-.live-share-label {
-  font-size: 11px;
-  color: var(--live-text-muted);
-  margin-bottom: 8px;
-}
-
-.live-share-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.live-btn--share {
-  background: var(--live-green);
-  color: #fff;
-}
-
-.live-stale-warning {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  border-radius: 8px;
-  background: rgba(255, 107, 107, 0.15);
-  border: 1px solid rgba(255, 107, 107, 0.3);
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--live-red);
-}
-
-.live-stale-hint {
-  font-size: 10px;
-  opacity: 0.7;
-  margin-top: 1px;
-}
-
-/* Under the stats: the last routes are shown after a failed refresh. */
+/* Under the rows: the last routes are shown after a failed refresh. */
 .live-routes-stale {
   font-size: 11px;
   opacity: 0.75;
-  margin-block: -4px 10px;
+  margin-block-start: 4px;
   text-align: center;
 }
 
 /* ── Offline banner ── */
 
+/* Laid out by .live-topbar, under the badge: a fixed top of 60px overlapped
+   the badge, which is 56px tall below its 8px (or safe-area) inset. The top
+   bar is what keeps it off Mapbox's controls, in both text directions. */
 .live-offline-banner {
-  position: absolute;
-  top: max(60px, calc(env(safe-area-inset-top, 12px) + 48px));
-  /* Physical, like .live-badge: Mapbox pins its controls to the top-right
-     corner whichever way the text runs, so the column to keep clear is on the
-     right in Hebrew too. Logical insets laid the banner across the zoom and
-     compass buttons in both directions. */
-  left: 12px;
-  right: var(--live-map-ctrl-reserve);
-  z-index: 12;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -734,12 +829,29 @@
 
 /* ── Marker styles ── */
 
+/* On the map the palette belongs to people. The destination — the midpoint,
+   or the venue picked in its place — is the neutral target glyph below. */
 .live-marker {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   position: relative;
   cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Who it is, by the badge pill's rule: colour alone fails anyone who cannot
+   tell the green from the orange. */
+.live-marker-initial {
+  position: relative;
+  font-family: var(--live-font);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--live-bg);
+  pointer-events: none;
 }
 
 .live-marker--p0 {
@@ -767,11 +879,46 @@
   box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.3);
 }
 
+/* You: no letter, the white ring every map app has taught means "you". */
+.live-marker--own {
+  box-shadow:
+    0 0 0 3px #fff,
+    0 1px 8px rgba(0, 0, 0, 0.6);
+}
+
+/* The meeting point: a place, not a person, so it looks like neither. It was
+   a pulsing pink dot — a participant's shape and pulse, in participant 5's
+   pink. Now it is the app's own target mark in white, and still: a pulse is
+   how the map says someone is live. */
 .live-marker--mid {
-  width: 24px;
-  height: 24px;
-  background: var(--live-pink);
-  box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.3);
+  width: 26px;
+  height: 26px;
+  background: var(--live-bg);
+  box-shadow:
+    0 0 0 3px #fff,
+    0 2px 10px rgba(0, 0, 0, 0.7);
+}
+
+.live-marker--mid::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* A venue is picked and is the destination now; the midpoint stays only as a
+   reference. */
+.live-marker--mid-muted {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.live-marker--mid-muted::after {
+  width: 4px;
+  height: 4px;
 }
 
 .live-marker-ring {
@@ -807,11 +954,6 @@
   animation: live-pulse-ring 2s ease-out infinite 1.6s;
 }
 
-.live-marker--mid .live-marker-ring {
-  border-color: var(--live-pink);
-  animation: live-pulse-ring 2s ease-out infinite 1s;
-}
-
 /* ── Venue markers ── */
 
 .live-marker--venue {
@@ -827,18 +969,32 @@
     transform 0.2s;
 }
 
+/* The picked venue is the destination, so it takes the destination's glyph.
+   It was green, the creator's colour: two green dots, one of them a cafe. */
 .live-marker--venue-selected {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: var(--live-green);
-  border: 2px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 8px rgba(0, 212, 170, 0.5);
+  background: var(--live-bg);
+  box-shadow:
+    0 0 0 3px #fff,
+    0 2px 10px rgba(0, 0, 0, 0.7);
   cursor: pointer;
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition:
     background 0.2s,
     transform 0.2s;
+}
+
+.live-marker--venue-selected::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
 }
 
 .live-marker-label {
@@ -859,7 +1015,7 @@
 /* ── Venue list card ── */
 
 .live-venues {
-  padding: 16px 18px;
+  padding: 12px 14px;
   animation: live-card-slide-up 0.3s ease-out;
 }
 
@@ -903,6 +1059,13 @@
   gap: 8px;
   max-height: 180px;
   overflow-y: auto;
+}
+
+/* About two rows on a phone, so venues cannot take the map back. */
+@media (max-width: 599px) {
+  .live-venues-list {
+    max-height: 112px;
+  }
 }
 
 .live-venues-shimmer {
@@ -1112,19 +1275,17 @@
   outline-offset: 2px;
 }
 
-/* ── Tablet/desktop layout: float card as side-anchored overlay over the map ── */
+/* ── Tablet/desktop layout: the sheet docks in the inline-end bottom corner ── */
 
 @media (min-width: 600px) {
-  .live-bottom-panel,
-  .live-card:not(.live-bottom-panel .live-card) {
-    position: absolute;
-    inset-inline-end: 16px;
+  .live-sheet {
     inset-inline-start: auto;
+    inset-inline-end: 16px;
     bottom: max(16px, env(safe-area-inset-bottom, 16px));
     width: 420px;
     max-width: 420px;
-    max-height: calc(100dvh - 80px);
-    margin: 0;
+    max-height: calc(100dvh - 96px);
+    margin-inline: 0;
   }
 }
 
@@ -1142,17 +1303,13 @@
 /* ── Legal links footer (shown beneath WaitingCard) ── */
 
 .live-legal-links {
-  position: relative;
   flex: 0 0 auto;
-  margin: 0 14px max(12px, env(safe-area-inset-bottom, 12px));
   display: flex;
   justify-content: center;
   align-items: center;
   gap: 10px;
   font-size: 12px;
   color: var(--live-text-muted);
-  z-index: 10;
-  pointer-events: auto;
 }
 
 .live-legal-links a {
@@ -1174,26 +1331,6 @@
   outline: 2px solid var(--live-blue);
   outline-offset: 2px;
   border-radius: 2px;
-}
-
-/* When card has legal-links sibling, let legal-links own the bottom safe-area inset */
-.live-card:has(+ .live-legal-links) {
-  margin-bottom: 6px;
-}
-
-@media (min-width: 600px) {
-  .live-legal-links {
-    position: absolute;
-    inset-inline-start: 0;
-    inset-inline-end: 0;
-    bottom: max(10px, env(safe-area-inset-bottom, 10px));
-    margin: 0;
-  }
-
-  /* Push the card up so the legal-links bar doesn't overlap it */
-  .live-card:has(+ .live-legal-links):not(.live-bottom-panel .live-card) {
-    bottom: max(48px, calc(env(safe-area-inset-bottom, 16px) + 32px));
-  }
 }
 
 /* ── Custom scrollbar for venue list ── */
@@ -1247,6 +1384,8 @@
   .live-profile-btn,
   .live-venue-item,
   .live-venues-clear,
+  .live-fit-btn,
+  .live-badge-share,
   .live-marker--venue,
   .live-marker--venue-selected,
   .live-marker--stale {
@@ -1257,10 +1396,7 @@
 /* ── Wider viewports: offline banner constraint ── */
 
 @media (min-width: 600px) {
-  /* Left in both directions, under the badge: a logical end inset pinned it
-     to the right edge in Hebrew, over the controls. */
   .live-offline-banner {
-    right: auto;
     max-width: 360px;
   }
 }

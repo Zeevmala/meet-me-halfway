@@ -1,5 +1,6 @@
-import { memo, useCallback, useState } from "react";
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
+import { useShareLink } from "../hooks/useShareLink";
 import "../styles/live-midpoint.css";
 
 interface WaitingCardProps {
@@ -9,21 +10,7 @@ interface WaitingCardProps {
 /** Bottom card shown while waiting for partner to join. */
 export default memo(function WaitingCard({ code }: WaitingCardProps) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-
-  const shareUrl = `${window.location.origin}?code=${code}`;
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(t("live.shareMessage", { url: shareUrl }))}`;
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback for browsers without clipboard API
-      window.prompt(t("live.copyLink"), shareUrl);
-    }
-  }, [shareUrl, t]);
+  const { whatsappUrl, copied, copy } = useShareLink(code);
 
   return (
     <>
@@ -41,7 +28,7 @@ export default memo(function WaitingCard({ code }: WaitingCardProps) {
           <button
             type="button"
             className="live-btn live-btn--copy"
-            onClick={handleCopy}
+            onClick={() => void copy()}
           >
             {copied ? t("live.linkCopied") : t("live.copyLink")}
           </button>

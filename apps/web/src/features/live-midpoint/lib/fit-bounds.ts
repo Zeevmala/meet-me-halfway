@@ -53,3 +53,19 @@ export function hasSettled(
   }
   return true;
 }
+
+/**
+ * Whether the same entities are framed, wherever they now are. Somebody
+ * joining or leaving, or a venue picked or cleared, is news; a participant
+ * walking is not, and must not pull the camera from a user who panned away.
+ */
+export function sameMembers(
+  previous: FitSignature,
+  next: FitSignature,
+): boolean {
+  if (previous.size !== next.size) return false;
+  for (const key of next.keys()) {
+    if (!previous.has(key)) return false;
+  }
+  return true;
+}

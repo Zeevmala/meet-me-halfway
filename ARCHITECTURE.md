@@ -288,8 +288,8 @@ worker, not just held.
 Two changes act on that, and they compound. Directions now request
 `overview=simplified` rather than `full`, cutting roughly 90% of the
 1,500–4,000 coordinate pairs a long urban route returns — the difference is not
-visible at the zoom `fitBounds` settles on (`maxZoom: 16`, 350 px of bottom
-padding) for a 4 px line. And the page's projections are memoised on the
+visible at the zoom `fitBounds` settles on (`maxZoom: 16`, inside the padding
+the overlays leave) for a 4 px line. And the page's projections are memoised on the
 graph's stable arrays, so `setData` fires when geometry changes rather than on
 every GPS fix.
 

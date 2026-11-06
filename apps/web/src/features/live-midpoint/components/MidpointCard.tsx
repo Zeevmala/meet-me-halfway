@@ -1,11 +1,12 @@
-import { memo, useCallback, useState } from "react";
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
+import { etaParts, etaSpreadMinutes } from "../lib/eta";
 import type { RouteInfo, TravelProfile } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
-import { MAX_PARTICIPANTS } from "../lib/participant-config";
+import { NavigateGlyph } from "./icons";
 import "../styles/live-midpoint.css";
 
 interface OtherParticipant {
@@ -33,15 +34,27 @@ interface MidpointCardProps {
   selectedVenueName: string | null;
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
-  code: string;
-  participantCount: number;
 }
 
-function formatDuration(seconds: number): string {
-  return String(Math.ceil(seconds / 60));
+interface Row {
+  readonly index: ParticipantIndex;
+  readonly name: string;
+  readonly own: boolean;
+  readonly stale: boolean;
+  readonly route: RouteInfo | null;
+  readonly position: LatLng;
 }
 
-/** Bottom card shown when participants are connected. */
+/**
+ * The trip, compact: where, how, everyone's arrival time, and the way to go.
+ *
+ * It used to be a stack of equal boxes — a mode toggle on its own row, a
+ * two-column grid of distance cards, two long navigation buttons, and a
+ * full-width Share as the loudest thing on screen once everyone had arrived.
+ * Inviting moved to the session code in the top bar; what is left leads with
+ * time, because whether to leave now depends on how long the trip takes, and
+ * with Navigate, because going is the next step.
+ */
 export default memo(function MidpointCard({
   ownIndex,
   ownPosition,
@@ -52,143 +65,114 @@ export default memo(function MidpointCard({
   onProfileChange,
   selectedVenueName,
   routesStale,
-  code,
-  participantCount,
 }: MidpointCardProps) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
 
-  const shareUrl = `${window.location.origin}?code=${code}`;
-  const canInvite = participantCount < MAX_PARTICIPANTS;
+  const rows: Row[] = [
+    {
+      index: ownIndex,
+      name: t("live.you"),
+      own: true,
+      stale: false,
+      route: ownRoute,
+      position: ownPosition,
+    },
+    ...otherParticipants.map((p) => ({
+      index: p.index,
+      name: p.name ?? t("live.participant", { n: p.index + 1 }),
+      own: false,
+      stale: p.stale,
+      route: p.route,
+      position: p.position,
+    })),
+  ];
 
-  // navigator.share exists on desktop Chrome but only works on mobile/HTTPS
-  // with transient user activation. Use canShare() to guard properly.
-  const canNativeShare =
-    typeof navigator.share === "function" &&
-    typeof navigator.canShare === "function" &&
-    navigator.canShare({ url: shareUrl });
+  const spread = etaSpreadMinutes(rows.map((row) => row.route));
+  const anyStale = rows.some((row) => row.stale);
 
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(t("live.shareMessage", { url: shareUrl }))}`;
-
-  const handleNativeShare = useCallback(async () => {
-    try {
-      await navigator.share({
-        title: t("app.title"),
-        text: t("live.shareMessage", { url: shareUrl }),
-        url: shareUrl,
-      });
-    } catch (err: unknown) {
-      // AbortError = user cancelled — ignore
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      // Any other error (NotAllowedError, etc.) — fall back to clipboard
-      try {
-        await navigator.clipboard.writeText(shareUrl);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch {
-        window.prompt(t("live.copyLink"), shareUrl);
-      }
-    }
-  }, [shareUrl, t]);
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      window.prompt(t("live.copyLink"), shareUrl);
-    }
-  }, [shareUrl, t]);
-
-  const timeKey =
-    travelProfile === "walking" ? "live.walkTime" : "live.driveTime";
-
-  const staleParticipants = otherParticipants.filter((p) => p.stale);
+  const eta = (seconds: number) => {
+    const { hours, minutes } = etaParts(seconds);
+    if (hours === 0) return t("live.etaMinutes", { minutes });
+    if (minutes === 0) return t("live.etaHoursExact", { hours });
+    return t("live.etaHours", { hours, minutes });
+  };
 
   return (
-    <div className="live-card live-glass">
-      {staleParticipants.length > 0 && (
-        <div className="live-stale-warning">
-          <span>&#9888;</span>
-          <div>
-            {staleParticipants.map((p) => (
-              <div key={p.index}>
-                {p.name
-                  ? t("live.participantStaleNamed", { name: p.name })
-                  : t("live.participantStale", { n: p.index + 1 })}
-              </div>
-            ))}
-            <div className="live-stale-hint">
-              {t("live.participantStaleHint")}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedVenueName && (
-        <div className="live-destination-name">
-          {t("live.meetAt", { name: selectedVenueName })}
-        </div>
-      )}
-
-      <div className="live-profile-toggle">
-        <button
-          type="button"
-          aria-pressed={travelProfile === "driving"}
-          className={`live-profile-btn${travelProfile === "driving" ? " live-profile-btn--active" : ""}`}
-          onClick={() => onProfileChange("driving")}
-        >
-          {t("live.driving")}
-        </button>
-        <button
-          type="button"
-          aria-pressed={travelProfile === "walking"}
-          className={`live-profile-btn${travelProfile === "walking" ? " live-profile-btn--active" : ""}`}
-          onClick={() => onProfileChange("walking")}
-        >
-          {t("live.walking")}
-        </button>
-      </div>
-
-      {/* All distances — single grid, side-by-side on phones, wraps for 3+ */}
-      <div className="live-stats">
-        <div className="live-stat">
-          <div className="live-stat-label">{t("live.yourDistance")}</div>
-          <div className={`live-stat-value live-stat-value--p${ownIndex}`}>
-            {ownRoute
-              ? formatDistance(ownRoute.distance)
-              : formatDistance(haversineDistance(ownPosition, destination))}
-          </div>
-          {ownRoute && (
-            <div className="live-stat-sub">
-              {t(timeKey, { minutes: formatDuration(ownRoute.duration) })}
-            </div>
+    <div className="live-card live-glass live-trip">
+      <div className="live-trip-head">
+        <div className="live-trip-title">
+          <span className="live-trip-dest">
+            {selectedVenueName
+              ? t("live.meetAt", { name: selectedVenueName })
+              : t("live.midpoint")}
+          </span>
+          {spread !== null && (
+            <span className="live-trip-spread">
+              {spread <= 1
+                ? t("live.spreadEven")
+                : t("live.spread", { minutes: spread })}
+            </span>
           )}
         </div>
-        {otherParticipants.map((p) => (
-          <div key={p.index} className="live-stat">
-            <div className="live-stat-label">
-              <span className={`live-stat-dot live-stat-dot--p${p.index}`} />
-              {p.name
-                ? t("live.participantDistanceNamed", { name: p.name })
-                : t("live.participantDistance", { n: p.index + 1 })}
-            </div>
-            <div className={`live-stat-value live-stat-value--p${p.index}`}>
-              {p.route
-                ? formatDistance(p.route.distance)
-                : formatDistance(haversineDistance(p.position, destination))}
-            </div>
-            {p.route && (
-              <div className="live-stat-sub">
-                {t(timeKey, {
-                  minutes: formatDuration(p.route.duration),
-                })}
-              </div>
-            )}
-          </div>
-        ))}
+        <div
+          className="live-profile-toggle"
+          role="group"
+          aria-label={t("live.travelMode")}
+        >
+          <button
+            type="button"
+            aria-pressed={travelProfile === "driving"}
+            className={`live-profile-btn${travelProfile === "driving" ? " live-profile-btn--active" : ""}`}
+            onClick={() => onProfileChange("driving")}
+          >
+            {t("live.driving")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={travelProfile === "walking"}
+            className={`live-profile-btn${travelProfile === "walking" ? " live-profile-btn--active" : ""}`}
+            onClick={() => onProfileChange("walking")}
+          >
+            {t("live.walking")}
+          </button>
+        </div>
       </div>
+
+      <ul className="live-eta-list">
+        {rows.map((row) => (
+          <li
+            key={row.index}
+            className={`live-eta-row${row.own ? " live-eta-row--own" : ""}${row.stale ? " live-eta-row--stale" : ""}`}
+          >
+            <span
+              className={`live-eta-dot live-eta-dot--p${row.index}`}
+              aria-hidden="true"
+            />
+            <span className="live-eta-name">{row.name}</span>
+            {row.stale && (
+              <span className="live-eta-tag">{t("live.staleTag")}</span>
+            )}
+            <span className={`live-eta-time live-eta-time--p${row.index}`}>
+              {row.route ? eta(row.route.duration) : "—"}
+            </span>
+            {/* bdi: "40.6 km" is a left-to-right run, and inside a Hebrew
+                row the bidi algorithm laid it out as "km 40.6". */}
+            <span className="live-eta-dist">
+              <bdi>
+                {formatDistance(
+                  row.route
+                    ? row.route.distance
+                    : haversineDistance(row.position, destination),
+                )}
+              </bdi>
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      {anyStale && (
+        <div className="live-eta-hint">{t("live.participantStaleHint")}</div>
+      )}
 
       {routesStale && (
         <div className="live-routes-stale" role="status">
@@ -202,53 +186,22 @@ export default memo(function MidpointCard({
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
+          aria-label={t("live.navigateWaze")}
         >
-          {t("live.navigateWaze")}
+          <NavigateGlyph />
+          {t("live.waze")}
         </a>
         <a
           href={googleMapsLink(destination.lat, destination.lng)}
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
+          aria-label={t("live.navigateGoogle")}
         >
-          {t("live.navigateGoogle")}
+          <NavigateGlyph />
+          {t("live.googleMaps")}
         </a>
       </div>
-
-      {canInvite && (
-        <div className="live-share-row">
-          <div className="live-share-label">{t("live.inviteMore")}</div>
-          <div className="live-share-actions">
-            {canNativeShare ? (
-              <button
-                type="button"
-                className="live-btn live-btn--share"
-                onClick={handleNativeShare}
-              >
-                {t("live.share")}
-              </button>
-            ) : (
-              <>
-                <a
-                  href={whatsappUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="live-btn live-btn--whatsapp"
-                >
-                  {t("live.shareWhatsApp")}
-                </a>
-                <button
-                  type="button"
-                  className="live-btn live-btn--copy"
-                  onClick={handleCopy}
-                >
-                  {copied ? t("live.linkCopied") : t("live.copyLink")}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 });

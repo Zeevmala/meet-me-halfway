@@ -2,7 +2,9 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
-import { firstLetter, isDerivedName } from "../lib/display-name";
+import { isDerivedName, participantInitial } from "../lib/display-name";
+import { useShareLink } from "../hooks/useShareLink";
+import { CheckGlyph, ShareGlyph } from "./icons";
 import "../styles/live-midpoint.css";
 
 interface SessionBadgeProps {
@@ -12,6 +14,13 @@ interface SessionBadgeProps {
   ownIndex: ParticipantIndex;
   ownName: string;
   onNameChange: (name: string) => void;
+  /**
+   * There is a slot left to invite into. The code is then the invite button:
+   * the one control here in every phase that has a code, which is why the
+   * share button — lost from the bottom card twice, by phase gaps — lives
+   * here now.
+   */
+  canInvite: boolean;
   participants: Array<{
     index: ParticipantIndex;
     connected: boolean;
@@ -19,7 +28,7 @@ interface SessionBadgeProps {
   }>;
 }
 
-/** Top bar overlay: session code, live dot, participant status pills. */
+/** Top bar overlay: session code (and invite), live dot, participant pills. */
 export default memo(function SessionBadge({
   code,
   phase,
@@ -27,9 +36,11 @@ export default memo(function SessionBadge({
   ownIndex,
   ownName,
   onNameChange,
+  canInvite,
   participants,
 }: SessionBadgeProps) {
   const { t } = useTranslation();
+  const { copied, share } = useShareLink(code);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -81,10 +92,26 @@ export default memo(function SessionBadge({
 
   return (
     <header className="live-badge live-glass">
-      <span className="live-badge-code">{code}</span>
+      {canInvite ? (
+        <button
+          type="button"
+          className="live-badge-share"
+          onClick={() => void share()}
+          aria-label={t("live.inviteCode", { code })}
+        >
+          {copied ? <CheckGlyph /> : <ShareGlyph />}
+          <span className="live-badge-code">{code}</span>
+        </button>
+      ) : (
+        <span className="live-badge-code">{code}</span>
+      )}
       {(phase === "connected" || phase === "some_stale") && (
         <span className="live-badge-dot" aria-label={t("live.liveIndicator")} />
       )}
+      {/* Where native share is missing the tap copies; say that it did. */}
+      <span className="live-sr-only" role="status">
+        {copied ? t("live.linkCopied") : ""}
+      </span>
       <div className="live-badge-pills">
         {editing ? (
           <span className="live-pill live-pill--editing">
@@ -117,7 +144,7 @@ export default memo(function SessionBadge({
           </button>
         )}
         {participants.map((p) => {
-          const letter = firstLetter(p.name) ?? String(p.index + 1);
+          const letter = participantInitial(p.name, p.index);
           return (
             <div key={p.index} className="live-pill">
               <span

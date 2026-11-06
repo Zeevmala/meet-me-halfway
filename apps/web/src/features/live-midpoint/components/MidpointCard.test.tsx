@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -57,12 +57,6 @@ function renderCard(
   overrides: Partial<Parameters<typeof MidpointCard>[0]> = {},
 ) {
   const defaults = {
-    // Both required by MidpointCard and previously omitted: the share-link
-    // assertions below were running against `?code=undefined`, and the
-    // participant count against `undefined`. Nothing caught it because this
-    // file was outside tsc.
-    code: "ABC123",
-    participantCount: 2,
     ownIndex: 0 as ParticipantIndex,
     ownPosition,
     ownRoute: null as RouteInfo | null,
@@ -84,24 +78,33 @@ function renderCard(
   return render(<MidpointCard {...defaults} {...overrides} />);
 }
 
+/** The rows of the arrival list, in order, as the eye reads them. */
+function rows(): HTMLElement[] {
+  return screen.getAllByRole("listitem");
+}
+
 describe("MidpointCard", () => {
-  it("renders distance stats for own and other participants", () => {
+  it("lists you first, then the others, with straight-line distances until routes arrive", () => {
     renderCard();
 
-    expect(screen.getByText("live.yourDistance")).toBeTruthy();
-    expect(screen.getByText('live.participantDistance:{"n":2}')).toBeTruthy();
-
-    const expectedOwn = formatDistance(
-      haversineDistance(ownPosition, destination),
-    );
-    const expectedOther = formatDistance(
-      haversineDistance(otherPosition, destination),
-    );
-    expect(screen.getByText(expectedOwn)).toBeTruthy();
-    expect(screen.getByText(expectedOther)).toBeTruthy();
+    const [own, other] = rows();
+    expect(within(own!).getByText("live.you")).toBeTruthy();
+    expect(within(other!).getByText('live.participant:{"n":2}')).toBeTruthy();
+    expect(
+      within(own!).getByText(
+        formatDistance(haversineDistance(ownPosition, destination)),
+      ),
+    ).toBeTruthy();
+    expect(
+      within(other!).getByText(
+        formatDistance(haversineDistance(otherPosition, destination)),
+      ),
+    ).toBeTruthy();
+    // No route, no time: a placeholder, not a guess.
+    expect(within(own!).getByText("—")).toBeTruthy();
   });
 
-  it("renders the full participant name in stat labels", () => {
+  it("names each person in full", () => {
     renderCard({
       otherParticipants: [
         {
@@ -114,12 +117,12 @@ describe("MidpointCard", () => {
       ],
     });
 
-    expect(
-      screen.getByText('live.participantDistanceNamed:{"name":"Alexandra"}'),
-    ).toBeTruthy();
+    expect(within(rows()[1]!).getByText("Alexandra")).toBeTruthy();
   });
 
-  it("shows stale warning when a participant is stale", () => {
+  // The stale note used to be a red block at the top of the card, away from
+  // the person it was about.
+  it("tags a stale participant on their own row, with one hint below", () => {
     renderCard({
       otherParticipants: [
         {
@@ -132,29 +135,26 @@ describe("MidpointCard", () => {
       ],
     });
 
-    expect(screen.getByText('live.participantStale:{"n":2}')).toBeTruthy();
+    const other = rows()[1]!;
+    expect(other.classList).toContain("live-eta-row--stale");
+    expect(within(other).getByText("live.staleTag")).toBeTruthy();
+    expect(within(rows()[0]!).queryByText("live.staleTag")).toBeNull();
     expect(screen.getByText("live.participantStaleHint")).toBeTruthy();
   });
 
-  it("hides stale warning when no participants are stale", () => {
-    renderCard({
-      otherParticipants: [
-        {
-          index: 1 as ParticipantIndex,
-          route: null,
-          position: otherPosition,
-          stale: false,
-          name: null,
-        },
-      ],
-    });
+  it("says nothing about staleness when everyone is current", () => {
+    renderCard();
 
-    expect(screen.queryByText(/live\.participantStale/)).toBeNull();
+    expect(screen.queryByText("live.staleTag")).toBeNull();
+    expect(screen.queryByText("live.participantStaleHint")).toBeNull();
   });
 
-  it("shows venue name when selectedVenueName is provided", () => {
-    renderCard({ selectedVenueName: "Cafe Roma" });
+  it("titles the card with the venue when one is picked, else the midpoint", () => {
+    const { unmount } = renderCard();
+    expect(screen.getByText("live.midpoint")).toBeTruthy();
+    unmount();
 
+    renderCard({ selectedVenueName: "Cafe Roma" });
     expect(screen.getByText('live.meetAt:{"name":"Cafe Roma"}')).toBeTruthy();
   });
 
@@ -162,28 +162,39 @@ describe("MidpointCard", () => {
     const onProfileChange = vi.fn();
     renderCard({ onProfileChange, travelProfile: "driving" });
 
-    fireEvent.click(screen.getByText("live.walking"));
+    const mode = screen.getByRole("group", { name: "live.travelMode" });
+    expect(
+      within(mode).getByText("live.driving").getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    fireEvent.click(within(mode).getByText("live.walking"));
     expect(onProfileChange).toHaveBeenCalledWith("walking");
 
-    fireEvent.click(screen.getByText("live.driving"));
+    fireEvent.click(within(mode).getByText("live.driving"));
     expect(onProfileChange).toHaveBeenCalledWith("driving");
   });
 
+  // Short visible labels; the accessible names still say what they do, and
+  // contain the visible text (WCAG 2.5.3).
   it("nav links contain correct Waze and Google Maps URLs", () => {
     renderCard();
 
-    const wazeAnchor = screen.getByText("live.navigateWaze").closest("a");
-    const googleAnchor = screen.getByText("live.navigateGoogle").closest("a");
+    const wazeAnchor = screen.getByRole("link", { name: "live.navigateWaze" });
+    const googleAnchor = screen.getByRole("link", {
+      name: "live.navigateGoogle",
+    });
 
-    expect(wazeAnchor!.getAttribute("href")).toBe(
+    expect(wazeAnchor.textContent).toBe("live.waze");
+    expect(googleAnchor.textContent).toBe("live.googleMaps");
+    expect(wazeAnchor.getAttribute("href")).toBe(
       `https://waze.com/ul?ll=${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}&navigate=yes`,
     );
-    expect(googleAnchor!.getAttribute("href")).toBe(
+    expect(googleAnchor.getAttribute("href")).toBe(
       `https://www.google.com/maps/dir/?api=1&destination=${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}`,
     );
   });
 
-  it("shows route distance when routes available, falls back to haversine", () => {
+  it("leads with each route's time and gives its distance, falling back to haversine", () => {
     const { unmount } = renderCard({
       ownRoute,
       otherParticipants: [
@@ -197,10 +208,19 @@ describe("MidpointCard", () => {
       ],
     });
 
-    expect(screen.getByText(formatDistance(ownRoute.distance))).toBeTruthy();
-    expect(screen.getByText(formatDistance(otherRoute.distance))).toBeTruthy();
-    expect(screen.getByText('live.driveTime:{"minutes":"40"}')).toBeTruthy();
-    expect(screen.getByText('live.driveTime:{"minutes":"35"}')).toBeTruthy();
+    const [own, other] = rows();
+    expect(
+      within(own!).getByText(formatDistance(ownRoute.distance)),
+    ).toBeTruthy();
+    expect(
+      within(other!).getByText(formatDistance(otherRoute.distance)),
+    ).toBeTruthy();
+    expect(
+      within(own!).getByText('live.etaMinutes:{"minutes":40}'),
+    ).toBeTruthy();
+    expect(
+      within(other!).getByText('live.etaMinutes:{"minutes":35}'),
+    ).toBeTruthy();
 
     unmount();
 
@@ -210,7 +230,59 @@ describe("MidpointCard", () => {
       haversineDistance(ownPosition, destination),
     );
     expect(screen.getByText(haversineOwn)).toBeTruthy();
-    expect(screen.queryByText(/live\.driveTime/)).toBeNull();
+    expect(screen.queryByText(/live\.etaMinutes/)).toBeNull();
+  });
+
+  it("gives a trip of an hour or more in hours and minutes", () => {
+    const { unmount } = renderCard({
+      ownRoute: { ...ownRoute, duration: 4500 },
+    });
+    expect(
+      screen.getByText('live.etaHours:{"hours":1,"minutes":15}'),
+    ).toBeTruthy();
+    unmount();
+
+    // Not "1 h 0 min".
+    renderCard({ ownRoute: { ...ownRoute, duration: 3600 } });
+    expect(screen.getByText('live.etaHoursExact:{"hours":1}')).toBeTruthy();
+  });
+
+  // The midpoint is halfway in distance, rarely in time; the card says how
+  // far apart the arrivals are rather than implying they match.
+  it("says how far apart the arrivals are once two routes are in", () => {
+    const { unmount } = renderCard({
+      ownRoute,
+      otherParticipants: [
+        {
+          index: 1 as ParticipantIndex,
+          route: otherRoute,
+          position: otherPosition,
+          stale: false,
+          name: null,
+        },
+      ],
+    });
+    expect(screen.getByText('live.spread:{"minutes":5}')).toBeTruthy();
+    unmount();
+
+    renderCard({
+      ownRoute,
+      otherParticipants: [
+        {
+          index: 1 as ParticipantIndex,
+          route: { ...otherRoute, duration: ownRoute.duration - 30 },
+          position: otherPosition,
+          stale: false,
+          name: null,
+        },
+      ],
+    });
+    expect(screen.getByText("live.spreadEven")).toBeTruthy();
+  });
+
+  it("claims no gap with fewer than two routes", () => {
+    renderCard({ ownRoute });
+    expect(screen.queryByText(/live\.spread/)).toBeNull();
   });
 
   // The graph knew the routes were left over from before a failed refresh,
@@ -239,5 +311,13 @@ describe("MidpointCard", () => {
         formatDistance(haversineDistance(ownPosition, destination)),
       ),
     ).toBeTruthy();
+  });
+
+  // Inside a Hebrew row, "40.6 km" was laid out by the bidi algorithm as
+  // "km 40.6". Isolated, it keeps its own order in either direction.
+  it("isolates each distance from the row's text direction", () => {
+    renderCard({ ownRoute });
+    const distance = screen.getByText(formatDistance(ownRoute.distance));
+    expect(distance.tagName).toBe("BDI");
   });
 });
