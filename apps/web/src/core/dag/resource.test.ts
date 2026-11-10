@@ -387,6 +387,145 @@ describe("createResource — breaker interaction", () => {
     expect(resource.getState().error?.kind).toBe("OPEN_CIRCUIT");
     expect(clock.pending()).toBe(0);
   });
+
+  // Regression: a refusal is not held against the breaker, and it used to
+  // record nothing at all. A half-open probe answered with one left the
+  // breaker half-open for good: `allow()` refuses while a probe is out, and
+  // there was no retry instant to wake on, so the resource never called again.
+  it.each<ResourceError>([
+    { kind: "DENIED", detail: "permission_denied" },
+    { kind: "HTTP", status: 422 },
+  ])(
+    "recovers after a half-open probe is refused with $kind",
+    async (refusal) => {
+      const clock = createTestPorts();
+      const run = vi
+        .fn()
+        .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "down" }))
+        .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "down" }))
+        .mockResolvedValueOnce(err(refusal))
+        .mockResolvedValue(ok("back"));
+      const resource = createResource(makePolicy(run), clock.ports);
+
+      // Two failures trip the breaker (failureThreshold: 2).
+      resource.request({ at: 0, tag: "a" });
+      await clock.advance(1000);
+      resource.request({ at: 20, tag: "b" });
+      await clock.advance(1000);
+
+      // The cooldown elapses, and the probe is refused.
+      await clock.advance(5000);
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(resource.getState().error).toEqual(refusal);
+
+      // The next admitted input is sent, not turned away as OPEN_CIRCUIT.
+      resource.request({ at: 200, tag: "c" });
+      await clock.advance(1000);
+
+      expect(run).toHaveBeenCalledTimes(4);
+      expect(resource.getState().status).toBe("ready");
+      expect(resource.getState().value).toBe("back");
+    },
+  );
+});
+
+describe("createResource — a null input abandons the dispatch in flight", () => {
+  // Regression: `request(null)` cleared the input waiting to fire and nothing
+  // else, so a dispatch already out ran its retries to the end. For presence
+  // that was a write of the position the user had just withdrawn.
+  it("stops the retries of the dispatch in flight", async () => {
+    const clock = createTestPorts();
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "blip" }))
+      .mockResolvedValue(ok("late"));
+    const resource = createResource(
+      makePolicy(run, { retryAttempts: 3, retryBaseMs: 100 }),
+      clock.ports,
+    );
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // The first attempt failed; the input goes away during the backoff.
+    resource.request(null);
+    await clock.advance(10_000);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(resource.getState().status).toBe("idle");
+    expect(resource.getState().value).toBeNull();
+    expect(clock.pending()).toBe(0);
+  });
+
+  it("reverts to the state from before the dispatch", async () => {
+    const clock = createTestPorts();
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(ok("first"))
+      .mockImplementation(() => new Promise(() => {}));
+    const resource = createResource(makePolicy(run), clock.ports);
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    const before = resource.getState();
+    expect(before.status).toBe("ready");
+
+    resource.request({ at: 100, tag: "b" });
+    await clock.advance(1000);
+    expect(resource.getState().status).toBe("pending");
+
+    resource.request(null);
+
+    expect(resource.getState()).toBe(before);
+  });
+
+  it("sends the same input again when it comes back", async () => {
+    const clock = createTestPorts();
+    const run = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(ok("v1"));
+    const resource = createResource(makePolicy(run), clock.ports);
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    resource.request(null);
+
+    // Taken for a duplicate of the abandoned request, this was never sent.
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(resource.getState().value).toBe("v1");
+  });
+
+  it("hands an abandoned half-open probe's permit back", async () => {
+    const clock = createTestPorts();
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "down" }))
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "down" }))
+      // The probe: never answers.
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(ok("back"));
+    const resource = createResource(makePolicy(run), clock.ports);
+
+    resource.request({ at: 0, tag: "a" });
+    await clock.advance(1000);
+    resource.request({ at: 20, tag: "b" });
+    await clock.advance(1000);
+    await clock.advance(5000);
+    expect(run).toHaveBeenCalledTimes(3);
+
+    resource.request(null);
+    resource.request({ at: 20, tag: "b" });
+    await clock.advance(1000);
+
+    // Still half-open, the breaker would refuse this as OPEN_CIRCUIT for good.
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(resource.getState().value).toBe("back");
+  });
 });
 
 describe("createResource — Retry-After", () => {

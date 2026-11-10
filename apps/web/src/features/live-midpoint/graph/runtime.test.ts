@@ -7,7 +7,7 @@ import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
-import { ok } from "../../../core/dag/result";
+import { ok, err } from "../../../core/dag/result";
 import type { TimerId } from "../../../core/dag/resource";
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
@@ -421,6 +421,34 @@ describe("createRuntime — presence", () => {
     await h.advance(60_000);
 
     expect(h.ports.writePresence).toHaveBeenCalledTimes(writes);
+    expect(h.pending()).toBe(0);
+    r.dispose();
+  });
+
+  // Regression: clearing the position stopped the next write but not the one
+  // in flight, whose retry loop then put the position back — after the page
+  // had removed it. privacy.html promises that turning location off deletes
+  // it.
+  it("does not let a write in flight retry once location is turned off", async () => {
+    const h = createHarness({
+      placesEnabled: false,
+      writePresence: vi
+        .fn()
+        .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "blip" }))
+        .mockResolvedValue(ok(undefined)),
+    });
+    const r = createRuntime(h.ports);
+
+    r.setSources(ready());
+    await h.advance(3_000);
+    expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
+
+    // The write failed and is backing off before its retry when the denial
+    // clears the position.
+    r.setSources({ ownPosition: null, ownAccuracy: null });
+    await h.advance(60_000);
+
+    expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
     expect(h.pending()).toBe(0);
     r.dispose();
   });

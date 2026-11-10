@@ -36,6 +36,25 @@ export interface Breaker {
   readonly recordSuccess: () => void;
   readonly recordFailure: (nowMs: number) => void;
   /**
+   * A failure the dependency is not to blame for — a rules denial, a 4xx
+   * other than 429 (see `countsAgainstBreaker`): the server answered, and the
+   * answer was no. Closed, that changes nothing; the failure count neither
+   * grows nor resets. Half-open, it is the probe's outcome — the probe asks
+   * whether the dependency answers, and it did — so the breaker closes.
+   *
+   * Such a failure used to record nothing at all, and a probe answered that
+   * way left the breaker half-open for good: `allow()` refuses every call
+   * while a probe is out, and `retryAtMs()` is 0 then, so nothing came back to
+   * wake it. The resource never called again.
+   */
+  readonly recordAnswered: () => void;
+  /**
+   * Hand a half-open probe's permit back without an outcome, because its
+   * caller abandoned it. The cooldown has already elapsed, so the next
+   * `allow()` admits a fresh probe. In any other state this does nothing.
+   */
+  readonly release: () => void;
+  /**
    * Open the breaker for an explicit window, clamped to the configured
    * bounds. The caller for this is a server that told us how long to wait —
    * a `Retry-After` longer than the retry loop is willing to sleep through
@@ -101,6 +120,16 @@ export function createBreaker(config: BreakerConfig): Breaker {
     }
   }
 
+  function recordAnswered(): void {
+    if (state === "halfOpen") recordSuccess();
+  }
+
+  function release(): void {
+    // Back to `open` with the cooldown already spent, so the next caller is
+    // admitted as a new probe.
+    if (state === "halfOpen") state = "open";
+  }
+
   function openFor(nowMs: number, ms: number): void {
     state = "open";
     openedAtMs = nowMs;
@@ -112,6 +141,8 @@ export function createBreaker(config: BreakerConfig): Breaker {
     allow,
     recordSuccess,
     recordFailure,
+    recordAnswered,
+    release,
     openFor,
     state: () => state,
     retryAtMs: () => (state === "open" ? openedAtMs + openMs : 0),

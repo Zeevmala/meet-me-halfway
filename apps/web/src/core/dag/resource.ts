@@ -86,7 +86,10 @@ export interface ResourcePolicy<I, O> {
 }
 
 export interface Resource<I, O> {
-  /** Offer the current input. `null` means "no valid input right now". */
+  /**
+   * Offer the current input. `null` means "no valid input right now": it
+   * cancels the dispatch waiting to fire and abandons the one in flight.
+   */
   readonly request: (input: I | null) => void;
   readonly getState: () => ResourceState<O>;
   readonly subscribe: (listener: () => void) => () => void;
@@ -117,6 +120,11 @@ export function createResource<I, O>(
   const listeners = new Set<() => void>();
 
   let state: ResourceState<O> = IDLE;
+  /**
+   * The last state that was not `pending`: what an abandoned dispatch reverts
+   * to, since it never produced a state of its own.
+   */
+  let settled: ResourceState<O> = IDLE;
   let pendingInput: I | null = null;
   let firstPendingAtMs: number | null = null;
   let timer: TimerId | null = null;
@@ -129,6 +137,7 @@ export function createResource<I, O>(
 
   function emit(next: ResourceState<O>): void {
     state = next;
+    if (next.status !== "pending") settled = next;
     for (const listener of listeners) listener();
   }
 
@@ -336,7 +345,10 @@ export function createResource<I, O>(
       return;
     }
 
+    // Every answer ends a half-open probe, including one the breaker does not
+    // hold against the dependency — see `Breaker.recordAnswered`.
     if (countsAgainstBreaker(result.error)) breaker.recordFailure(settledAtMs);
+    else breaker.recordAnswered();
     emit(degrade(result.error, settledAtMs));
     scheduleBreakerWake(settledAtMs);
   }
@@ -364,12 +376,36 @@ export function createResource<I, O>(
     };
   }
 
+  /**
+   * Abandon the dispatch in flight, if there is one.
+   *
+   * A `null` input says no request is wanted any more, least of all the
+   * retries of one already out. They used to run on regardless: clearing
+   * presence's input stopped the next write, while the retry loop of the
+   * write in flight put back a position the user had just withdrawn.
+   *
+   * Abandoned, not settled. The state reverts to what it was before the
+   * dispatch began. A half-open probe hands its permit back, or the breaker
+   * would wait forever for an outcome nobody records. And the identity is
+   * forgotten, or the same input offered again would be taken for a duplicate
+   * of a request nobody is waiting on, and never sent.
+   */
+  function abandonInFlight(): void {
+    if (inFlightIdentity === null) return;
+    controller?.abort();
+    controller = null;
+    inFlightIdentity = null;
+    breaker.release();
+    if (state !== settled) emit(settled);
+  }
+
   function request(input: I | null): void {
     if (disposed) return;
     if (input === null) {
       pendingInput = null;
       firstPendingAtMs = null;
       clearTimer();
+      abandonInFlight();
       return;
     }
     const nowMs = ports.now();

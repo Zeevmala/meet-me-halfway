@@ -157,3 +157,58 @@ describe("createBreaker — openFor", () => {
     expect(b.retryAtMs()).toBe(0);
   });
 });
+
+describe("createBreaker — recordAnswered", () => {
+  // Regression: a refusal — a rules denial, a 4xx — recorded nothing, so a
+  // probe answered with one left the breaker half-open for good, refusing
+  // every call with no retry instant to wake on.
+  it("closes a half-open breaker: the probe was answered", () => {
+    const b = createBreaker(CONFIG);
+    for (let i = 0; i < CONFIG.failureThreshold; i++) b.recordFailure(0);
+    expect(b.allow(CONFIG.baseOpenMs)).toBe(true);
+    expect(b.state()).toBe("halfOpen");
+
+    b.recordAnswered();
+
+    expect(b.state()).toBe("closed");
+    expect(b.allow(CONFIG.baseOpenMs)).toBe(true);
+  });
+
+  it("neither counts nor resets failures while closed", () => {
+    const b = createBreaker(CONFIG);
+    b.recordFailure(0);
+    b.recordFailure(0);
+    b.recordAnswered();
+    expect(b.state()).toBe("closed");
+
+    // Still the third consecutive failure: the refusal did not reset it.
+    b.recordFailure(0);
+    expect(b.state()).toBe("open");
+  });
+});
+
+describe("createBreaker — release", () => {
+  it("hands an abandoned probe's permit back, so the next call probes at once", () => {
+    const b = createBreaker(CONFIG);
+    for (let i = 0; i < CONFIG.failureThreshold; i++) b.recordFailure(0);
+    expect(b.allow(CONFIG.baseOpenMs)).toBe(true);
+
+    b.release();
+
+    expect(b.state()).toBe("open");
+    expect(b.allow(CONFIG.baseOpenMs)).toBe(true);
+    expect(b.state()).toBe("halfOpen");
+  });
+
+  it("does nothing outside half-open", () => {
+    const closed = createBreaker(CONFIG);
+    closed.release();
+    expect(closed.state()).toBe("closed");
+
+    const open = createBreaker(CONFIG);
+    for (let i = 0; i < CONFIG.failureThreshold; i++) open.recordFailure(0);
+    open.release();
+    expect(open.state()).toBe("open");
+    expect(open.retryAtMs()).toBe(CONFIG.baseOpenMs);
+  });
+});

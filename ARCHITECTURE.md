@@ -177,7 +177,9 @@ structurally cannot do that.
 
 `core/dag/breaker.ts` compares `openedAt + cooldown` against an injected
 clock. Transitions are `closed → open → halfOpen → closed`, with the cooldown
-doubling on each failed probe up to a ceiling.
+doubling on each failed probe up to a ceiling. A probe refused with a rules
+denial or a 4xx closes it as well: the dependency answered. A probe abandoned
+because its input went away hands its permit back, and the next call probes.
 
 Two reasons it is lazy rather than scheduled. A timer-driven probe reproduces
 the exact bug it replaces — the old code doubled a backoff on HTTP 429 but the
@@ -262,6 +264,8 @@ tests.
 | **`setPhase` inside a `setParticipants` updater.** React requires updaters to be pure and StrictMode double-invokes them. `phase` was `useState` written from six sites despite being a total function of status, roster and liveness. | `useLiveSession` |
 | **Polled staleness.** A 10 s `setInterval` drove a clock predicate, so a backgrounded tab reported staleness from before it was suspended — the failure mode the breaker is explicitly designed against, reproduced one module over. | `useLiveSession` |
 | **Config read in eight places.** `ports.ts` claimed to have ended this; the Places key was still read in three modules, so the flag rendering the venue list and the client calling the API were separate reads that could disagree. `validateEnv` checked five of six required variables, omitting the one whose absence silently disables App Check. | throughout |
+| **Half-open wedge.** A refusal — a rules denial, a 4xx — is not held against the breaker, and it recorded nothing at all. A half-open probe refused that way left the breaker half-open for good: `allow()` refuses while a probe is out and `retryAtMs()` has nothing to wake on, so the node never made another call until the page was reloaded. | `core/dag/breaker` + `resource` |
+| **Withdrawn position written back.** `request(null)` cleared the input waiting to fire but not the dispatch in flight, so after a denial cleared the position, a failed presence write's retry loop put it back — after `withdraw()` had removed it, against privacy.html's promise that turning location off deletes it. | `core/dag/resource` |
 
 ---
 
