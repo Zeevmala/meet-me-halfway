@@ -1,7 +1,7 @@
 name: Factory
 
 # Thin caller. All logic lives in Zeevmala/factory; this file only wires this repo's
-# events and secrets to it. To update every repo at once, move the v1 tag there.
+# events and secrets to it. Updating the v1 branch there updates every repo at once.
 
 on:
   issues:
