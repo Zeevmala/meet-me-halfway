@@ -1,0 +1,96 @@
+name: Factory
+
+# Thin caller. All logic lives in Zeevmala/factory; this file only wires this repo's
+# events and secrets to it. Updating the v1 branch there updates every repo at once.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  schedule:
+    - cron: "17 */4 * * *" # build sweep: picks up tickets that became unblocked
+    - cron: "23 4 * * 0"   # weekly design-drift report
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What to run"
+        type: choice
+        options: [build, drift]
+        default: build
+      issue:
+        description: "Issue number to build (empty = next ready ticket)"
+        type: string
+        required: false
+
+permissions: {}
+
+jobs:
+  build:
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'ready-for-agent') ||
+      (github.event_name == 'schedule' && github.event.schedule == '17 */4 * * *') ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'build')
+    # One build at a time per repo. Tickets labelled in a burst are picked up by the sweep.
+    concurrency:
+      group: factory-build-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    uses: Zeevmala/factory/.github/workflows/build.yml@v1
+    with:
+      issue: ${{ inputs.issue }}
+      factory_ref: v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Factory PRs are opened with GITHUB_TOKEN, which does not fire pull_request, so they are reviewed here.
+  review-built:
+    needs: build
+    if: needs.build.outputs.review == 'true'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: Zeevmala/factory/.github/workflows/review.yml@v1
+    with:
+      pr_number: ${{ needs.build.outputs.pr_number }}
+      factory_ref: v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Your own same-repo PRs. Fork PRs never get secrets and are skipped; drafts wait until marked ready.
+  review-pr:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: Zeevmala/factory/.github/workflows/review.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      factory_ref: v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  drift:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '23 4 * * 0') ||
+      (github.event_name == 'workflow_dispatch' && inputs.task == 'drift')
+    permissions:
+      contents: read
+      issues: write
+    uses: Zeevmala/factory/.github/workflows/drift.yml@v1
+    with:
+      factory_ref: v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
