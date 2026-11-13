@@ -13,7 +13,6 @@ import { createPlacesClient } from "../features/live-midpoint/lib/places-api";
 import { createDirectionsClient } from "../features/live-midpoint/lib/directions-api";
 import { createPresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
 import type { GraphPorts } from "../features/live-midpoint/graph/ports";
-import type { PresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
 import type { AppConfig } from "./config";
 
 /**
@@ -34,8 +33,6 @@ export interface Services {
   readonly config: AppConfig;
   readonly firebase: FirebaseServices;
   readonly graphPorts: GraphPorts;
-  /** Session teardown needs the removal side, which is not a graph node. */
-  readonly presence: PresenceWriter;
   /** Exposed for diagnostics; the ports above already hold it. */
   readonly requestSemaphore: Semaphore;
 }
@@ -66,8 +63,10 @@ export function createServices(config: AppConfig): Services {
     // WebSocket, so it costs no HTTP connection and must not queue behind
     // route fetches — peers infer staleness from how recently it landed.
     writePresence: presence.write,
+    // The node that writes own position is the one that deletes it.
+    removePresence: presence.remove,
     placesEnabled: config.places !== null,
   };
 
-  return { config, firebase, graphPorts, presence, requestSemaphore };
+  return { config, firebase, graphPorts, requestSemaphore };
 }

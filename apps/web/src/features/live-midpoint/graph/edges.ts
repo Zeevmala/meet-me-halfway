@@ -15,6 +15,7 @@
 
 export type NodeId =
   | "liveness"
+  | "expiry"
   | "slots"
   | "presence"
   | "midpoint"
@@ -33,11 +34,14 @@ export const EDGES: EdgeMap = {
   // vector rather than a raw `lastSeen` is what lets `sameSlots` treat a
   // heartbeat from a stationary participant as no change at all.
   liveness: [],
+  // The same kind of node: the session's 24 hours, against the server clock.
+  expiry: [],
   slots: ["liveness"],
-  // A write, and a sink: it reads sources, and nothing derives from its value.
-  presence: [],
+  // A write, and a sink: nothing derives from its value. It stops — and
+  // removes what it published — once the session has expired.
+  presence: ["expiry"],
   midpoint: ["slots"],
-  phase: ["slots", "liveness", "presence"],
+  phase: ["slots", "liveness", "expiry", "presence"],
   venues: ["midpoint"],
   destination: ["midpoint", "venues"],
   routes: ["slots", "destination"],
@@ -45,6 +49,7 @@ export const EDGES: EdgeMap = {
     "slots",
     "presence",
     "liveness",
+    "expiry",
     "midpoint",
     "phase",
     "venues",

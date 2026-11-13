@@ -5,9 +5,9 @@ import { ServicesProvider } from "../../components/ServicesProvider";
 import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
-import type { ParticipantInfo } from "./hooks/useLiveSession";
+import type { ParticipantInfo, SessionState } from "./hooks/useLiveSession";
 import { ok, err } from "../../core/dag/result";
-import { DEPARTED_THRESHOLD_MS } from "./graph/nodes";
+import { DEPARTED_THRESHOLD_MS, SESSION_TTL_MS } from "./graph/nodes";
 
 // ── Mock i18next ──
 vi.mock("react-i18next", () => ({
@@ -44,8 +44,10 @@ vi.mock("./hooks/useLiveGeolocation", () => ({
 }));
 
 // ── Mock useLiveSession ──
+// Only the hook is replaced: the page also takes the module's constants.
 const mockSession = vi.fn();
-vi.mock("./hooks/useLiveSession", () => ({
+vi.mock("./hooks/useLiveSession", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hooks/useLiveSession")>()),
   useLiveSession: (_uid: string) => mockSession(),
 }));
 
@@ -73,6 +75,7 @@ const testPorts: GraphPorts = {
   // schedules, so it is never actually driven — it exists so the fake satisfies
   // the same contract production does.
   writePresence: mockWritePresence,
+  removePresence: mockPresenceRemove,
   placesEnabled: false,
 };
 
@@ -80,8 +83,6 @@ const testServices = {
   config: {} as Services["config"],
   firebase: {} as Services["firebase"],
   graphPorts: testPorts,
-  // Session teardown needs the removal side, which is not a graph node.
-  presence: { write: mockWritePresence, remove: mockPresenceRemove },
   requestSemaphore: {} as Services["requestSemaphore"],
 } satisfies Services;
 
@@ -158,25 +159,36 @@ function defaultGeo() {
   };
 }
 
+/** Live in slot 0, created at the test ports' epoch: 24 hours from expiry. */
+const LIVE: SessionState = {
+  kind: "live",
+  code: "ABC123",
+  slot: 0,
+  createdAtMs: 0,
+};
+
+function failed(reason: string, details: string | null = null): SessionState {
+  return {
+    kind: "failed",
+    reason: reason as Extract<SessionState, { kind: "failed" }>["reason"],
+    details,
+  };
+}
+
 function defaultSession() {
   return {
-    // Lifecycle only — waiting/connected/some_stale is the graph's to derive.
-    status: "ready",
-    code: "ABC123",
-    ownIndex: 0,
+    // The session's whole state; waiting/connected/some_stale is the graph's
+    // to derive from it.
+    state: LIVE,
     ownName: "Me",
     // Annotated: an untyped [] infers never[], which silently made every
     // roster fixture below unassignable — and the spread in the movement test
     // a spread of `never`.
     participants: [] as ParticipantInfo[],
-    error: null,
-    errorDetails: null,
-    creatorUid: "test-uid",
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
-    withdraw: vi.fn(),
-    cleanup: vi.fn(),
+    close: vi.fn(),
   };
 }
 
@@ -237,30 +249,37 @@ describe("LiveMidpointPage", () => {
   });
 
   // Turning location off is turning sharing off: the last position must not
-  // stay on everyone's map, and in the database, until the page closes.
-  it("withdraws own presence when location is denied", () => {
-    const session = defaultSession();
-    mockSession.mockReturnValue(session);
+  // stay on everyone's map, and in the database, until the page closes. The
+  // graph's presence node publishes it and is the one that takes it down.
+  it("removes own position when location is denied", () => {
+    const { rerender } = renderPage();
+    expect(mockPresenceRemove).not.toHaveBeenCalled();
+
     mockGeo.mockReturnValue({
       ...defaultGeo(),
       status: "denied",
       position: null,
     });
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
 
-    renderPage();
-
-    expect(session.withdraw).toHaveBeenCalled();
-    expect(session.cleanup).not.toHaveBeenCalled();
+    expect(mockPresenceRemove).toHaveBeenCalledWith("ABC123", 0);
   });
 
-  it("keeps own presence through a transient location failure", () => {
-    const session = defaultSession();
-    mockSession.mockReturnValue(session);
+  it("keeps own position through a transient location failure", () => {
+    const { rerender } = renderPage();
+
     mockGeo.mockReturnValue({ ...defaultGeo(), status: "unavailable" });
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage />
+      </ServicesProvider>,
+    );
 
-    renderPage();
-
-    expect(session.withdraw).not.toHaveBeenCalled();
+    expect(mockPresenceRemove).not.toHaveBeenCalled();
   });
 
   it("shows geo unavailable error screen", () => {
@@ -357,8 +376,7 @@ describe("LiveMidpointPage", () => {
   it("shows session not found error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "error",
-      error: "SESSION_NOT_FOUND",
+      state: failed("SESSION_NOT_FOUND"),
     });
 
     renderPage();
@@ -369,8 +387,7 @@ describe("LiveMidpointPage", () => {
   it("shows session full error", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "error",
-      error: "SESSION_FULL",
+      state: failed("SESSION_FULL"),
     });
 
     renderPage();
@@ -378,16 +395,36 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByText("live.sessionFull")).toBeTruthy();
   });
 
-  it("shows session expired error", () => {
+  // Expiry is the graph's to derive, from `created` and the server clock: a
+  // session created a full day before the ports' clock reads has ended.
+  it("shows session expired once its 24 hours are up", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "error",
-      error: "SESSION_EXPIRED",
+      state: { ...LIVE, createdAtMs: -SESSION_TTL_MS },
     });
 
     renderPage();
 
     expect(screen.getByText("live.sessionExpired")).toBeTruthy();
+    expect(screen.getByText("live.startNewSession")).toBeTruthy();
+  });
+
+  it("says there is a connection problem once the listener is lost", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      state: {
+        kind: "lost",
+        code: "ABC123",
+        slot: 0,
+        createdAtMs: 0,
+        details: "permission_denied",
+      },
+    });
+
+    renderPage();
+
+    expect(screen.getByText("live.connectionError")).toBeTruthy();
+    expect(screen.getByText("permission_denied")).toBeTruthy();
   });
 
   it("shows waiting card when session is waiting", () => {
@@ -437,6 +474,12 @@ describe("LiveMidpointPage", () => {
   it("says so when own location is not reaching the others", async () => {
     vi.useFakeTimers();
     try {
+      // These ports run on the wall clock, so the session has to be created
+      // on it too; created at the epoch, it would read as long expired.
+      mockSession.mockReturnValue({
+        ...defaultSession(),
+        state: { ...LIVE, createdAtMs: Date.now() },
+      });
       const failing: GraphPorts = {
         ...testPorts,
         now: () => Date.now(),
@@ -499,19 +542,22 @@ describe("LiveMidpointPage", () => {
     expect(screen.queryByText("app.serverUnreachable")).toBeNull();
   });
 
-  it("renders waiting card (with share UI) whenever a code exists, even mid-creation", () => {
-    // Regression: previously, phase === "creating" with a code rendered no card
-    // at all, so the share button silently disappeared. The fix makes WaitingCard
-    // the fallback whenever code is set and the connected MidpointCard can't render.
-    mockSession.mockReturnValue({
-      ...defaultSession(),
-      status: "connecting",
-      code: "ABC123",
+  it("renders waiting card (with share UI) as soon as the session is live, before any position", () => {
+    // Regression: a phase with a code but no card used to render nothing, so
+    // the share button silently disappeared. A code now exists exactly when
+    // the session is live, and the share UI comes with it — before own GPS
+    // has a fix, and before anyone else has a position.
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "requesting",
+      position: null,
+      accuracy: null,
     });
 
     renderPage();
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
+    expect(screen.getByTestId("session-badge")).toBeTruthy();
   });
 
   // The hook holds the code back until the database has the session, so this
@@ -519,9 +565,7 @@ describe("LiveMidpointPage", () => {
   it("says it is setting up, with nothing to share, while a create is pending", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "connecting",
-      code: null,
-      ownIndex: null,
+      state: { kind: "creating", handshake: 1 },
     });
 
     renderPage();
@@ -537,15 +581,49 @@ describe("LiveMidpointPage", () => {
     vi.stubGlobal("location", { ...window.location, search: "?code=ABC234" });
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "connecting",
-      code: null,
-      ownIndex: null,
+      state: { kind: "joining", handshake: 1 },
     });
 
     renderPage();
 
     expect(screen.getByRole("status").textContent).toBe("live.connecting");
     expect(screen.queryByTestId("waiting-card")).toBeNull();
+  });
+
+  // `pagehide` is the page really going. It acts at once — React would
+  // render after the page is gone — so own position comes down while the
+  // socket is still open.
+  it("stops sharing the moment the page is hidden", () => {
+    const session = defaultSession();
+    const geo = defaultGeo();
+    mockSession.mockReturnValue(session);
+    mockGeo.mockReturnValue(geo);
+    renderPage();
+    expect(mockPresenceRemove).not.toHaveBeenCalled();
+
+    window.dispatchEvent(
+      new PageTransitionEvent("pagehide", { persisted: false }),
+    );
+
+    expect(mockPresenceRemove).toHaveBeenCalledWith("ABC123", 0);
+    expect(session.close).toHaveBeenCalled();
+    expect(geo.stop).toHaveBeenCalled();
+  });
+
+  // `beforeunload` exists so a page can cancel a navigation, so it can fire
+  // for one that never happens. It used to tear down a page that stayed open.
+  it("does not tear anything down on beforeunload", () => {
+    const session = defaultSession();
+    const geo = defaultGeo();
+    mockSession.mockReturnValue(session);
+    mockGeo.mockReturnValue(geo);
+    renderPage();
+
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(mockPresenceRemove).not.toHaveBeenCalled();
+    expect(session.close).not.toHaveBeenCalled();
+    expect(geo.stop).not.toHaveBeenCalled();
   });
 
   it("drops the status once the session is ready", () => {
@@ -561,7 +639,6 @@ describe("LiveMidpointPage", () => {
     // still render so the share button is reachable.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: [],
     });
 
@@ -574,7 +651,6 @@ describe("LiveMidpointPage", () => {
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: [
         {
           uid: "p1",
@@ -650,7 +726,6 @@ describe("LiveMidpointPage — render-path stability", () => {
   it("keeps LiveMap's props referentially stable across an unchanged heartbeat", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: roster(),
     });
 
@@ -666,7 +741,6 @@ describe("LiveMidpointPage — render-path stability", () => {
     // sources for geometry that had not moved.
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: roster(),
     });
     rerender(
@@ -690,7 +764,6 @@ describe("LiveMidpointPage — render-path stability", () => {
   it("hands LiveMap new projections when the roster actually changes", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: roster(),
     });
 
@@ -701,7 +774,6 @@ describe("LiveMidpointPage — render-path stability", () => {
     moved[0] = { ...moved[0], position: { lat: 32.2, lng: 34.9 } };
     mockSession.mockReturnValue({
       ...defaultSession(),
-      status: "ready",
       participants: moved,
     });
     rerender(

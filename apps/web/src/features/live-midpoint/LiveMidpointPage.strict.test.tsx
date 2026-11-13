@@ -32,20 +32,17 @@ const { mockCreateSession, mockJoinSession } = vi.hoisted(() => ({
   mockCreateSession: vi.fn(),
   mockJoinSession: vi.fn(),
 }));
-vi.mock("./hooks/useLiveSession", () => ({
+// Only the hook is replaced: the page also takes the module's constants.
+vi.mock("./hooks/useLiveSession", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hooks/useLiveSession")>()),
   useLiveSession: () => ({
-    status: "ready",
-    code: "ABC234",
-    ownIndex: 0,
+    state: { kind: "live", code: "ABC234", slot: 0, createdAtMs: 0 },
     ownName: "Me",
     participants: [],
-    error: null,
-    errorDetails: null,
-    creatorUid: "test-uid",
     createSession: mockCreateSession,
     joinSession: mockJoinSession,
     setOwnName: vi.fn(),
-    cleanup: vi.fn(),
+    close: vi.fn(),
   }),
 }));
 vi.mock("./components/LiveMap", () => ({ default: () => <div /> }));
@@ -59,6 +56,7 @@ const testPorts: GraphPorts = {
   searchVenues: vi.fn(),
   fetchRoute: vi.fn(),
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
+  removePresence: vi.fn(),
   placesEnabled: false,
 };
 
@@ -66,7 +64,6 @@ const testServices = {
   config: {} as Services["config"],
   firebase: {} as Services["firebase"],
   graphPorts: testPorts,
-  presence: { write: vi.fn(), remove: vi.fn() },
   requestSemaphore: {} as Services["requestSemaphore"],
 } satisfies Services;
 

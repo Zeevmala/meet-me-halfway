@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   onValue,
   ref,
@@ -8,10 +8,8 @@ import {
   update,
 } from "firebase/database";
 import type { Database } from "firebase/database";
-import type { Unsubscribe } from "firebase/database";
 import * as Sentry from "@sentry/react";
 import { useFirebase } from "../../../hooks/useFirebase";
-import { useServices } from "../../../components/ServicesProvider";
 import { generateCode, isValidCode } from "../lib/session-code";
 import {
   getOrCreateDisplayName,
@@ -20,7 +18,6 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { SessionStatus } from "../graph/types";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
 import { backoffDelayMs } from "../../../core/dag/backoff";
@@ -34,6 +31,7 @@ export type SessionErrorCode =
   | "INVALID_CODE"
   | "SESSION_NOT_FOUND"
   | "SESSION_FULL"
+  /** The session passed its 24 hours while the page was open. */
   | "SESSION_EXPIRED"
   | "CREATE_FAILED"
   | "JOIN_FAILED"
@@ -72,22 +70,148 @@ export interface SessionFailure {
   readonly details: string | null;
 }
 
-export interface LiveSessionState {
-  /**
-   * Lifecycle only. The phase the UI renders is derived by the graph from
-   * this plus the roster and liveness — see `derivePhase`.
-   */
-  status: SessionStatus;
-  code: string | null;
-  /** Session creator's uid — the anchor for stable slot allocation. */
-  creatorUid: string | null;
-  ownIndex: ParticipantIndex | null;
-  ownName: string;
-  participants: ParticipantInfo[];
-  error: SessionErrorCode | null;
-  /** Raw underlying error description — shown in the UI "Details" expander
-   * and useful when users report a failure. */
-  errorDetails: string | null;
+/**
+ * The session as this hook knows it. One union rather than a status beside a
+ * nullable code, slot and error, because those disagreed: status `error` with
+ * a code and slot still set kept presence publishing behind the error screen,
+ * and nothing could say "closed" at all. ARCHITECTURE.md draws the machine.
+ *
+ * `creating` and `joining` carry the id of the handshake they wait on, so a
+ * result from one that was abandoned or replaced is recognised and dropped.
+ * The graph's `SessionLifecycle` is this minus those ids and the failure, and
+ * this is assignable to it as it is.
+ */
+export type SessionState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "creating"; readonly handshake: number }
+  | { readonly kind: "joining"; readonly handshake: number }
+  | {
+      readonly kind: "live";
+      readonly code: string;
+      readonly slot: ParticipantIndex;
+      /** Server-clock ms at which `created` was stamped. */
+      readonly createdAtMs: number;
+    }
+  | {
+      /** The server cancelled the participants listener. */
+      readonly kind: "lost";
+      readonly code: string;
+      readonly slot: ParticipantIndex;
+      readonly createdAtMs: number;
+      readonly details: string | null;
+    }
+  | {
+      readonly kind: "failed";
+      readonly reason: SessionErrorCode;
+      readonly details: string | null;
+    }
+  | { readonly kind: "closed" };
+
+export type SessionEvent =
+  | {
+      readonly type: "started";
+      readonly handshake: number;
+      readonly role: "create" | "join";
+    }
+  | {
+      readonly type: "succeeded";
+      readonly handshake: number;
+      readonly code: string;
+      readonly slot: ParticipantIndex;
+      readonly createdAtMs: number;
+    }
+  | {
+      readonly type: "failed";
+      readonly handshake: number;
+      readonly failure: SessionFailure;
+    }
+  /** The handshake's caller went away — an unmount, StrictMode's included. */
+  | { readonly type: "abandoned"; readonly handshake: number }
+  | {
+      readonly type: "listenerCancelled";
+      readonly code: string;
+      readonly details: string | null;
+    }
+  /** The page is going away. */
+  | { readonly type: "closed" };
+
+export const IDLE_SESSION: SessionState = Object.freeze({ kind: "idle" });
+
+/**
+ * The one closed state. A constant, so that the page can push it into the
+ * graph synchronously from `pagehide` and the render that follows pushes the
+ * very same value — a no-op.
+ */
+export const CLOSED_SESSION: SessionState = Object.freeze({ kind: "closed" });
+
+/** Whether `state` is waiting on `handshake`. */
+function waitsOn(state: SessionState, handshake: number): boolean {
+  return (
+    (state.kind === "creating" || state.kind === "joining") &&
+    state.handshake === handshake
+  );
+}
+
+/**
+ * Every transition the session makes. Anything not listed leaves the state
+ * as it is — the same object, so React does not even re-render — which is
+ * what drops a late result from a handshake nobody is waiting on.
+ */
+export function sessionReducer(
+  state: SessionState,
+  event: SessionEvent,
+): SessionState {
+  switch (event.type) {
+    case "started":
+      // A new handshake replaces one still running — StrictMode's remount
+      // starts its own before the abandoned one has noticed — and may follow
+      // a failed one. Nothing starts over a session that exists or closed.
+      if (
+        state.kind === "live" ||
+        state.kind === "lost" ||
+        state.kind === "closed"
+      ) {
+        return state;
+      }
+      return event.role === "create"
+        ? { kind: "creating", handshake: event.handshake }
+        : { kind: "joining", handshake: event.handshake };
+    case "succeeded":
+      if (!waitsOn(state, event.handshake)) return state;
+      return {
+        kind: "live",
+        code: event.code,
+        slot: event.slot,
+        createdAtMs: event.createdAtMs,
+      };
+    case "failed":
+      if (!waitsOn(state, event.handshake)) return state;
+      return {
+        kind: "failed",
+        reason: event.failure.code,
+        details: event.failure.details,
+      };
+    case "abandoned":
+      return waitsOn(state, event.handshake) ? IDLE_SESSION : state;
+    case "listenerCancelled":
+      if (state.kind !== "live" || state.code !== event.code) return state;
+      return {
+        kind: "lost",
+        code: state.code,
+        slot: state.slot,
+        createdAtMs: state.createdAtMs,
+        details: event.details,
+      };
+    case "closed":
+      return CLOSED_SESSION;
+  }
+}
+
+export interface LiveSession {
+  /** Where the session is. The graph takes it as it is. */
+  readonly state: SessionState;
+  readonly ownName: string;
+  readonly participants: ParticipantInfo[];
   /**
    * Both return a Result rather than throwing.
    *
@@ -99,23 +223,21 @@ export interface LiveSessionState {
    * The signal cancels the retry loop: an unmount mid-join previously left a
    * three-attempt backoff running against a dead component.
    */
-  createSession: (
+  readonly createSession: (
     signal: AbortSignal,
   ) => Promise<Result<string, SessionFailure>>;
-  joinSession: (
+  readonly joinSession: (
     code: string,
     signal: AbortSignal,
   ) => Promise<Result<string, SessionFailure>>;
-  setOwnName: (name: string) => void;
-  /** Remove own presence, keep listening. */
-  withdraw: () => void;
-  cleanup: () => void;
+  readonly setOwnName: (name: string) => void;
+  /**
+   * The page is going away. Leaving `live` detaches the listener; own
+   * position is the graph's presence node's to remove, which it does as soon
+   * as the session it was given is no longer live.
+   */
+  readonly close: () => void;
 }
-
-// Note: TTL is only enforced on join. A creator with the page open
-// beyond 24h will continue operating — acceptable for MVP since RTDB
-// security rules can enforce server-side TTL in a future iteration.
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Fresh codes a create tries before giving up. `created` is write-once, so
@@ -213,6 +335,24 @@ async function canReadAtAll(db: Database): Promise<boolean> {
   }
 }
 
+/**
+ * `created` as the server stamped it.
+ *
+ * Expiry is judged against the server's clock, so it needs the server's
+ * value, and the creator never sees that otherwise: its write sends a
+ * placeholder the server fills in. Read back after the write, it costs the
+ * creator one round trip before the code appears.
+ */
+async function readCreated(db: Database, code: string): Promise<number> {
+  const created: unknown = (
+    await get(ref(db, `sessions/${code}/created`))
+  ).val();
+  if (typeof created !== "number") {
+    throw new Error(`sessions/${code}/created is not a timestamp`);
+  }
+  return created;
+}
+
 /** `sessions/{code}/slots` as RTDB stores it: slot key → holder uid. */
 type SlotMap = Partial<Record<string, string>>;
 
@@ -298,105 +438,119 @@ async function claimSlot(
  * a property of the schema rather than a client-side check that a modified
  * client could simply skip.
  *
+ * The handshakes only report what happened. What follows from a state — the
+ * participants listener, the code in the URL — is an effect of being in it,
+ * attached on entering and detached on leaving, so nothing a handshake does
+ * can outlive the state it was for.
+ *
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
-export function useLiveSession(uid: string): LiveSessionState {
+export function useLiveSession(uid: string): LiveSession {
   const { db, appCheck, appCheckReady } = useFirebase();
-  const { presence } = useServices();
 
-  const [status, setStatus] = useState<SessionStatus>("idle");
-  const [code, setCode] = useState<string | null>(null);
-  const [creatorUid, setCreatorUid] = useState<string | null>(null);
-  const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
+  const [state, dispatch] = useReducer(sessionReducer, IDLE_SESSION);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
-  const [error, setError] = useState<SessionErrorCode | null>(null);
-  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [ownName, setOwnNameState] = useState<string>(() =>
     getOrCreateDisplayName(),
   );
+  const handshakes = useRef(0);
 
-  const unsubRef = useRef<Unsubscribe | null>(null);
-  const codeRef = useRef<string | null>(null);
-  const creatorUidRef = useRef<string | null>(null);
-  // The slot we hold, kept in a ref so cleanup can remove the right node
-  // after the component has stopped rendering.
-  const ownSlotRef = useRef<ParticipantIndex | null>(null);
+  const liveCode = state.kind === "live" ? state.code : null;
 
-  // Keep code ref in sync with state for cleanup
+  // The URL names the session once the database holds it, and not before. A
+  // code written up front stayed there after a failed create, and Retry
+  // reloaded into a join of a session that did not exist.
   useEffect(() => {
-    codeRef.current = code;
-  }, [code]);
+    if (liveCode === null) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("code", liveCode);
+    history.replaceState(null, "", url.toString());
+  }, [liveCode]);
 
-  /** Listen for all participant updates. */
-  const listenForParticipants = useCallback(
-    (sessionCode: string) => {
-      const participantsRef = ref(db, `sessions/${sessionCode}/participants`);
+  // Listen for every participant while the session is live. Attached only
+  // then: the participants are readable by slot holders of a live session and
+  // nobody else, so a listener attached before the claim is refused. The
+  // effect's cleanup is what detaches it — on `lost`, `closed` or unmount —
+  // so no handshake can leave one behind.
+  useEffect(() => {
+    if (liveCode === null) return;
+    const code = liveCode;
+    return onValue(
+      ref(db, `sessions/${code}/participants`),
+      (snap) => {
+        const data = snap.val() as Record<string, ParticipantData> | null;
+        if (!data) {
+          setParticipants([]);
+          return;
+        }
 
-      unsubRef.current = onValue(
-        participantsRef,
-        (snap) => {
-          const data = snap.val() as Record<string, ParticipantData> | null;
-          if (!data) {
-            setParticipants([]);
-            return;
+        // Keyed by slot, so there is no allocation to do here at all: the
+        // key *is* the index, arbitrated by the database when the slot was
+        // claimed. The registry this replaces derived an index from whatever
+        // snapshot each client happened to hold.
+        const others: ParticipantInfo[] = [];
+        for (const [slotKey, participant] of Object.entries(data)) {
+          if (participant.uid === uid) continue;
+          const slot = Number(slotKey);
+          // The rules cannot produce a key outside 0..4, but a snapshot is
+          // still untrusted input to this process.
+          if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_PARTICIPANTS) {
+            continue;
           }
-
-          // Keyed by slot now, so there is no allocation to do here at all:
-          // the key *is* the index, arbitrated by the database when the slot
-          // was claimed. The registry this replaces derived an index from
-          // whatever snapshot each client happened to hold.
-          const others: ParticipantInfo[] = [];
-          for (const [slotKey, participant] of Object.entries(data)) {
-            if (participant.uid === uid) continue;
-            const slot = Number(slotKey);
-            // The rules cannot produce a key outside 0..4, but a snapshot is
-            // still untrusted input to this process.
-            if (
-              !Number.isInteger(slot) ||
-              slot < 0 ||
-              slot >= MAX_PARTICIPANTS
-            ) {
-              continue;
-            }
-            others.push({
-              uid: participant.uid,
-              position: { lat: participant.lat, lng: participant.lng },
-              accuracy: participant.accuracy,
-              lastSeen: participant.ts,
-              index: slot as ParticipantIndex,
-              name: sanitizeName(participant.name),
-            });
-          }
-
-          others.sort((a, b) => a.index - b.index);
-          // Whether this means waiting, connected or some_stale is the graph's
-          // to decide. Six `setPhase` call sites used to answer it here, one of
-          // them from inside a `setParticipants` updater — where React requires
-          // purity and StrictMode double-invokes.
-          setParticipants(others);
-        },
-        (err) => {
-          console.error("[session] participants listener error:", err);
-          Sentry.captureException(err, {
-            tags: { phase: "listen", classified: classifyJoinError(err) },
-            contexts: sessionContext(codeRef.current, appCheck !== null),
+          others.push({
+            uid: participant.uid,
+            position: { lat: participant.lat, lng: participant.lng },
+            accuracy: participant.accuracy,
+            lastSeen: participant.ts,
+            index: slot as ParticipantIndex,
+            name: sanitizeName(participant.name),
           });
-          setErrorDetails(describeError(err));
-          setError("CONNECTION_ERROR");
-          setStatus("error");
-        },
-      );
+        }
+
+        others.sort((a, b) => a.index - b.index);
+        // Whether this means waiting, connected or some_stale is the graph's
+        // to decide.
+        setParticipants(others);
+      },
+      (error) => {
+        // RTDB cancels a listener only when it stops letting this client
+        // read: a rules deploy, a revoked token, App Check turning it away.
+        console.error("[session] participants listener error:", error);
+        Sentry.captureException(error, {
+          tags: { phase: "listen", classified: classifyJoinError(error) },
+          contexts: sessionContext(code, appCheck !== null),
+        });
+        dispatch({
+          type: "listenerCancelled",
+          code,
+          details: describeError(error),
+        });
+      },
+    );
+  }, [db, uid, appCheck, liveCode]);
+
+  /** Record a handshake failure once, in the shape the UI and caller need. */
+  const fail = useCallback(
+    (
+      handshake: number,
+      code: SessionErrorCode,
+      details: string | null,
+    ): SessionFailure => {
+      const failure = { code, details };
+      dispatch({ type: "failed", handshake, failure });
+      return failure;
     },
-    [db, uid, appCheck],
+    [],
   );
 
-  /** Record a handshake failure once, in the shape the UI and the caller need. */
-  const fail = useCallback(
-    (code: SessionErrorCode, details: string | null): SessionFailure => {
-      setErrorDetails(details);
-      setError(code);
-      setStatus("error");
-      return { code, details };
+  /** The caller went away mid-handshake: back to idle, nothing recorded. */
+  const abandon = useCallback(
+    (
+      handshake: number,
+      code: "CREATE_FAILED" | "JOIN_FAILED",
+    ): Result<string, SessionFailure> => {
+      dispatch({ type: "abandoned", handshake });
+      return err({ code, details: "aborted" });
     },
     [],
   );
@@ -404,9 +558,8 @@ export function useLiveSession(uid: string): LiveSessionState {
   /** Create a new live session as the creator (index 0). */
   const createSession = useCallback(
     async (signal: AbortSignal): Promise<Result<string, SessionFailure>> => {
-      setStatus("connecting");
-      setError(null);
-      setErrorDetails(null);
+      const handshake = ++handshakes.current;
+      dispatch({ type: "started", handshake, role: "create" });
 
       // Drawn here, but kept off the screen until the database holds it. The
       // code and its share buttons used to appear at this point, before the
@@ -455,48 +608,39 @@ export function useLiveSession(uid: string): LiveSessionState {
           }
         }
 
+        const code = sessionCode;
+        const createdAtMs = await withRetry(
+          () => readCreated(db, code),
+          signal,
+          3,
+          isTransientError,
+        );
+
         // Torn down while the write was in flight. The session exists, but
-        // there is nobody to show it to, and publishing it now would hand this
-        // run's state to whichever handshake replaced it.
-        if (signal.aborted) {
-          return err({ code: "CREATE_FAILED", details: "aborted" });
-        }
+        // there is nobody to show it to.
+        if (signal.aborted) return abandon(handshake, "CREATE_FAILED");
 
         // Only now does the code name a session, so only now does it reach
-        // the screen, the share buttons and the URL. Written to the URL up
-        // front, a failed create left it there, and Retry reloaded into a join
-        // of a session that did not exist.
-        creatorUidRef.current = uid;
-        setCreatorUid(uid);
-        ownSlotRef.current = 0;
-        setOwnIndex(0);
-        setCode(sessionCode);
-        setStatus("ready");
-
-        const url = new URL(window.location.href);
-        url.searchParams.set("code", sessionCode);
-        history.replaceState(null, "", url.toString());
-
-        // Attach the listener only once slot 0 is ours: the participants are
-        // readable by slot holders of a live session and nobody else, so a
-        // listener attached before the write is rejected with
-        // permission_denied. (joinSession attaches its own after the claim.)
-        listenForParticipants(sessionCode);
-
-        return ok(sessionCode);
+        // the screen, the share buttons and the URL.
+        dispatch({
+          type: "succeeded",
+          handshake,
+          code,
+          slot: 0,
+          createdAtMs,
+        });
+        return ok(code);
       } catch (thrown) {
-        if (signal.aborted) {
-          return err({ code: "CREATE_FAILED", details: "aborted" });
-        }
+        if (signal.aborted) return abandon(handshake, "CREATE_FAILED");
         console.error("[session] create failed:", thrown);
         Sentry.captureException(thrown, {
           tags: { phase: "create", classified: classifyJoinError(thrown) },
           contexts: sessionContext(sessionCode, appCheck !== null),
         });
-        return err(fail("CREATE_FAILED", describeError(thrown)));
+        return err(fail(handshake, "CREATE_FAILED", describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [db, uid, appCheck, appCheckReady, fail, abandon],
   );
 
   /** Join an existing session. */
@@ -505,15 +649,14 @@ export function useLiveSession(uid: string): LiveSessionState {
       sessionCode: string,
       signal: AbortSignal,
     ): Promise<Result<string, SessionFailure>> => {
-      setStatus("connecting");
-      setError(null);
-      setErrorDetails(null);
+      const handshake = ++handshakes.current;
+      dispatch({ type: "started", handshake, role: "join" });
 
       // Before anything reaches the database: the code becomes a path, and
       // a mangled link used to fall through to creating a new session, so
       // the joiner sat alone believing they had joined.
       if (!isValidCode(sessionCode)) {
-        return err(fail("INVALID_CODE", null));
+        return err(fail(handshake, "INVALID_CODE", null));
       }
 
       let attestation = "pending";
@@ -527,11 +670,12 @@ export function useLiveSession(uid: string): LiveSessionState {
         //
         // The `.read` rule is `created > now - 24h`. For a session that was
         // never written, `created` is null and RTDB compares null to a number
-        // as false — so a missing session is *denied*, not returned empty.
-        // Classifying that denial here rather than in the shared catch is what
-        // makes SESSION_NOT_FOUND reachable at all; the branch below could
-        // never fire against real rules, because `get` throws before it can
-        // return a null snapshot.
+        // as false — so a missing session is *denied*, not returned empty,
+        // and so is an expired one: on purpose, so that nobody can probe the
+        // code space for sessions. Classifying that denial here rather than
+        // in the shared catch is what makes SESSION_NOT_FOUND reachable at
+        // all; the branch below could never fire against real rules, because
+        // `get` throws before it can return a null snapshot.
         //
         // But a denial is a statement about the session only if this device
         // may read at all, so that is checked before the session is blamed —
@@ -554,19 +698,26 @@ export function useLiveSession(uid: string): LiveSessionState {
             classifyJoinError(readRefused) === "JOIN_PERMISSION_DENIED" &&
             (await canReadAtAll(db))
           ) {
-            return err(fail("SESSION_NOT_FOUND", describeError(readRefused)));
+            return err(
+              fail(handshake, "SESSION_NOT_FOUND", describeError(readRefused)),
+            );
           }
           throw readRefused;
         }
-        const created = snaps[0].val() as number | null;
+        const created: unknown = snaps[0].val();
         const sessionCreator = snaps[1].val() as string | null;
 
-        if (!sessionCreator) {
-          return err(fail("SESSION_NOT_FOUND", null));
-        }
-
-        if (created && Date.now() - created > SESSION_TTL_MS) {
-          return err(fail("SESSION_EXPIRED", null));
+        // Both or neither under real rules: `creatorUid` is readable only
+        // while `created` says the session is fresh. A session with one and
+        // not the other is not one this client could join, or time.
+        //
+        // There is no expiry check of its own here any more. The rules have
+        // already refused an expired session above, as not found; the check
+        // that stood here compared `created` with this device's clock, so it
+        // could fire only when that clock ran fast — refusing a session the
+        // server still held open.
+        if (!sessionCreator || typeof created !== "number") {
+          return err(fail(handshake, "SESSION_NOT_FOUND", null));
         }
 
         // No client-side count: the database decides. `claimSlot` returns null
@@ -578,24 +729,23 @@ export function useLiveSession(uid: string): LiveSessionState {
           3,
           isTransientError,
         );
+        // Torn down while the claim was in flight: the slot may be ours now,
+        // and a rejoin will find it, but this run has nobody to report to.
+        if (signal.aborted) return abandon(handshake, "JOIN_FAILED");
         if (slot === null) {
-          return err(fail("SESSION_FULL", null));
+          return err(fail(handshake, "SESSION_FULL", null));
         }
 
-        creatorUidRef.current = sessionCreator;
-        setCreatorUid(sessionCreator);
-        ownSlotRef.current = slot;
-
-        setCode(sessionCode);
-        setOwnIndex(slot);
-        setStatus("ready");
-
-        listenForParticipants(sessionCode);
+        dispatch({
+          type: "succeeded",
+          handshake,
+          code: sessionCode,
+          slot,
+          createdAtMs: created,
+        });
         return ok(sessionCode);
       } catch (thrown) {
-        if (signal.aborted) {
-          return err({ code: "JOIN_FAILED", details: "aborted" });
-        }
+        if (signal.aborted) return abandon(handshake, "JOIN_FAILED");
         // No promotion on a failed attestation. It used to relabel any opaque failure
         // as an attestation block, written when a failed attestation was the
         // rare suspected cause. It is not rare: App Check reports ~89% of RTDB
@@ -610,10 +760,10 @@ export function useLiveSession(uid: string): LiveSessionState {
           tags: { phase: "join", classified, attestation },
           contexts: sessionContext(sessionCode, appCheck !== null),
         });
-        return err(fail(classified, describeError(thrown)));
+        return err(fail(handshake, classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [db, uid, appCheck, appCheckReady, fail, abandon],
   );
 
   /**
@@ -628,58 +778,17 @@ export function useLiveSession(uid: string): LiveSessionState {
     setOwnNameState(saveDisplayName(raw));
   }, []);
 
-  /**
-   * Remove own presence but stay in the session, still listening — for a
-   * device that stops sharing without leaving. The next presence write puts
-   * it back.
-   */
-  const withdraw = useCallback(() => {
-    // Read, never clear. Clearing here and then gating the removal on it made
-    // cleanup non-idempotent: a second call — which React will make whenever
-    // this callback's identity changes — found a null slot and skipped the
-    // removal, leaving our participant node behind to drag the midpoint.
-    // `remove` is itself idempotent, so running twice costs nothing.
-    const slot = ownSlotRef.current;
-
-    if (codeRef.current !== null && slot !== null) {
-      // The write side is the graph's; removal is not a derivation, so it
-      // stays here. Only `participants/{slot}` goes — the `slots/{i}` claim is
-      // write-once and stays, so a reconnect comes back to the same slot and
-      // the same colour. `onDisconnect` is the backstop if this does not
-      // complete during unload.
-      presence.remove(codeRef.current, slot);
-    }
-  }, [presence]);
-
-  /** Detach the listener and remove own presence. */
-  const cleanup = useCallback(() => {
-    if (unsubRef.current) {
-      unsubRef.current();
-      unsubRef.current = null;
-    }
-    withdraw();
-  }, [withdraw]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup();
-    };
-  }, [cleanup]);
+  const close = useCallback(() => {
+    dispatch({ type: "closed" });
+  }, []);
 
   return {
-    status,
-    code,
-    creatorUid,
-    ownIndex,
+    state,
     ownName,
     participants,
-    error,
-    errorDetails,
     createSession,
     joinSession,
     setOwnName,
-    withdraw,
-    cleanup,
+    close,
   };
 }

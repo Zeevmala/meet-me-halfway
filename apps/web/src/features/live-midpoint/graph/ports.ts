@@ -49,5 +49,14 @@ export interface GraphPorts {
     value: PresenceValue,
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
+  /**
+   * Delete own location at the claimed slot. The presence node calls it the
+   * moment it stops publishing, whatever the reason — location turned off,
+   * the session lost, expired or closed — so the node that writes the
+   * position is the one that deletes it. Fire and forget: RTDB sends it over
+   * the open socket at once, and the server-side `onDisconnect` is the
+   * backstop.
+   */
+  readonly removePresence: (code: string, slot: ParticipantIndex) => void;
   readonly placesEnabled: boolean;
 }

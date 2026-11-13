@@ -16,10 +16,16 @@ import type { Connectivity } from "../../hooks/useNetworkStatus";
 import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import type { GeoStatus } from "./hooks/useLiveGeolocation";
-import { useLiveSession } from "./hooks/useLiveSession";
+import { CLOSED_SESSION, useLiveSession } from "./hooks/useLiveSession";
+import type { SessionFailure, SessionState } from "./hooks/useLiveSession";
 import { useOverlayInsets } from "./hooks/useOverlayInsets";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
-import type { OtherParticipantView, TravelProfile } from "./graph/types";
+import { sessionCode, sessionSlot } from "./graph/nodes";
+import type {
+  OtherParticipantView,
+  SessionPhase,
+  TravelProfile,
+} from "./graph/types";
 import type { RankedVenue } from "./lib/venue-ranking";
 import { normalizeCode } from "./lib/session-code";
 import { participantInitial } from "./lib/display-name";
@@ -78,6 +84,27 @@ const GEO_ERROR_SCREENS: Record<
     offerReload: false,
   },
 };
+
+/**
+ * What the error panel says when the session has ended, or `null` while it
+ * has not. The phase decides — expiry is the graph's, derived from the clock —
+ * and the session supplies the details. Both have to agree: the graph takes
+ * the session one render later, and in that render the page stays as it was
+ * rather than guessing.
+ */
+function endedSession(
+  phase: SessionPhase,
+  state: SessionState,
+): SessionFailure | null {
+  if (phase === "expired") return { code: "SESSION_EXPIRED", details: null };
+  if (phase === "failed" && state.kind === "failed") {
+    return { code: state.reason, details: state.details };
+  }
+  if (phase === "lost" && state.kind === "lost") {
+    return { code: "CONNECTION_ERROR", details: state.details };
+  }
+  return null;
+}
 
 /**
  * Read ?code= from the URL, normalised but not validated: `joinSession`
@@ -156,39 +183,32 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   // render → setSources — which cost two commits per fix and let position and
   // accuracy in the same slot vector come from two different fixes, because
   // accuracy was already read directly from `geo`.
+  //
+  // Turning location off is turning sharing off: the denial clears the
+  // position, and the presence node removes what it had published. So does a
+  // session that is lost, expired or closed — it is the one place own position
+  // is written and deleted. Transient GPS failures keep the last fix on
+  // purpose.
   useEffect(() => {
     runtime.setSources({
-      ownSlot: session.ownIndex,
+      session: session.state,
       ownPosition: geo.position,
       ownAccuracy: geo.accuracy,
       participants: session.participants,
-      sessionCode: session.code,
       ownUid: uid,
       ownName: session.ownName,
-      sessionStatus: session.status,
       serverTimeOffsetMs,
     });
   }, [
     runtime,
     uid,
-    session.ownIndex,
+    session.state,
     session.participants,
-    session.code,
     session.ownName,
-    session.status,
     geo.position,
     geo.accuracy,
     serverTimeOffsetMs,
   ]);
-
-  // Turning location off is turning sharing off. The denial clears the
-  // position, so nothing new is published; this takes down what already was,
-  // which would otherwise stay on everyone's map — and in the database — until
-  // the page closed. Transient GPS failures keep the last fix on purpose.
-  const { withdraw } = session;
-  useEffect(() => {
-    if (geo.status === "denied") withdraw();
-  }, [geo.status, withdraw]);
 
   // Selection and travel mode live in the graph rather than in React state.
   // Mirroring them would give two sources of truth: the list would highlight
@@ -285,17 +305,17 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return stopGeo;
   }, [startGeo, stopGeo]);
 
-  // Read once per mount, not inside the effect: createSession rewrites the URL
-  // to ?code=<new code>, so a re-run that read it again would try to *join*
-  // the session its aborted predecessor never wrote.
+  // Read once per mount, not inside the effect: a live session writes its
+  // code to the URL, so a re-run that read it again could try to *join* a
+  // session its predecessor created.
   const [urlCode] = useState(getCodeFromURL);
 
   // The handshake returns a Result rather than throwing. It used to throw into
   // this effect with no `.catch()`, so every failed join raised an unhandled
   // rejection on top of the Sentry event the hook already recorded. The
   // controller cancels the retry loop if we unmount mid-handshake; both
-  // handshakes check it before their first write, so an aborted run leaves
-  // nothing behind for the next one to trip over.
+  // handshakes check it before their first write, and the session drops any
+  // late result from a handshake it is no longer waiting on.
   useEffect(() => {
     const controller = new AbortController();
 
@@ -319,16 +339,26 @@ function LiveMidpointInner({ uid }: { uid: string }) {
   // `presence` node owns that write, with the debounce, admission control,
   // retry, timeout and breaker every other effectful node gets.
 
-  // ── beforeunload cleanup ──
-  const cleanupRef = useRef(session.cleanup);
-  cleanupRef.current = session.cleanup;
+  // ── Leaving the page ──
+  const closeRef = useRef(session.close);
+  closeRef.current = session.close;
   const geoStopRef = useRef(geo.stop);
   geoStopRef.current = geo.stop;
 
   useEffect(() => {
-    const handleUnload = () => {
+    // `pagehide` only. It fires whenever the page really goes — closed,
+    // navigated away, put in the back/forward cache — on iOS Safari too,
+    // where `beforeunload` is unreliable. `beforeunload` exists so a page can
+    // cancel a navigation, so it can fire for one that never happens, and it
+    // used to tear down the listener and GPS of a page that stayed open.
+    const handlePageHide = () => {
+      // Synchronously: React would render after the page is gone. Pushed
+      // straight into the graph, `closed` stops the presence node and
+      // removes own position now, over the socket that is still open; the
+      // render that follows pushes the same value, a no-op.
+      runtime.setSources({ session: CLOSED_SESSION });
+      closeRef.current();
       geoStopRef.current();
-      cleanupRef.current();
     };
     // Restored from the back/forward cache, the page comes back without the
     // listener and GPS that pagehide tore down, and nothing restarts them:
@@ -336,21 +366,17 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     const handleShow = (event: PageTransitionEvent) => {
       if (event.persisted) window.location.reload();
     };
-    // pagehide also fires on iOS Safari, where beforeunload is unreliable.
-    window.addEventListener("beforeunload", handleUnload);
-    window.addEventListener("pagehide", handleUnload);
+    window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("pageshow", handleShow);
     return () => {
-      window.removeEventListener("beforeunload", handleUnload);
-      window.removeEventListener("pagehide", handleUnload);
+      window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("pageshow", handleShow);
-      // Intentionally do NOT call handleUnload() here. The session and
-      // geolocation hooks already tear themselves down on unmount via their
-      // own cleanup effects. Running the full teardown on every React unmount
-      // breaks StrictMode's dev remount cycle (mount→unmount→mount), where the
-      // init effect is guarded by initRef and never restarts GPS/the listener.
+      // Intentionally no teardown here. An unmount is not the page leaving:
+      // StrictMode's dev cycle (mount → unmount → mount) runs this too. The
+      // listener detaches with its own effect, and the graph's runtime removes
+      // own position when it is disposed.
     };
-  }, []);
+  }, [runtime]);
 
   // ── Error states ──
   // Every location failure gets the same way out. The denied screen used to
@@ -399,16 +425,15 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
-  if (graph.phase === "error") {
+  const ended = endedSession(graph.phase, session.state);
+  if (ended !== null) {
     return (
-      <SessionErrorPanel
-        errorCode={session.error ?? "CONNECTION_ERROR"}
-        errorDetails={session.errorDetails}
-      />
+      <SessionErrorPanel errorCode={ended.code} errorDetails={ended.details} />
     );
   }
 
-  const ownIndex = session.ownIndex ?? (0 as ParticipantIndex);
+  const code = sessionCode(session.state);
+  const ownIndex = sessionSlot(session.state) ?? (0 as ParticipantIndex);
 
   const isConnected =
     graph.phase === "connected" || graph.phase === "some_stale";
@@ -432,9 +457,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       {/* Everything drawn over the top of the map. Measured, like the sheet:
           an overlay outside these two is one the camera cannot see. */}
       <div className="live-topbar" ref={setTopbarEl}>
-        {session.code && (
+        {code && (
           <SessionBadge
-            code={session.code}
+            code={code}
             phase={graph.phase}
             ownConnected={geo.status === "watching"}
             ownIndex={ownIndex}
@@ -469,16 +494,18 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             on one for as long as its handshake took — forever, on a device
             that could not connect — and a creator would too, now that its
             code appears only once the session is written. */}
-        {session.code === null && graph.phase === "creating" && (
+        {(graph.phase === "creating" || graph.phase === "joining") && (
           <div
             className="live-card live-glass live-waiting-shimmer live-handshake"
             role="status"
           >
-            {t(urlCode === null ? "live.creating" : "live.connecting")}
+            {t(
+              graph.phase === "creating" ? "live.creating" : "live.connecting",
+            )}
           </div>
         )}
 
-        {session.code &&
+        {code &&
           (isConnected && graph.midpoint && ownPosition ? (
             <>
               {placesEnabled && (
@@ -504,7 +531,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               />
             </>
           ) : (
-            <WaitingCard code={session.code} />
+            <WaitingCard code={code} />
           ))}
       </div>
     </main>

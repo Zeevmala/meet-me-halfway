@@ -35,9 +35,11 @@ SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
   useLiveGeolocation ────┤   (clock)      (SoA,    │               │            │
   ui.selectedVenueId ────┤                 stable) │               └──► destination
   ui.travelProfile ──────┤                         │                        │
-  ui.ownName ────────────┴──► presence             └──► phase               │
-                             (RTDB write)                                   ▼
-                                                              routes ──► frame
+  ui.ownName ────────────┼──► presence ◄─┐         └──► phase               │
+                         │   (RTDB write,│                ▲                 ▼
+                         │    and delete)│                │   routes ──► frame
+                         └──► expiry ────┴────────────────┘
+                             (clock)
 ```
 
 `useLiveGeolocation`, `useLiveSession`, `useAuth` and `useNetworkStatus` are
@@ -63,10 +65,11 @@ the edges declared, it is a failing test that names both nodes.
 | Node | Kind | Input | Output | On failure |
 |---|---|---|---|---|
 | `liveness` | pure | participants, server clock | `stale[]` + `departed[]` + `nextFlipAtMs` | — |
+| `expiry` | pure | session, server clock | `expired` + `flipAtMs` | — |
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
-| `presence` | effectful | session + own position | RTDB write | report failed |
+| `presence` | effectful | a live session, not expired, + own position | RTDB write; deletes what it wrote once that stops | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
-| `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
+| `phase` | pure | session, `expiry`, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `midpoint` | raw `PlaceResult[]` | degrade to empty |
 | `destination` | pure | `midpoint`, `venues`, selection | `LatLng \| null` | — |
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
@@ -101,6 +104,11 @@ last seen for as long as their node stayed in the database.
 Against the device clock alone, a phone running minutes slow saw a fresh peer
 as stale, and one running fast saw a departed peer as live.
 
+`expiry` is the same kind of node with a wake of its own: the session's 24
+hours, `created + 24 h` against the server clock, mirroring the rules'
+`now - 86400000`. The rules enforce it; the graph mirrors it only to know
+when, so that it stops writing and says so instead of being refused.
+
 ### The slot is a server-arbitrated resource
 
 A slot is claimed by writing `sessions/{code}/slots/{i}` under a write-once
@@ -123,6 +131,101 @@ permanently — unchanged from the write-once `participantUids` it replaces.
 `MAX_PARTICIPANTS`, with `null` for a vacant slot. Routes, accuracy circles,
 marker colours and Mapbox layer ids all key off the same `i`. They previously
 did not, which is covered under *Slot identity* below.
+
+---
+
+## Session lifecycle
+
+`useLiveSession` is a reducer over one union, and the graph derives what the
+user sees from it. Green states are the graph's, derived from the roster and
+the server clock with no timers in the hook; in grey ones nothing is
+published; the rest are the reducer's.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> idle
+    idle --> creating : no code in the URL
+    idle --> joining : ?code= in the URL
+
+    creating --> creating : code taken, draw another (3 at most)
+    creating --> live : session written
+    creating --> idle : unmounted mid-handshake
+    creating --> failed : CREATE_FAILED
+
+    joining --> live : slot claimed
+    joining --> idle : unmounted mid-handshake
+    joining --> failed : INVALID_CODE · SESSION_NOT_FOUND · SESSION_FULL · JOIN_*
+
+    state live {
+        direction TB
+        [*] --> waiting
+        waiting --> connected : a peer counts
+        connected --> some_stale : a peer silent 30 s
+        some_stale --> connected : it writes again
+        connected --> waiting : no peer counts
+        some_stale --> waiting : no peer counts
+    }
+
+    live --> lost : listener cancelled
+    live --> expired : server clock reaches created + 24 h
+    lost --> expired : server clock reaches created + 24 h
+    live --> closed : pagehide
+    lost --> closed : pagehide
+
+    failed --> [*]
+    expired --> [*]
+    closed --> [*]
+
+    note right of live
+        Listener attached. Presence publishes
+        while there is a position.
+        Leaving live, for any reason, detaches
+        the listener and removes your position.
+    end note
+
+    classDef derived fill:#ddf6ec,stroke:#00a383,stroke-width:2px,color:#0b3d2e
+    classDef stopped fill:#f2f2f2,stroke:#9a9a9a,color:#333
+    class waiting, connected, some_stale, expired derived
+    class failed, lost, closed stopped
+```
+
+`sessionReducer`'s tests walk every transition here. Five rules come with it:
+
+- **One owner for own position.** The `presence` node publishes only into a
+  `live` session that has not expired, with a position, and when any of that
+  stops — location turned off, the session lost, expired or closed, the
+  runtime disposed — it deletes what it published. The session hook used to
+  delete it while the graph wrote it, and a write still retrying in the graph
+  put back a position the hook had just removed.
+- **Effects follow state.** Entering `live` attaches the participants
+  listener and writes the code to the URL; leaving detaches it. Handshakes
+  only report what happened, so nothing they do can outlive the state it was
+  for.
+- **Results of a handshake nobody waits on are dropped.** `creating` and
+  `joining` carry the handshake's id; the reducer ignores anything from
+  another — StrictMode's remount starts a second handshake before the first
+  has noticed its abort. An ignored event returns the same object, so React
+  does not even re-render.
+- **Expiry is derived, not timed.** See `expiry` above. Every participant
+  reaches `expired` within a second of the others.
+- **One value at the boundary.** The graph takes the lifecycle as a single
+  `SessionLifecycle`, not a code, a slot and a status that could disagree.
+
+`pagehide` is the only teardown signal, and it acts synchronously: React would
+render after the page is gone, so the handler pushes `closed` straight into the
+graph — the presence node deletes the position over the socket that is still
+open — and the render that follows pushes the same value, a no-op. The
+server-side `onDisconnect` stays as the backstop. `beforeunload` is not used:
+it exists so a page can cancel a navigation, so it fires for some that never
+happen, and it used to tear down a page that stayed open.
+
+Joining has no expiry check of its own. The rules refuse a read of an expired
+session exactly as of a missing one, on purpose, so codes cannot be probed;
+the join already reports it as not found, and that copy says the session may
+have expired. The check that stood there compared `created` with the device's
+clock, so it fired only when that clock ran fast.
 
 ---
 
@@ -266,6 +369,11 @@ tests.
 | **Config read in eight places.** `ports.ts` claimed to have ended this; the Places key was still read in three modules, so the flag rendering the venue list and the client calling the API were separate reads that could disagree. `validateEnv` checked five of six required variables, omitting the one whose absence silently disables App Check. | throughout |
 | **Half-open wedge.** A refusal — a rules denial, a 4xx — is not held against the breaker, and it recorded nothing at all. A half-open probe refused that way left the breaker half-open for good: `allow()` refuses while a probe is out and `retryAtMs()` has nothing to wake on, so the node never made another call until the page was reloaded. | `core/dag/breaker` + `resource` |
 | **Withdrawn position written back.** `request(null)` cleared the input waiting to fire but not the dispatch in flight, so after a denial cleared the position, a failed presence write's retry loop put it back — after `withdraw()` had removed it, against privacy.html's promise that turning location off deletes it. | `core/dag/resource` |
+| **Publishing behind the error screen.** A cancelled participants listener set status `error` but left the code and slot in place, and the presence node never read the status: behind "Connection problem", the page kept publishing the user's position every 10 s while showing them no one. | `useLiveSession` + `runtime` |
+| **Refused writes, forever, after 24 hours.** Nothing modelled a session expiring while its page stayed open. The rules refused every presence write, and the node offered it again every 3 s for as long as the page lived, behind a "Retrying…" banner. | `runtime` |
+| **Expiry judged by the device clock.** The join compared `created` with `Date.now()`. The rules already refuse an expired session's reads, so the check could fire only when the device's clock ran fast — refusing a session the server still held open. | `useLiveSession` |
+| **Listener leaked by an aborted join.** The join checked for an abort only before its first write. Torn down while its slot claim was in flight, it published its state and attached a participants listener after the cleanup that would have removed it had already run. | `useLiveSession` |
+| **Teardown on a navigation that never happened.** `beforeunload` detached the listener and stopped GPS, and it can fire for a navigation that is then not made — leaving a page that stayed open frozen. | `LiveMidpointPage` |
 
 ---
 

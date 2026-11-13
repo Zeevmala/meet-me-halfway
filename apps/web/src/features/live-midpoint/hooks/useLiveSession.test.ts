@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useLiveSession } from "./useLiveSession";
-import type { SessionFailure } from "./useLiveSession";
+import { IDLE_SESSION, sessionReducer, useLiveSession } from "./useLiveSession";
+import type {
+  SessionEvent,
+  SessionFailure,
+  SessionState,
+} from "./useLiveSession";
+import { sessionCode, sessionSlot } from "../graph/nodes";
 import type { Result } from "../../../core/dag/result";
 
 // ── Mock firebase/database ──
@@ -53,13 +58,13 @@ vi.mock("../../../hooks/useFirebase", () => ({
   }),
 }));
 
-// ── Mock the injected services (the hook only reads the presence writer) ──
-const mockPresenceRemove = vi.fn();
-vi.mock("../../../components/ServicesProvider", () => ({
-  useServices: () => ({
-    presence: { write: vi.fn(), remove: mockPresenceRemove },
-  }),
-}));
+/** What the server stamped as `created`; the creator reads it back. */
+const CREATED_AT = 1_700_000_000_000;
+
+/** The reason a handshake failed, or `null` while it has not. */
+function reasonOf(state: SessionState) {
+  return state.kind === "failed" ? state.reason : null;
+}
 
 /** Handshakes take a signal now, so an unmount can cancel the retry loop. */
 const live = () => new AbortController().signal;
@@ -144,9 +149,17 @@ beforeEach(() => {
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
   mockOnDisconnectRemove.mockResolvedValue(undefined);
-  mockPresenceRemove.mockReset();
   mockAppCheck = null;
   mockAppCheckReady = Promise.resolve({ ok: true, reason: "token" });
+  // Every case starts from a fresh session record; a case that needs another
+  // replaces it. Implementations would otherwise carry over between cases.
+  mockGet.mockReset();
+  mockSession(
+    { created: CREATED_AT, creatorUid: "creator-uid" },
+    {
+      "0": "creator-uid",
+    },
+  );
 
   // Mock window.location and history
   vi.stubGlobal("location", { href: "http://localhost:5173/", search: "" });
@@ -157,11 +170,11 @@ describe("useLiveSession", () => {
   it("starts idle with no code or index", () => {
     const { result } = renderHook(() => useLiveSession(TEST_UID));
 
-    expect(result.current.status).toBe("idle");
-    expect(result.current.code).toBeNull();
-    expect(result.current.ownIndex).toBeNull();
+    expect(result.current.state).toBe(IDLE_SESSION);
+    expect(sessionCode(result.current.state)).toBeNull();
+    expect(sessionSlot(result.current.state)).toBeNull();
     expect(result.current.participants).toEqual([]);
-    expect(result.current.error).toBeNull();
+    expect(reasonOf(result.current.state)).toBeNull();
   });
 
   describe("createSession", () => {
@@ -211,9 +224,9 @@ describe("useLiveSession", () => {
       });
       await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
 
-      expect(result.current.status).toBe("connecting");
-      expect(result.current.code).toBeNull();
-      expect(result.current.ownIndex).toBeNull();
+      expect(result.current.state.kind).toBe("creating");
+      expect(sessionCode(result.current.state)).toBeNull();
+      expect(sessionSlot(result.current.state)).toBeNull();
       expect(history.replaceState).not.toHaveBeenCalled();
 
       await act(async () => {
@@ -221,9 +234,9 @@ describe("useLiveSession", () => {
         await pending;
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.code).toBe("ABC234");
-      expect(result.current.ownIndex).toBe(0);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionCode(result.current.state)).toBe("ABC234");
+      expect(sessionSlot(result.current.state)).toBe(0);
     });
 
     // A taken code is redrawn; a link to the first one would have named a
@@ -244,14 +257,14 @@ describe("useLiveSession", () => {
       });
       await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(2));
 
-      expect(result.current.code).toBeNull();
+      expect(sessionCode(result.current.state)).toBeNull();
 
       await act(async () => {
         update.land();
         await pending;
       });
 
-      expect(result.current.code).toBe("XYZ789");
+      expect(sessionCode(result.current.state)).toBe("XYZ789");
     });
 
     it("publishes nothing when torn down while the write was in flight", async () => {
@@ -277,8 +290,8 @@ describe("useLiveSession", () => {
         ok: false,
         error: { code: "CREATE_FAILED", details: "aborted" },
       });
-      expect(result.current.code).toBeNull();
-      expect(result.current.error).toBeNull();
+      expect(sessionCode(result.current.state)).toBeNull();
+      expect(reasonOf(result.current.state)).toBeNull();
       expect(history.replaceState).not.toHaveBeenCalled();
       expect(mockRef).not.toHaveBeenCalledWith(
         mockDb,
@@ -293,9 +306,9 @@ describe("useLiveSession", () => {
         await result.current.createSession(live());
       });
 
-      expect(result.current.ownIndex).toBe(0);
-      expect(result.current.status).toBe("ready");
-      expect(result.current.code).toBe("ABC234");
+      expect(sessionSlot(result.current.state)).toBe(0);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionCode(result.current.state)).toBe("ABC234");
     });
 
     it("returns the generated session code", async () => {
@@ -333,7 +346,7 @@ describe("useLiveSession", () => {
         await result.current.createSession(live());
       });
 
-      expect(result.current.error).toBe("CREATE_FAILED");
+      expect(reasonOf(result.current.state)).toBe("CREATE_FAILED");
       expect(history.replaceState).not.toHaveBeenCalled();
     });
 
@@ -352,7 +365,7 @@ describe("useLiveSession", () => {
       });
 
       expect(created).toEqual({ ok: true, value: "XYZ789" });
-      expect(result.current.code).toBe("XYZ789");
+      expect(sessionCode(result.current.state)).toBe("XYZ789");
       expect(mockUpdate).toHaveBeenCalledTimes(2);
       expect(mockUpdate).toHaveBeenLastCalledWith(
         expect.objectContaining({ path: "sessions/XYZ789" }),
@@ -373,7 +386,7 @@ describe("useLiveSession", () => {
         await result.current.createSession(live());
       });
 
-      expect(result.current.error).toBe("CREATE_FAILED");
+      expect(reasonOf(result.current.state)).toBe("CREATE_FAILED");
       expect(mockGenerateCode).toHaveBeenCalledTimes(3);
       expect(mockUpdate).toHaveBeenCalledTimes(3);
     });
@@ -433,8 +446,8 @@ describe("useLiveSession", () => {
         }
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("CREATE_FAILED");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("CREATE_FAILED");
     });
 
     // Regression: the participants listener must attach only once slot 0 is
@@ -476,8 +489,8 @@ describe("useLiveSession", () => {
         ok: false,
         error: { code: "INVALID_CODE", details: null },
       });
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("INVALID_CODE");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("INVALID_CODE");
       expect(mockGet).not.toHaveBeenCalled();
       expect(mockSet).not.toHaveBeenCalled();
     });
@@ -500,7 +513,7 @@ describe("useLiveSession", () => {
       const paths = mockGet.mock.calls.map(
         ([r]) => (r as { path: string }).path,
       );
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
       expect(paths).not.toContain("sessions/XYZ789");
       expect(paths).not.toContain("sessions/XYZ789/participants");
     });
@@ -518,8 +531,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_NOT_FOUND");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("SESSION_NOT_FOUND");
     });
 
     it("sets phase to error if session has no creatorUid", async () => {
@@ -531,8 +544,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_NOT_FOUND");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("SESSION_NOT_FOUND");
     });
 
     it("reports SESSION_NOT_FOUND when the session read is denied", async () => {
@@ -550,8 +563,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_NOT_FOUND");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("SESSION_NOT_FOUND");
     });
 
     // The same denial comes back when it is the device being turned away — no
@@ -570,8 +583,8 @@ describe("useLiveSession", () => {
       expect(mockGet).toHaveBeenCalledWith(
         expect.objectContaining({ path: "probe" }),
       );
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("JOIN_PERMISSION_DENIED");
     });
 
     it("does not claim SESSION_FULL when a refused slot stays empty", async () => {
@@ -597,9 +610,9 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).not.toBe("SESSION_FULL");
-      expect(result.current.error).toBe("JOIN_PERMISSION_DENIED");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).not.toBe("SESSION_FULL");
+      expect(reasonOf(result.current.state)).toBe("JOIN_PERMISSION_DENIED");
     });
 
     it("advances to the next index when a claim genuinely loses the race", async () => {
@@ -623,8 +636,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBe(2);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionSlot(result.current.state)).toBe(2);
     });
 
     it("reports SESSION_FULL when all five slots are claimed", async () => {
@@ -647,8 +660,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_FULL");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("SESSION_FULL");
     });
 
     it("claims a slot and sets ownIndex on successful join", async () => {
@@ -669,8 +682,8 @@ describe("useLiveSession", () => {
         }),
         TEST_UID,
       );
-      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
-      expect(result.current.code).toBe("XYZ789");
+      expect(sessionSlot(result.current.state)).toBeGreaterThanOrEqual(1);
+      expect(sessionCode(result.current.state)).toBe("XYZ789");
     });
 
     it("sets phase to 'connected' if another participant has data", async () => {
@@ -683,15 +696,21 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
     });
 
-    it("sets phase to error if session is expired (>24h)", async () => {
-      const expiredTime = Date.now() - 25 * 60 * 60 * 1000;
-      mockSession({
-        created: expiredTime,
-        creatorUid: "creator-uid",
-      });
+    // The rules refuse every read of an expired session, so a join that could
+    // read `created` was told by the server the session is open. The check
+    // that stood here compared it with this device's clock instead — so it
+    // fired only when that clock ran fast, refusing a session still open.
+    it("does not second-guess the server with this device's clock", async () => {
+      // A day and an hour old by a clock running fast; the server, which
+      // answered the read, says it is not.
+      const created = Date.now() - 25 * 60 * 60 * 1000;
+      mockSession(
+        { created, creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
@@ -699,8 +718,28 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_EXPIRED");
+      expect(result.current.state.kind).toBe("live");
+      expect(reasonOf(result.current.state)).toBeNull();
+    });
+
+    // Expiry is timed by the graph against the server's clock; the joined
+    // session carries the server's own stamp for it.
+    it("carries the session's server-stamped `created` into the live state", async () => {
+      mockSession(
+        { created: CREATED_AT, creatorUid: "creator-uid" },
+        { "0": "creator-uid" },
+      );
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.state).toMatchObject({
+        kind: "live",
+        createdAtMs: CREATED_AT,
+      });
     });
 
     it("joins successfully if session is less than 24h old", async () => {
@@ -716,11 +755,15 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionSlot(result.current.state)).toBeGreaterThanOrEqual(1);
     });
 
-    it("joins successfully if session has no created field (graceful)", async () => {
+    // Unreachable under the real rules — `creatorUid` is readable only while
+    // `created` says the session is fresh — and a session with no `created`
+    // could not be timed, so it is not one to join. It used to be joined
+    // "gracefully", with no end.
+    it("refuses a session with no `created` stamp", async () => {
       mockSession({ creatorUid: "creator-uid" }, { "0": "creator-uid" });
 
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -729,25 +772,27 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBeGreaterThanOrEqual(1);
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("SESSION_NOT_FOUND");
+      expect(mockSet).not.toHaveBeenCalled();
     });
 
-    it("rejects session at exact 24h boundary", async () => {
-      const exactBoundary = Date.now() - 24 * 60 * 60 * 1000 - 1;
-      mockSession({
-        created: exactBoundary,
-        creatorUid: "creator-uid",
-      });
-
+    it("reads `created` back after a create, since the server stamped it", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
-        await result.current.joinSession("XYZ789", live());
+        await result.current.createSession(live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("SESSION_EXPIRED");
+      expect(mockGet).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "sessions/ABC234/created" }),
+      );
+      expect(result.current.state).toMatchObject({
+        kind: "live",
+        code: "ABC234",
+        slot: 0,
+        createdAtMs: CREATED_AT,
+      });
     });
 
     it("sets phase to 'waiting' if no other participant has data", async () => {
@@ -762,7 +807,7 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
     });
 
     it("reuses the slot it already holds when rejoining", async () => {
@@ -777,8 +822,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBe(1);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionSlot(result.current.state)).toBe(1);
       // Idempotent: holding a slot already means claiming nothing.
       expect(mockSet).not.toHaveBeenCalledWith(
         expect.objectContaining({ path: "sessions/XYZ789/slots/1" }),
@@ -807,8 +852,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("JOIN_FAILED");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("JOIN_FAILED");
     });
 
     it("keeps the generic JOIN_FAILED when attestation succeeded", async () => {
@@ -821,8 +866,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("JOIN_FAILED");
+      expect(result.current.state.kind).toBe("failed");
+      expect(reasonOf(result.current.state)).toBe("JOIN_FAILED");
     });
 
     it("waits for the shared attestation promise before touching RTDB", async () => {
@@ -855,7 +900,7 @@ describe("useLiveSession", () => {
       });
 
       expect(joined).toBe(true);
-      expect(result.current.ownIndex).toBe(1);
+      expect(sessionSlot(result.current.state)).toBe(1);
     });
 
     it("still completes the handshake when attestation never succeeds", async () => {
@@ -874,8 +919,8 @@ describe("useLiveSession", () => {
         await result.current.joinSession("XYZ789", live());
       });
 
-      expect(result.current.status).toBe("ready");
-      expect(result.current.ownIndex).toBe(1);
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionSlot(result.current.state)).toBe(1);
     });
   });
 
@@ -914,7 +959,7 @@ describe("useLiveSession", () => {
         lng: 35.21,
       });
       expect(result.current.participants[0].accuracy).toBe(15);
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
     });
 
     it("handles multiple participants", async () => {
@@ -961,7 +1006,7 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.participants).toHaveLength(3);
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
     });
 
     it("clears participants when data is null", async () => {
@@ -993,7 +1038,7 @@ describe("useLiveSession", () => {
         });
       });
 
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
 
       act(() => {
         onValueCallback?.({ val: () => null });
@@ -1013,8 +1058,14 @@ describe("useLiveSession", () => {
         onValueErrorCallback?.(new Error("Permission denied"));
       });
 
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toBe("CONNECTION_ERROR");
+      // Lost, not failed: the session exists, keeps its code and slot, and
+      // the listener the server cancelled is detached with the state.
+      expect(result.current.state).toMatchObject({
+        kind: "lost",
+        code: "ABC234",
+        slot: 0,
+      });
+      expect(mockOnValueUnsub).toHaveBeenCalled();
     });
 
     it("only own uid in participants means no others found", async () => {
@@ -1033,66 +1084,138 @@ describe("useLiveSession", () => {
       });
 
       expect(result.current.participants).toEqual([]);
-      expect(result.current.status).toBe("ready");
+      expect(result.current.state.kind).toBe("live");
     });
   });
 
-  describe("cleanup", () => {
-    it("removes own participant data from RTDB", async () => {
+  describe("close", () => {
+    it("closes the session and detaches the participants listener", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession(live());
       });
+      expect(mockOnValueUnsub).not.toHaveBeenCalled();
 
       act(() => {
-        result.current.cleanup();
+        result.current.close();
       });
 
-      // Removal goes through the injected presence writer, keyed by the slot
-      // we hold. The `slots/{i}` claim itself is deliberately left in place.
-      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", 0);
+      expect(result.current.state.kind).toBe("closed");
+      expect(mockOnValueUnsub).toHaveBeenCalledTimes(1);
     });
 
-    it("unsubscribes from onValue listener", async () => {
+    // One owner: the graph's presence node writes own position and deletes
+    // it. The hook deleting it too is the seam a retrying write slipped
+    // through, putting back a position that had just been removed.
+    it("never deletes own position itself", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession(live());
       });
-
       act(() => {
-        result.current.cleanup();
+        onValueErrorCallback?.(new Error("Permission denied"));
+      });
+      act(() => {
+        result.current.close();
       });
 
-      expect(mockOnValueUnsub).toHaveBeenCalled();
+      expect(mockRemove).not.toHaveBeenCalled();
+      expect(mockOnDisconnectRemove).not.toHaveBeenCalled();
     });
 
-    it("withdraw removes own presence and keeps listening", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+    it("detaches the listener when the hook unmounts", async () => {
+      const { result, unmount } = renderHook(() => useLiveSession(TEST_UID));
 
       await act(async () => {
         await result.current.createSession(live());
       });
-      // The handshake detaches listeners of its own; count from here.
-      const unsubscribesBefore = mockOnValueUnsub.mock.calls.length;
+      unmount();
 
-      act(() => {
-        result.current.withdraw();
-      });
-
-      expect(mockPresenceRemove).toHaveBeenCalledWith("ABC234", 0);
-      expect(mockOnValueUnsub).toHaveBeenCalledTimes(unsubscribesBefore);
+      expect(mockOnValueUnsub).toHaveBeenCalledTimes(1);
     });
+  });
 
-    it("does not remove presence if no session code", () => {
+  describe("a handshake nobody waits on", () => {
+    // Regression: the join checked for an abort only before its first write.
+    // Torn down while the slot claim was in flight, it went on to publish its
+    // state and attach a participants listener after the cleanup that would
+    // have removed it had already run.
+    it("reports nothing, and attaches nothing, when abandoned mid-claim", async () => {
+      let landClaim: () => void = () => {};
+      mockSet.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            landClaim = () => resolve();
+          }),
+      );
+      const controller = new AbortController();
       const { result } = renderHook(() => useLiveSession(TEST_UID));
 
+      let pending!: Promise<Result<string, SessionFailure>>;
       act(() => {
-        result.current.cleanup();
+        pending = result.current.joinSession("XYZ789", controller.signal);
+      });
+      await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1));
+      controller.abort();
+
+      let outcome: Result<string, SessionFailure> | undefined;
+      await act(async () => {
+        landClaim();
+        outcome = await pending;
       });
 
-      expect(mockPresenceRemove).not.toHaveBeenCalled();
+      expect(outcome).toEqual({
+        ok: false,
+        error: { code: "JOIN_FAILED", details: "aborted" },
+      });
+      expect(result.current.state).toBe(IDLE_SESSION);
+      expect(mockRef).not.toHaveBeenCalledWith(
+        mockDb,
+        "sessions/XYZ789/participants",
+      );
+    });
+
+    // StrictMode's remount starts a second handshake before the first has
+    // noticed its abort. Whatever the first reports afterwards is dropped.
+    it("drops the result of a handshake a newer one replaced", async () => {
+      let landFirst: () => void = () => {};
+      mockUpdate
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              landFirst = () => resolve();
+            }),
+        )
+        .mockResolvedValue(undefined);
+      mockGenerateCode
+        .mockReturnValueOnce("ABC234")
+        .mockReturnValueOnce("XYZ789");
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      let first!: Promise<Result<string, SessionFailure>>;
+      act(() => {
+        first = result.current.createSession(live());
+      });
+      await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      expect(result.current.state).toMatchObject({
+        kind: "live",
+        code: "XYZ789",
+      });
+
+      await act(async () => {
+        landFirst();
+        await first;
+      });
+
+      expect(result.current.state).toMatchObject({
+        kind: "live",
+        code: "XYZ789",
+      });
     });
   });
 
@@ -1115,7 +1238,7 @@ describe("useLiveSession", () => {
         ok: false,
         error: { code: "CREATE_FAILED", details: "aborted" },
       });
-      expect(result.current.error).toBeNull();
+      expect(reasonOf(result.current.state)).toBeNull();
     });
 
     it("reports an aborted join without recording a UI error", async () => {
@@ -1134,7 +1257,140 @@ describe("useLiveSession", () => {
         ok: false,
         error: { code: "JOIN_FAILED", details: "aborted" },
       });
-      expect(result.current.error).toBeNull();
+      expect(reasonOf(result.current.state)).toBeNull();
     });
+  });
+});
+
+/** Every transition in ARCHITECTURE.md's session lifecycle, without React. */
+describe("sessionReducer", () => {
+  const run = (...events: SessionEvent[]) =>
+    events.reduce(sessionReducer, IDLE_SESSION);
+  const succeeded = (handshake: number): SessionEvent => ({
+    type: "succeeded",
+    handshake,
+    code: "ABC234",
+    slot: 1,
+    createdAtMs: CREATED_AT,
+  });
+  const failure: SessionFailure = { code: "SESSION_FULL", details: null };
+
+  it("creates or joins, then goes live", () => {
+    expect(run({ type: "started", handshake: 1, role: "create" })).toEqual({
+      kind: "creating",
+      handshake: 1,
+    });
+    expect(run({ type: "started", handshake: 1, role: "join" })).toEqual({
+      kind: "joining",
+      handshake: 1,
+    });
+    expect(
+      run({ type: "started", handshake: 1, role: "join" }, succeeded(1)),
+    ).toEqual({
+      kind: "live",
+      code: "ABC234",
+      slot: 1,
+      createdAtMs: CREATED_AT,
+    });
+  });
+
+  it("fails a handshake with its reason", () => {
+    expect(
+      run(
+        { type: "started", handshake: 1, role: "join" },
+        { type: "failed", handshake: 1, failure },
+      ),
+    ).toEqual({ kind: "failed", reason: "SESSION_FULL", details: null });
+  });
+
+  it("goes back to idle when the handshake is abandoned", () => {
+    expect(
+      run(
+        { type: "started", handshake: 1, role: "create" },
+        { type: "abandoned", handshake: 1 },
+      ),
+    ).toBe(IDLE_SESSION);
+  });
+
+  // StrictMode starts a second handshake before the first has noticed its
+  // abort; whatever the first reports afterwards belongs to nobody.
+  it("drops every result of a handshake it is not waiting on", () => {
+    const waiting = run(
+      { type: "started", handshake: 1, role: "create" },
+      { type: "started", handshake: 2, role: "create" },
+    );
+    expect(waiting).toEqual({ kind: "creating", handshake: 2 });
+
+    for (const late of [
+      succeeded(1),
+      { type: "failed", handshake: 1, failure } as const,
+      { type: "abandoned", handshake: 1 } as const,
+    ]) {
+      // The same object: nothing re-renders for an ignored event.
+      expect(sessionReducer(waiting, late)).toBe(waiting);
+    }
+  });
+
+  it("may start again after a failure, but never over a session", () => {
+    const failed = run(
+      { type: "started", handshake: 1, role: "join" },
+      { type: "failed", handshake: 1, failure },
+    );
+    expect(
+      sessionReducer(failed, { type: "started", handshake: 2, role: "join" }),
+    ).toEqual({ kind: "joining", handshake: 2 });
+
+    const live = run(
+      { type: "started", handshake: 1, role: "join" },
+      succeeded(1),
+    );
+    expect(
+      sessionReducer(live, { type: "started", handshake: 2, role: "create" }),
+    ).toBe(live);
+  });
+
+  it("loses a live session when its listener is cancelled — that session only", () => {
+    const live = run(
+      { type: "started", handshake: 1, role: "join" },
+      succeeded(1),
+    );
+    expect(
+      sessionReducer(live, {
+        type: "listenerCancelled",
+        code: "OTHER2",
+        details: null,
+      }),
+    ).toBe(live);
+    expect(
+      sessionReducer(live, {
+        type: "listenerCancelled",
+        code: "ABC234",
+        details: "permission_denied",
+      }),
+    ).toEqual({
+      kind: "lost",
+      code: "ABC234",
+      slot: 1,
+      createdAtMs: CREATED_AT,
+      details: "permission_denied",
+    });
+  });
+
+  it("closes from anywhere, for good", () => {
+    const closed = run(
+      { type: "started", handshake: 1, role: "join" },
+      succeeded(1),
+      { type: "closed" },
+    );
+    expect(closed.kind).toBe("closed");
+    expect(run({ type: "closed" }).kind).toBe("closed");
+
+    for (const after of [
+      { type: "started", handshake: 2, role: "create" } as const,
+      succeeded(2),
+      { type: "listenerCancelled", code: "ABC234", details: null } as const,
+    ]) {
+      expect(sessionReducer(closed, after)).toBe(closed);
+    }
   });
 });

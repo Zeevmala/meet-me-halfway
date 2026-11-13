@@ -10,16 +10,40 @@ import type { ParticipantIndex } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
 import type {
   DestinationResult,
+  ExpiryResult,
   GraphSources,
   LivenessResult,
   ParticipantSource,
+  SessionLifecycle,
   SessionPhase,
-  SessionStatus,
   SlotVector,
 } from "./types";
 
 /** A participant whose last write is older than this is shown as stale. */
 export const STALE_THRESHOLD_MS = 30_000;
+
+/**
+ * How long a session is open: the rules' `created > now - 86400000`. They
+ * enforce it; the graph mirrors it only to know when, so that it can stop
+ * writing and say so instead of being refused.
+ */
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** The session's code while it has one — live, or lost — else `null`. */
+export function sessionCode(session: SessionLifecycle): string | null {
+  return session.kind === "live" || session.kind === "lost"
+    ? session.code
+    : null;
+}
+
+/** The slot this device holds while the session has one, else `null`. */
+export function sessionSlot(
+  session: SessionLifecycle,
+): ParticipantIndex | null {
+  return session.kind === "live" || session.kind === "lost"
+    ? session.slot
+    : null;
+}
 
 /**
  * A participant silent this long has left, as far as the meeting point is
@@ -49,7 +73,7 @@ export function buildSlotVector(
   const occupied: ParticipantIndex[] = [];
   const counted: ParticipantIndex[] = [];
 
-  const ownSlot = sources.ownSlot;
+  const ownSlot = sessionSlot(sources.session);
   if (ownSlot !== null && sources.ownPosition !== null) {
     positions[ownSlot] = sources.ownPosition;
     accuracy[ownSlot] = sources.ownAccuracy ?? 0;
@@ -139,6 +163,30 @@ export function deriveLiveness(
   return { stale, departed, nextFlipAtMs };
 }
 
+const NOT_EXPIRING: ExpiryResult = Object.freeze({
+  expired: false,
+  flipAtMs: null,
+});
+
+/**
+ * Whether the session has passed its 24 hours, against the server's clock.
+ *
+ * Both `created` and `nowMs` are server time; the boundary is inclusive for
+ * the reason `deriveLiveness` gives — the runtime wakes at exactly `flipAtMs`,
+ * so the predicate has to be true then. A `lost` session still expires: the
+ * truer of the two reasons it ended is the one to show.
+ */
+export function deriveExpiry(
+  session: SessionLifecycle,
+  nowMs: number,
+): ExpiryResult {
+  if (session.kind !== "live" && session.kind !== "lost") return NOT_EXPIRING;
+  const expiresAtMs = session.createdAtMs + SESSION_TTL_MS;
+  return nowMs >= expiresAtMs
+    ? { expired: true, flipAtMs: null }
+    : { expired: false, flipAtMs: expiresAtMs };
+}
+
 /**
  * The phase the UI renders.
  *
@@ -146,21 +194,25 @@ export function deriveLiveness(
  * stale interval, and the create/join paths — which is how a `setPhase` ended
  * up being called from inside a `setParticipants` updater, where React
  * requires purity and StrictMode double-invokes. It is a total function of the
- * lifecycle status, the roster and liveness, so it is derived.
+ * lifecycle, the clock, the roster and liveness, so it is derived.
  */
 export function derivePhase(
-  status: SessionStatus,
+  session: SessionLifecycle,
+  expiry: ExpiryResult,
   slots: SlotVector,
   liveness: LivenessResult,
 ): SessionPhase {
-  switch (status) {
-    case "error":
-      return "error";
+  switch (session.kind) {
     case "idle":
-      return "idle";
-    case "connecting":
-      return "creating";
-    case "ready":
+    case "creating":
+    case "joining":
+    case "failed":
+    case "closed":
+      return session.kind;
+    case "lost":
+      return expiry.expired ? "expired" : "lost";
+    case "live":
+      if (expiry.expired) return "expired";
       break;
   }
 

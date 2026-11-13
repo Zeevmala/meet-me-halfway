@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRuntime } from "./runtime";
-import { DEPARTED_THRESHOLD_MS, STALE_THRESHOLD_MS } from "./nodes";
+import {
+  DEPARTED_THRESHOLD_MS,
+  SESSION_TTL_MS,
+  STALE_THRESHOLD_MS,
+} from "./nodes";
 import { PRESENCE_HEARTBEAT_MS } from "./policies";
 import type { GraphPorts } from "./ports";
-import type { ParticipantSource, RouteInfo } from "./types";
+import type { ParticipantSource, RouteInfo, SessionLifecycle } from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
@@ -12,6 +16,18 @@ import type { TimerId } from "../../../core/dag/resource";
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
 const JERUSALEM: LatLng = { lat: 31.77, lng: 35.21 };
+
+/**
+ * A live session holding slot 0, created at the harness clock's epoch — so
+ * it expires at `SESSION_TTL_MS`, and the runtime keeps one wake armed for
+ * that instant for as long as it is live.
+ */
+const LIVE: SessionLifecycle = {
+  kind: "live",
+  code: "ABC234",
+  slot: 0,
+  createdAtMs: 0,
+};
 
 function route(distance: number): RouteInfo {
   return {
@@ -83,6 +99,7 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     searchVenues: vi.fn().mockResolvedValue(ok(PLACES)),
     fetchRoute: vi.fn().mockResolvedValue(ok(route(1000))),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
+    removePresence: vi.fn(),
     placesEnabled: true,
     ...overrides,
   };
@@ -109,7 +126,20 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     await flush();
   };
 
-  return { ports, advance, flush, now: () => nowMs, pending: () => tasks.size };
+  return {
+    ports,
+    advance,
+    flush,
+    now: () => nowMs,
+    pending: () => tasks.size,
+    /**
+     * Timers due before `atMs`. A live session always keeps one wake armed
+     * for its expiry; asking about everything before it is how a test says
+     * "nothing else is scheduled".
+     */
+    pendingBefore: (atMs: number) =>
+      [...tasks.values()].filter((task) => task.at < atMs).length,
+  };
 }
 
 describe("createRuntime", () => {
@@ -139,7 +169,7 @@ describe("createRuntime", () => {
     r.subscribe(listener);
 
     r.setSources({
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       ownAccuracy: 5,
       travelProfile: "walking",
@@ -154,7 +184,7 @@ describe("createRuntime", () => {
   // invalidate the entire graph, re-rendering the map on every tick.
   it("reuses the slot vector when an equal roster arrives again", () => {
     const h = createHarness();
-    const r = createRuntime(h.ports, { ownSlot: 0, ownPosition: TEL_AVIV });
+    const r = createRuntime(h.ports, { session: LIVE, ownPosition: TEL_AVIV });
 
     const before = r.getSnapshot().slots;
     r.setSources({
@@ -173,7 +203,7 @@ describe("createRuntime", () => {
 
   it("computes a midpoint once two slots are occupied", () => {
     const h = createHarness();
-    const r = createRuntime(h.ports, { ownSlot: 0, ownPosition: TEL_AVIV });
+    const r = createRuntime(h.ports, { session: LIVE, ownPosition: TEL_AVIV });
 
     expect(r.getSnapshot().midpoint).toBeNull();
 
@@ -187,7 +217,7 @@ describe("createRuntime", () => {
   it("searches venues and ranks them once a midpoint exists", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
@@ -201,7 +231,7 @@ describe("createRuntime", () => {
   it("never searches venues when the feature is disabled", async () => {
     const h = createHarness({ placesEnabled: false });
     const r = createRuntime(h.ports, {
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
@@ -215,7 +245,7 @@ describe("createRuntime", () => {
   it("routes every occupied slot to the midpoint by default", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
-      ownSlot: 2,
+      session: { ...LIVE, slot: 2 },
       ownPosition: TEL_AVIV,
       participants: [peer(4, JERUSALEM)],
     });
@@ -233,7 +263,7 @@ describe("createRuntime", () => {
   it("routes to a selected venue instead of the midpoint", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
@@ -251,7 +281,7 @@ describe("createRuntime", () => {
   it("falls back to the midpoint when the selected venue vanishes", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
@@ -276,7 +306,7 @@ describe("createRuntime", () => {
   it("stops scheduling work once disposed", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
@@ -293,32 +323,35 @@ describe("createRuntime — presence", () => {
   /** Everything the presence node needs before it will write anything. */
   function ready(overrides: Record<string, unknown> = {}) {
     return {
-      sessionCode: "ABC234",
+      session: LIVE,
       ownUid: "own-uid",
-      ownSlot: 0 as const,
       ownPosition: TEL_AVIV,
       ownAccuracy: 12,
       ownName: "Me",
-      sessionStatus: "ready" as const,
       ...overrides,
     };
   }
 
-  it("does not write until code, uid and position all exist", async () => {
+  it("does not write until the session is live", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports);
 
-    r.setSources({ sessionCode: "ABC234", ownUid: "own-uid" });
+    r.setSources({
+      session: { kind: "joining" },
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 12,
+    });
     await h.advance(10_000);
     expect(h.ports.writePresence).not.toHaveBeenCalled();
 
-    r.setSources({ ownSlot: 0, ownPosition: TEL_AVIV, ownAccuracy: 12 });
+    r.setSources({ session: LIVE });
     await h.advance(10_000);
     expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
     r.dispose();
   });
 
-  it("writes once the code arrives after the position", async () => {
+  it("writes once the session arrives after the position", async () => {
     // The old hook needed a dedicated "flush once the code is set" effect for
     // this: a stationary joiner's single GPS fix could land before the async
     // join resolved and then never be written at all, so peers never saw them.
@@ -326,11 +359,11 @@ describe("createRuntime — presence", () => {
     const h = createHarness();
     const r = createRuntime(h.ports);
 
-    r.setSources({ ownSlot: 0, ownPosition: TEL_AVIV, ownAccuracy: 12 });
+    r.setSources({ ownPosition: TEL_AVIV, ownAccuracy: 12 });
     await h.advance(10_000);
     expect(h.ports.writePresence).not.toHaveBeenCalled();
 
-    r.setSources({ sessionCode: "ABC234", ownUid: "own-uid" });
+    r.setSources({ session: LIVE, ownUid: "own-uid" });
     await h.advance(10_000);
 
     // Keyed by the claimed slot; the uid rides in the payload, where the
@@ -421,7 +454,8 @@ describe("createRuntime — presence", () => {
     await h.advance(60_000);
 
     expect(h.ports.writePresence).toHaveBeenCalledTimes(writes);
-    expect(h.pending()).toBe(0);
+    // Only the session's own expiry is left to wake for.
+    expect(h.pendingBefore(SESSION_TTL_MS)).toBe(0);
     r.dispose();
   });
 
@@ -449,8 +483,73 @@ describe("createRuntime — presence", () => {
     await h.advance(60_000);
 
     expect(h.ports.writePresence).toHaveBeenCalledTimes(1);
-    expect(h.pending()).toBe(0);
+    expect(h.pendingBefore(SESSION_TTL_MS)).toBe(0);
     r.dispose();
+  });
+
+  // One owner: the node that writes own position is the one that deletes it,
+  // however publishing stops. The deletion used to be the session hook's,
+  // and a write still retrying in the graph put the position back.
+  it("removes own position when location is turned off", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(ready());
+    await h.advance(3_000);
+    expect(h.ports.removePresence).not.toHaveBeenCalled();
+
+    r.setSources({ ownPosition: null, ownAccuracy: null });
+
+    expect(h.ports.removePresence).toHaveBeenCalledTimes(1);
+    expect(h.ports.removePresence).toHaveBeenCalledWith("ABC234", 0);
+    r.dispose();
+  });
+
+  // It used to keep writing behind the "Connection problem" screen: status
+  // `error` left the code and slot in place, and nothing read the status.
+  it.each<[string, SessionLifecycle]>([
+    ["lost", { ...LIVE, kind: "lost" }],
+    ["closed", { kind: "closed" }],
+  ])(
+    "stops writing and removes own position once the session is %s",
+    async (_name, ended) => {
+      const h = createHarness({ placesEnabled: false });
+      const r = createRuntime(h.ports);
+      r.setSources(ready());
+      await h.advance(3_000);
+      const writes = vi.mocked(h.ports.writePresence).mock.calls.length;
+
+      r.setSources({ session: ended });
+      await h.advance(60_000);
+
+      expect(h.ports.writePresence).toHaveBeenCalledTimes(writes);
+      expect(h.ports.removePresence).toHaveBeenCalledWith("ABC234", 0);
+      expect(h.pendingBefore(SESSION_TTL_MS)).toBe(0);
+      r.dispose();
+    },
+  );
+
+  it("removes own position when the runtime is disposed with the page", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(ready());
+    await h.advance(3_000);
+
+    r.dispose();
+
+    expect(h.ports.removePresence).toHaveBeenCalledWith("ABC234", 0);
+  });
+
+  it("removes nothing it never published", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(ready({ session: { kind: "joining" } }));
+    await h.advance(10_000);
+
+    r.setSources({ session: { kind: "failed" } });
+    r.dispose();
+
+    expect(h.ports.writePresence).not.toHaveBeenCalled();
+    expect(h.ports.removePresence).not.toHaveBeenCalled();
   });
 
   it("admits a name change immediately", async () => {
@@ -523,12 +622,11 @@ describe("createRuntime — liveness", () => {
 
     expect(r.getSnapshot().phase).toBe("idle");
 
-    r.setSources({ sessionStatus: "connecting" });
+    r.setSources({ session: { kind: "creating" } });
     expect(r.getSnapshot().phase).toBe("creating");
 
     r.setSources({
-      sessionStatus: "ready",
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
     });
     expect(r.getSnapshot().phase).toBe("waiting");
@@ -543,8 +641,7 @@ describe("createRuntime — liveness", () => {
     const r = createRuntime(h.ports);
 
     r.setSources({
-      sessionStatus: "ready",
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(h.now())],
     });
@@ -565,7 +662,7 @@ describe("createRuntime — liveness", () => {
     const r = createRuntime(h.ports);
 
     r.setSources({
-      sessionStatus: "ready",
+      session: LIVE,
       participants: [peer(h.now() - 60_000)],
     });
     await h.advance(1_000);
@@ -582,13 +679,14 @@ describe("createRuntime — liveness", () => {
     const r = createRuntime(h.ports);
 
     r.setSources({
-      sessionStatus: "ready",
+      session: LIVE,
       participants: [peer(h.now() - DEPARTED_THRESHOLD_MS)],
     });
     await h.advance(1_000);
 
     expect(r.getSnapshot().slots.departed[1]).toBe(true);
-    expect(h.pending()).toBe(0);
+    // Nothing for liveness; the session's own expiry is all that is armed.
+    expect(h.pendingBefore(SESSION_TTL_MS)).toBe(0);
     r.dispose();
   });
 
@@ -600,7 +698,7 @@ describe("createRuntime — liveness", () => {
     const serverNowMs = h.now() - 120_000;
 
     r.setSources({
-      sessionStatus: "ready",
+      session: LIVE,
       participants: [peer(serverNowMs)],
       serverTimeOffsetMs: -120_000,
     });
@@ -620,7 +718,7 @@ describe("createRuntime — liveness", () => {
   it("re-arms the liveness wake when the server offset is re-measured", async () => {
     const h = createHarness({ placesEnabled: false });
     const r = createRuntime(h.ports);
-    r.setSources({ sessionStatus: "ready", participants: [peer(h.now())] });
+    r.setSources({ session: LIVE, participants: [peer(h.now())] });
 
     // The server is 20s ahead: the peer's write is already 20s old.
     r.setSources({ serverTimeOffsetMs: 20_000 });
@@ -639,8 +737,7 @@ describe("createRuntime — liveness", () => {
     const r = createRuntime(h.ports);
 
     r.setSources({
-      sessionStatus: "ready",
-      ownSlot: 0,
+      session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(h.now())],
     });
@@ -656,11 +753,90 @@ describe("createRuntime — liveness", () => {
     const h = createHarness({ placesEnabled: false });
     const r = createRuntime(h.ports);
 
-    r.setSources({ sessionStatus: "ready", participants: [peer(h.now())] });
+    r.setSources({ session: LIVE, participants: [peer(h.now())] });
     expect(h.pending()).toBeGreaterThan(0);
 
     r.dispose();
     expect(h.pending()).toBe(0);
+  });
+});
+
+describe("createRuntime — expiry", () => {
+  /** A session one minute short of its 24 hours at the harness's epoch. */
+  const ENDING: SessionLifecycle = {
+    ...LIVE,
+    createdAtMs: 60_000 - SESSION_TTL_MS,
+  };
+
+  // Expiry is a predicate over the server clock, woken like liveness: a
+  // session with nothing ticking — no position, no peers, no heartbeat —
+  // still has to notice its end.
+  it("expires on its own schedule, with nothing else ticking", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources({ session: ENDING });
+    expect(r.getSnapshot().phase).toBe("waiting");
+
+    await h.advance(59_999);
+    expect(r.getSnapshot().phase).toBe("waiting");
+
+    await h.advance(1);
+    expect(r.getSnapshot().phase).toBe("expired");
+    expect(h.pending()).toBe(0);
+    r.dispose();
+  });
+
+  // The rules refuse every write to an expired session. The presence node
+  // tried again every three seconds for as long as the page stayed open,
+  // behind a "Retrying…" banner.
+  it("stops writing at expiry and removes own position", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources({
+      session: ENDING,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 12,
+      ownName: "Me",
+    });
+    await h.advance(60_000);
+    expect(r.getSnapshot().phase).toBe("expired");
+    expect(h.ports.removePresence).toHaveBeenCalledWith("ABC234", 0);
+    const writes = vi.mocked(h.ports.writePresence).mock.calls.length;
+    expect(writes).toBeGreaterThan(0);
+
+    await h.advance(10 * 60_000);
+
+    expect(h.ports.writePresence).toHaveBeenCalledTimes(writes);
+    expect(h.pending()).toBe(0);
+    r.dispose();
+  });
+
+  // `created` is stamped by the server. This device's clock runs 30 s
+  // behind it, so the session ends 30 s early by the device's reckoning.
+  it("judges expiry against server time, not this device's clock", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources({ session: ENDING, serverTimeOffsetMs: 30_000 });
+
+    await h.advance(29_999);
+    expect(r.getSnapshot().phase).toBe("waiting");
+
+    await h.advance(1);
+    expect(r.getSnapshot().phase).toBe("expired");
+    r.dispose();
+  });
+
+  it("keeps saying expired once the listener is lost as well", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources({ session: ENDING });
+    await h.advance(60_000);
+
+    r.setSources({ session: { ...ENDING, kind: "lost" } });
+
+    expect(r.getSnapshot().phase).toBe("expired");
+    r.dispose();
   });
 });
 
@@ -670,13 +846,11 @@ describe("createRuntime — departed peers and stale routes", () => {
     overrides: Record<string, unknown> = {},
   ) {
     return {
-      sessionCode: "ABC234",
+      session: LIVE,
       ownUid: "own-uid",
-      ownSlot: 0 as const,
       ownPosition: TEL_AVIV,
       ownAccuracy: 10,
       ownName: "Me",
-      sessionStatus: "ready" as const,
       participants,
       ...overrides,
     };

@@ -43,16 +43,52 @@ export interface ParticipantSource {
 }
 
 /**
- * Where the session lifecycle has got to. Distinct from the displayed
- * `SessionPhase`, which is derived: this is what the adapter knows (has the
- * handshake finished, did it fail), that is what the user sees (is anyone
- * else here, are they fresh).
+ * Where the session lifecycle has got to: what the adapter knows — is a
+ * handshake running, did it succeed, is the listener still attached. Distinct
+ * from the displayed `SessionPhase`, which is derived from this plus the
+ * roster and the clock.
+ *
+ * One union, so that a code and a slot exist exactly when a session does. They
+ * used to be three separate sources — code, slot and a four-value status —
+ * and status `error` with a code and slot still set is what kept presence
+ * publishing behind the error screen.
+ *
+ * The session hook's own state carries more (a handshake id, the failure);
+ * it is assignable to this and is passed in as it is.
  */
-export type SessionStatus = "idle" | "connecting" | "ready" | "error";
+export type SessionLifecycle =
+  | { readonly kind: "idle" }
+  | { readonly kind: "creating" }
+  | { readonly kind: "joining" }
+  | {
+      readonly kind: "live";
+      readonly code: string;
+      readonly slot: ParticipantIndex;
+      /** Server-clock ms at which `created` was stamped. */
+      readonly createdAtMs: number;
+    }
+  | {
+      /** The server cancelled the participants listener. */
+      readonly kind: "lost";
+      readonly code: string;
+      readonly slot: ParticipantIndex;
+      readonly createdAtMs: number;
+    }
+  | { readonly kind: "failed" }
+  | { readonly kind: "closed" };
 
 /** What the UI renders. Derived — never stored. */
 export type SessionPhase =
-  "idle" | "creating" | "waiting" | "connected" | "some_stale" | "error";
+  | "idle"
+  | "creating"
+  | "joining"
+  | "waiting"
+  | "connected"
+  | "some_stale"
+  | "lost"
+  | "expired"
+  | "failed"
+  | "closed";
 
 /**
  * Participants as a structure of arrays, every array indexed by
@@ -83,21 +119,19 @@ export interface SlotVector {
 
 /** Everything pushed into the graph from outside. */
 export interface GraphSources {
-  readonly ownSlot: ParticipantIndex | null;
+  /** The session, and with it the code and slot the presence node writes under. */
+  readonly session: SessionLifecycle;
   readonly ownPosition: LatLng | null;
   readonly ownAccuracy: number | null;
   readonly participants: readonly ParticipantSource[];
   readonly selectedVenueId: string | null;
   readonly travelProfile: TravelProfile;
-  /** Session identity — the presence node writes under these. */
-  readonly sessionCode: string | null;
   readonly ownUid: string | null;
   readonly ownName: string;
-  readonly sessionStatus: SessionStatus;
   /**
-   * Server clock minus this device's (`.info/serverTimeOffset`). Liveness
-   * compares server-stamped `lastSeen` against server time, never against
-   * this device's clock alone.
+   * Server clock minus this device's (`.info/serverTimeOffset`). Liveness and
+   * expiry compare server-stamped times — `lastSeen`, `created` — against
+   * server time, never against this device's clock alone.
    */
   readonly serverTimeOffsetMs: number;
 }
@@ -119,6 +153,20 @@ export interface LivenessResult {
    * everyone has departed.
    */
   readonly nextFlipAtMs: number | null;
+}
+
+/**
+ * Whether the session has passed its 24 hours, and when it will if not.
+ *
+ * Derived from the server clock like liveness, and woken the same way: the
+ * runtime arms one timer for `flipAtMs`. The rules refuse every write to an
+ * expired session, and without this the presence node tried again every
+ * three seconds, for as long as the page stayed open.
+ */
+export interface ExpiryResult {
+  readonly expired: boolean;
+  /** Server-clock ms of expiry; `null` once expired, or with no session. */
+  readonly flipAtMs: number | null;
 }
 
 export interface DestinationResult {

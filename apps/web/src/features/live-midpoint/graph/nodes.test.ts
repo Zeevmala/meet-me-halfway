@@ -1,16 +1,27 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSlotVector,
+  deriveExpiry,
   deriveLiveness,
   deriveMidpoint,
   deriveDestination,
   derivePhase,
+  sessionCode,
+  sessionSlot,
   DEPARTED_THRESHOLD_MS,
+  SESSION_TTL_MS,
   STALE_THRESHOLD_MS,
 } from "./nodes";
-import type { GraphSources, LivenessResult, ParticipantSource } from "./types";
+import type {
+  ExpiryResult,
+  GraphSources,
+  LivenessResult,
+  ParticipantSource,
+  SessionLifecycle,
+} from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { RankedVenue } from "../lib/venue-ranking";
+import type { ParticipantIndex } from "../lib/participant-config";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 
 const NOW = 1_000_000;
@@ -41,18 +52,23 @@ function fresh(): LivenessResult {
   return { stale: NONE(), departed: NONE(), nextFlipAtMs: null };
 }
 
+const IDLE: SessionLifecycle = { kind: "idle" };
+
+/** A live session holding `slot`, created at `createdAtMs` (server time). */
+function live(slot: ParticipantIndex = 0, createdAtMs = NOW): SessionLifecycle {
+  return { kind: "live", code: "ABC123", slot, createdAtMs };
+}
+
 function sources(overrides: Partial<GraphSources> = {}): GraphSources {
   return {
-    ownSlot: 0,
+    session: live(0),
     ownPosition: TEL_AVIV,
     ownAccuracy: 5,
     participants: [],
     selectedVenueId: null,
     travelProfile: "driving",
-    sessionCode: "ABC123",
     ownUid: "own-uid",
     ownName: "Me",
-    sessionStatus: "ready",
     serverTimeOffsetMs: 0,
     ...overrides,
   };
@@ -85,7 +101,7 @@ describe("buildSlotVector", () => {
   it("places each participant at their own slot, not their array position", () => {
     const v = buildSlotVector(
       sources({
-        ownSlot: 2,
+        session: live(2),
         ownPosition: HAIFA,
         participants: [participant(0, TEL_AVIV), participant(4, JERUSALEM)],
       }),
@@ -103,7 +119,7 @@ describe("buildSlotVector", () => {
   it("leaves slot 0 vacant when the creator has left", () => {
     const v = buildSlotVector(
       sources({
-        ownSlot: 1,
+        session: live(1),
         ownPosition: TEL_AVIV,
         participants: [participant(3, JERUSALEM)],
       }),
@@ -143,7 +159,7 @@ describe("buildSlotVector", () => {
   });
 
   it("omits own position while its slot is still unknown", () => {
-    const v = buildSlotVector(sources({ ownSlot: null }), fresh());
+    const v = buildSlotVector(sources({ session: IDLE }), fresh());
 
     expect(v.occupied).toEqual([]);
     expect(v.ownSlot).toBeNull();
@@ -213,7 +229,10 @@ describe("deriveMidpoint", () => {
     );
     const sparse = deriveMidpoint(
       buildSlotVector(
-        sources({ ownSlot: 2, participants: [participant(4, JERUSALEM)] }),
+        sources({
+          session: live(2),
+          participants: [participant(4, JERUSALEM)],
+        }),
         fresh(),
       ),
     );
@@ -448,29 +467,59 @@ describe("derivePhase", () => {
     };
   };
 
-  it("maps lifecycle states straight through", () => {
-    expect(derivePhase("idle", solo(), fresh())).toBe("idle");
-    expect(derivePhase("connecting", solo(), fresh())).toBe("creating");
-    expect(derivePhase("error", solo(), fresh())).toBe("error");
+  const OPEN: ExpiryResult = { expired: false, flipAtMs: NOW + 1 };
+  const EXPIRED: ExpiryResult = { expired: true, flipAtMs: null };
+  const lost: SessionLifecycle = {
+    kind: "lost",
+    code: "ABC123",
+    slot: 0,
+    createdAtMs: NOW,
+  };
+
+  it("maps the lifecycle's own states straight through", () => {
+    for (const kind of [
+      "idle",
+      "creating",
+      "joining",
+      "failed",
+      "closed",
+    ] as const) {
+      expect(derivePhase({ kind }, OPEN, solo(), fresh())).toBe(kind);
+    }
   });
 
-  it("reports an error even once peers are present", () => {
+  it("reports a failure even once peers are present", () => {
     const { slots, liveness } = withPeer(false);
-    expect(derivePhase("error", slots, liveness)).toBe("error");
+    expect(derivePhase({ kind: "failed" }, OPEN, slots, liveness)).toBe(
+      "failed",
+    );
+  });
+
+  it("reports a lost listener, peers or not", () => {
+    const { slots, liveness } = withPeer(false);
+    expect(derivePhase(lost, OPEN, slots, liveness)).toBe("lost");
+  });
+
+  // Expiry is the truer reason: a listener the server cancelled at the end of
+  // the 24 hours is a session that expired, not a connection problem.
+  it("reports expiry over a live or lost session", () => {
+    const { slots, liveness } = withPeer(false);
+    expect(derivePhase(live(), EXPIRED, slots, liveness)).toBe("expired");
+    expect(derivePhase(lost, EXPIRED, slots, liveness)).toBe("expired");
   });
 
   it("waits while nobody else has reported a position", () => {
-    expect(derivePhase("ready", solo(), fresh())).toBe("waiting");
+    expect(derivePhase(live(), OPEN, solo(), fresh())).toBe("waiting");
   });
 
   it("connects once a fresh peer is present", () => {
     const { slots, liveness } = withPeer(false);
-    expect(derivePhase("ready", slots, liveness)).toBe("connected");
+    expect(derivePhase(live(), OPEN, slots, liveness)).toBe("connected");
   });
 
   it("reports some_stale when a peer has gone quiet", () => {
     const { slots, liveness } = withPeer(true);
-    expect(derivePhase("ready", slots, liveness)).toBe("some_stale");
+    expect(derivePhase(live(), OPEN, slots, liveness)).toBe("some_stale");
   });
 
   it("waits again once the only peer has departed", () => {
@@ -486,7 +535,7 @@ describe("derivePhase", () => {
       liveness,
     );
 
-    expect(derivePhase("ready", slots, liveness)).toBe("waiting");
+    expect(derivePhase(live(), OPEN, slots, liveness)).toBe("waiting");
   });
 
   it("does not count own slot as a peer", () => {
@@ -499,7 +548,68 @@ describe("derivePhase", () => {
       nextFlipAtMs: null,
     };
     expect(
-      derivePhase("ready", buildSlotVector(sources(), liveness), liveness),
+      derivePhase(live(), OPEN, buildSlotVector(sources(), liveness), liveness),
     ).toBe("waiting");
+  });
+});
+
+describe("deriveExpiry", () => {
+  it("expires exactly 24 hours after `created`, server time", () => {
+    const session = live(0, NOW);
+
+    expect(deriveExpiry(session, NOW + SESSION_TTL_MS - 1)).toEqual({
+      expired: false,
+      flipAtMs: NOW + SESSION_TTL_MS,
+    });
+    // Inclusive, as liveness is: the wake fires at exactly `flipAtMs`, and
+    // the predicate must be true when it does or the wake re-arms at zero.
+    expect(deriveExpiry(session, NOW + SESSION_TTL_MS)).toEqual({
+      expired: true,
+      flipAtMs: null,
+    });
+  });
+
+  it("still expires a session whose listener was lost", () => {
+    const lost: SessionLifecycle = {
+      kind: "lost",
+      code: "ABC123",
+      slot: 1,
+      createdAtMs: NOW,
+    };
+    expect(deriveExpiry(lost, NOW + SESSION_TTL_MS).expired).toBe(true);
+  });
+
+  it("has nothing to expire, and nothing to wake for, without a session", () => {
+    for (const kind of [
+      "idle",
+      "creating",
+      "joining",
+      "failed",
+      "closed",
+    ] as const) {
+      expect(deriveExpiry({ kind }, NOW + 10 * SESSION_TTL_MS)).toEqual({
+        expired: false,
+        flipAtMs: null,
+      });
+    }
+  });
+});
+
+describe("sessionCode / sessionSlot", () => {
+  it("exist exactly while the session does: live or lost", () => {
+    expect(sessionCode(live(3))).toBe("ABC123");
+    expect(sessionSlot(live(3))).toBe(3);
+    const lost: SessionLifecycle = {
+      kind: "lost",
+      code: "XYZ789",
+      slot: 2,
+      createdAtMs: NOW,
+    };
+    expect(sessionCode(lost)).toBe("XYZ789");
+    expect(sessionSlot(lost)).toBe(2);
+    for (const kind of ["idle", "joining", "failed", "closed"] as const) {
+      expect(sessionCode({ kind })).toBeNull();
+      expect(sessionSlot({ kind })).toBeNull();
+    }
   });
 });

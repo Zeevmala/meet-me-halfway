@@ -18,6 +18,7 @@ import type { ParticipantIndex } from "../lib/participant-config";
 import { TOPO_ORDER } from "./edges";
 import {
   buildSlotVector,
+  deriveExpiry,
   deriveLiveness,
   deriveMidpoint,
   deriveDestination,
@@ -33,10 +34,12 @@ import {
 import type { PresenceInput, RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
 import type {
+  ExpiryResult,
   GraphSources,
   LivenessResult,
   RouteInfo,
   RouteSet,
+  SessionLifecycle,
   SessionPhase,
   SlotVector,
   TravelProfile,
@@ -49,17 +52,17 @@ const EMPTY_ROUTES: readonly (RouteInfo | null)[] = Object.freeze(
   new Array<RouteInfo | null>(MAX_PARTICIPANTS).fill(null),
 );
 
+const IDLE_SESSION: SessionLifecycle = Object.freeze({ kind: "idle" });
+
 export const DEFAULT_SOURCES: GraphSources = {
-  ownSlot: null,
+  session: IDLE_SESSION,
   ownPosition: null,
   ownAccuracy: null,
   participants: [],
   selectedVenueId: null,
   travelProfile: "driving",
-  sessionCode: null,
   ownUid: null,
   ownName: "",
-  sessionStatus: "idle",
   serverTimeOffsetMs: 0,
 };
 
@@ -71,6 +74,11 @@ const NO_LIVENESS: LivenessResult = Object.freeze({
   stale: NO_FLAGS,
   departed: NO_FLAGS,
   nextFlipAtMs: null,
+});
+
+const NOT_EXPIRING: ExpiryResult = Object.freeze({
+  expired: false,
+  flipAtMs: null,
 });
 
 export interface GraphSnapshot {
@@ -156,17 +164,25 @@ export function createRuntime(
   // returns the identical reference and the snapshot stays stable — which
   // useSyncExternalStore requires of getSnapshot.
   let liveness: LivenessResult = NO_LIVENESS;
+  let expiry: ExpiryResult = NOT_EXPIRING;
   let slots: SlotVector = buildSlotVector(sources, liveness);
   let midpoint: LatLng | null = null;
   let phase: SessionPhase = "idle";
-  // One timer for the whole liveness concern, armed at the next instant some
-  // participant's staleness flips. Replaces a 10s setInterval that ran for the
-  // life of the session whether or not anything was about to change.
-  let livenessTimer: ReturnType<GraphPorts["schedule"]> | null = null;
-  let livenessArmedFor: number | null = null;
+  // One timer per clock predicate, armed at the next instant it flips: for
+  // liveness, the next participant to turn stale or depart; for expiry, the
+  // end of the session's 24 hours. Liveness replaces a 10s setInterval that
+  // ran for the life of the session whether or not anything was about to
+  // change.
+  const livenessWake = createClockWake();
+  const expiryWake = createClockWake();
   // Offers own position again while it is being published, so a participant
   // standing still keeps writing — see PRESENCE_HEARTBEAT_MS.
   let heartbeatTimer: ReturnType<GraphPorts["schedule"]> | null = null;
+  // Where the presence node last offered a write, until it removes it. It is
+  // the one place that both writes own position and deletes it: the deletion
+  // used to be the session hook's, and a write still retrying in the graph
+  // put back a position the hook had just removed.
+  let published: { code: string; slot: ParticipantIndex } | null = null;
   // Positions the routes are computed from, and the routes published from
   // them — both memoised so an unchanged roster keeps its references.
   let countedFor: SlotVector | null = null;
@@ -203,42 +219,66 @@ export function createRuntime(
   }
 
   /**
-   * Arm a single wake for the next staleness transition.
+   * A single wake for the next transition of one clock predicate.
    *
    * Re-armed only when the target instant actually changes, so a heartbeat
-   * that does not move the earliest flip costs nothing. Nothing is armed when
-   * every participant has departed — there is no further transition to wait
-   * for, and the next real event will recompute anyway.
+   * that does not move the earliest flip costs nothing. Nothing is armed for
+   * `null` — no further transition to wait for (every participant departed,
+   * no session to expire) — and the next real event will recompute anyway.
    *
    * The flip is in server time; the timer runs on this device's clock, so it
    * is keyed by the device instant. Keyed by the server instant, a re-measured
    * offset left the wake on the old one: the flip had not moved, so nothing
    * re-armed.
    */
-  function armLivenessWake(atServerMs: number | null): void {
-    const atMs =
-      atServerMs === null ? null : atServerMs - sources.serverTimeOffsetMs;
-    if (atMs === livenessArmedFor) return;
-    if (livenessTimer !== null) {
-      ports.cancel(livenessTimer);
-      livenessTimer = null;
+  function createClockWake() {
+    let timer: ReturnType<GraphPorts["schedule"]> | null = null;
+    let armedFor: number | null = null;
+
+    function cancel(): void {
+      if (timer !== null) ports.cancel(timer);
+      timer = null;
+      armedFor = null;
     }
-    livenessArmedFor = atMs;
-    if (atMs === null) return;
-    // Defence in depth against the loop above: a target that is not strictly
-    // in the future would schedule at a zero delay and re-derive the same
-    // target. `deriveLiveness` cannot produce one, and this makes it so that a
-    // future change to that predicate degrades to a missed wake — recovered on
-    // the next real event — rather than to a spinning main thread.
-    if (atMs <= ports.now()) return;
-    livenessTimer = ports.schedule(
-      () => {
-        livenessTimer = null;
-        livenessArmedFor = null;
-        tick();
-      },
-      Math.max(0, atMs - ports.now()),
-    );
+
+    function arm(atServerMs: number | null): void {
+      const atMs =
+        atServerMs === null ? null : atServerMs - sources.serverTimeOffsetMs;
+      if (atMs === armedFor) return;
+      cancel();
+      armedFor = atMs;
+      if (atMs === null) return;
+      // Defence in depth against the loop above: a target that is not
+      // strictly in the future would schedule at a zero delay and re-derive
+      // the same target. The derivations cannot produce one, and this makes
+      // it so that a future change to a predicate degrades to a missed wake —
+      // recovered on the next real event — rather than to a spinning main
+      // thread.
+      if (atMs <= ports.now()) return;
+      timer = ports.schedule(
+        () => {
+          timer = null;
+          armedFor = null;
+          tick();
+        },
+        Math.max(0, atMs - ports.now()),
+      );
+    }
+
+    return { arm, cancel };
+  }
+
+  /**
+   * Delete what the presence node published, once it no longer publishes.
+   *
+   * Runs after the resource has been told `null`, which abandons a write
+   * still in flight; one already sent reaches the server first, since both go
+   * over the same socket in order.
+   */
+  function withdrawPublished(): void {
+    if (published === null) return;
+    ports.removePresence(published.code, published.slot);
+    published = null;
   }
 
   /** Keep one heartbeat wake armed while own position is being published. */
@@ -306,7 +346,14 @@ export function createRuntime(
           // Server time: peers' `lastSeen` is stamped by the server.
           const serverNowMs = ports.now() + sources.serverTimeOffsetMs;
           liveness = deriveLiveness(sources.participants, serverNowMs);
-          armLivenessWake(liveness.nextFlipAtMs);
+          livenessWake.arm(liveness.nextFlipAtMs);
+          break;
+        }
+        case "expiry": {
+          // Server time again: `created` is stamped by the server.
+          const serverNowMs = ports.now() + sources.serverTimeOffsetMs;
+          expiry = deriveExpiry(sources.session, serverNowMs);
+          expiryWake.arm(expiry.flipAtMs);
           break;
         }
         case "slots": {
@@ -315,22 +362,29 @@ export function createRuntime(
           break;
         }
         case "presence": {
-          const code = sources.sessionCode;
+          const session = sources.session;
           const uid = sources.ownUid;
           const position = sources.ownPosition;
-          const slot = sources.ownSlot;
-          // `null` until every part exists — the slot included, since it is
-          // the RTDB key this write lands on and the server will refuse a
-          // write to a slot we do not hold. The old code had an explicit
-          // "flush once the code arrives" effect for exactly this gap, because
-          // a stationary joiner's single GPS fix could land before the async
+          // Published only into a live session that has not expired, and
+          // only with a position: the slot is the RTDB key this write lands
+          // on, and the server refuses a write to an expired session or to a
+          // slot we do not hold. The old code had an explicit "flush once the
+          // code arrives" effect for the gap before the slot, because a
+          // stationary joiner's single GPS fix could land before the async
           // join resolved and then never be written at all.
           if (
-            code !== null &&
+            session.kind === "live" &&
+            !expiry.expired &&
             uid !== null &&
-            position !== null &&
-            slot !== null
+            position !== null
           ) {
+            const { code, slot } = session;
+            if (
+              published !== null &&
+              (published.code !== code || published.slot !== slot)
+            ) {
+              withdrawPublished();
+            }
             presence.request({
               code,
               slot,
@@ -339,15 +393,19 @@ export function createRuntime(
               accuracy: sources.ownAccuracy ?? 0,
               name: sources.ownName,
             });
+            if (published === null) published = { code, slot };
             armHeartbeat(true);
           } else {
+            // However it stopped — location off, the session lost, expired
+            // or closed — what was published comes down here.
             presence.request(null);
             armHeartbeat(false);
+            withdrawPublished();
           }
           break;
         }
         case "phase": {
-          phase = derivePhase(sources.sessionStatus, slots, liveness);
+          phase = derivePhase(sources.session, expiry, slots, liveness);
           break;
         }
         case "midpoint": {
@@ -489,14 +547,16 @@ export function createRuntime(
     setSources,
     dispose: () => {
       disposed = true;
-      if (livenessTimer !== null) ports.cancel(livenessTimer);
-      livenessTimer = null;
-      livenessArmedFor = null;
+      livenessWake.cancel();
+      expiryWake.cancel();
       if (heartbeatTimer !== null) ports.cancel(heartbeatTimer);
       heartbeatTimer = null;
       venues.dispose();
       routes.dispose();
+      // Torn down with the page's tree: stop writing first — disposing aborts
+      // a write in flight — then take down what was published.
       presence.dispose();
+      withdrawPublished();
       listeners.clear();
     },
     isDisposed: () => disposed,
