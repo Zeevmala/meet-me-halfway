@@ -59,6 +59,7 @@
     "clearVenue": "נקה",
     "openNow": "פתוח עכשיו",
     "noVenues": "לא נמצאו מקומות",
+    "venuesFailed": "לא הצלחנו לחפש בסביבה. מנסה שוב...",
     "driving": "נהיגה",
     "walking": "הליכה",
     "meetAt": "נפגשים ב{{name}}",

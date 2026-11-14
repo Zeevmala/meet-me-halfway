@@ -65,7 +65,7 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownPosition: TEL_AVIV,
     ownAccuracy: 5,
     participants: [],
-    selectedVenueId: null,
+    selectedPlace: null,
     travelProfile: "driving",
     ownUid: "own-uid",
     ownName: "Me",
@@ -285,33 +285,33 @@ describe("deriveDestination", () => {
     expect(result.selectedVenue).toBeNull();
   });
 
-  it("uses the selected venue's location when it is present", () => {
-    const v = venue("v1", JERUSALEM);
-    const result = deriveDestination([v], "v1", TEL_AVIV);
+  it("goes to the picked venue, as it is listed", () => {
+    const listed = venue("v1", JERUSALEM);
+    const picked = { ...listed, rating: 1 }; // the place as it was picked
+    const result = deriveDestination([listed], picked, TEL_AVIV);
 
     expect(result.destination).toEqual(JERUSALEM);
-    expect(result.selectedVenue).toBe(v);
+    // The listed entry, so the destination is what the list highlights.
+    expect(result.selectedVenue).toBe(listed);
   });
 
-  // Regression: reconciliation used to be an effect that only ran when
-  // venues.length > 0, so a search returning no results left a venue that no
-  // longer existed pinned as the destination indefinitely.
-  it("releases a selection when the venue list comes back empty", () => {
-    const result = deriveDestination([], "v1", TEL_AVIV);
+  // The venues node pins a pick into the list whenever there is one, so a
+  // pick is missing only where no list exists: venue search off. It is no
+  // destination there — nothing would show it, or let it be cleared. (It
+  // used to be dropped from any list that no longer ranked it, which made a
+  // pick near the cut-off blink in and out; and before that, never dropped
+  // from an empty one, which left a destination nobody could see.)
+  it("goes to the midpoint when the pick has no list to be shown in", () => {
+    const result = deriveDestination([], venue("v1", JERUSALEM), TEL_AVIV);
 
     expect(result.destination).toEqual(TEL_AVIV);
     expect(result.selectedVenue).toBeNull();
   });
 
-  it("releases a selection that disappeared from a refreshed list", () => {
-    const result = deriveDestination([venue("v2", HAIFA)], "v1", TEL_AVIV);
-
-    expect(result.destination).toEqual(TEL_AVIV);
-    expect(result.selectedVenue).toBeNull();
-  });
-
-  it("returns no destination when there is neither a venue nor a midpoint", () => {
-    expect(deriveDestination([], "v1", null).destination).toBeNull();
+  it("returns no destination when there is neither a listed pick nor a midpoint", () => {
+    expect(
+      deriveDestination([], venue("v1", JERUSALEM), null).destination,
+    ).toBeNull();
   });
 });
 

@@ -11,7 +11,8 @@
  *  - `admits` is **metric and stateful**: it compares the new input against
  *    the last input actually dispatched. "Is this difference worth a call?"
  *  - `identity` is **pure and current-input-only**: it collapses concurrent
- *    duplicate requests. "Are these the same request?"
+ *    duplicate requests, and it keeps the same request, offered again, from
+ *    pushing back its own scheduled dispatch. "Are these the same request?"
  *
  * Quantising coordinates into grid cells is fine for `identity` (a collision
  * merely skips a duplicate) but must never gate admission: a stationary user
@@ -409,8 +410,20 @@ export function createResource<I, O>(
       return;
     }
     const nowMs = ports.now();
+    const scheduled = timer !== null ? pendingInput : null;
     pendingInput = input;
     if (!shouldDispatch(input, nowMs)) return;
+    // The same request offered again is not churn, so it keeps the deadline
+    // already set for it, and the dispatch takes this, the latest input. The
+    // runtime offers every node its input on every tick — a GPS fix, a peer's
+    // heartbeat — and each offer used to restart the trailing debounce, so
+    // every first fetch waited out its whole `maxWaitMs`.
+    if (
+      scheduled !== null &&
+      policy.identity(scheduled) === policy.identity(input)
+    ) {
+      return;
+    }
     if (firstPendingAtMs === null) firstPendingAtMs = nowMs;
     arm(nowMs);
   }

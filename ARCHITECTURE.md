@@ -33,7 +33,7 @@ SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
   useAuth ───────── uid ─┐
   useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──┬──► venues ─┐
   useLiveGeolocation ────┤   (clock)      (SoA,    │               │            │
-  ui.selectedVenueId ────┤                 stable) │               └──► destination
+  ui.selectedPlace ──────┤                 stable) │               └──► destination
   ui.travelProfile ──────┤                         │                        │
   ui.ownName ────────────┼──► presence ◄─┐         └──► phase               │
                          │   (RTDB write,│                ▲                 ▼
@@ -70,8 +70,8 @@ the edges declared, it is a failing test that names both nodes.
 | `presence` | effectful | a live session, not expired, + own position | RTDB write; deletes what it wrote once that stops | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
 | `phase` | pure | session, `expiry`, `slots`, `liveness` | `SessionPhase` | — |
-| `venues` | effectful | `midpoint` | raw `PlaceResult[]` | degrade to empty |
-| `destination` | pure | `midpoint`, `venues`, selection | `LatLng \| null` | — |
+| `venues` | effectful | `midpoint` | raw `PlaceResult[]`, ranked against the live midpoint, the pick pinned in | last answer while young, else says it failed |
+| `destination` | pure | `midpoint`, `venues`, the pick | `LatLng \| null` | — |
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
 
@@ -236,7 +236,7 @@ Every effectful node is one `createResource` instance. The policy record
 
 | | debounce | maxWait | admit | timeout | retry | breaker | TTL | degrade |
 |---|---|---|---|---|---|---|---|---|
-| `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | empty |
+| `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | last-good, else `failed` |
 | `routes` | 3 s | 9 s | 200 m | 10 s | 2 | 5 fails / 60 s | 60 s | last-good |
 | `presence` | 3 s | 3 s | 10 m | 10 s | 3 | 5 fails / 60 s | — | report failed |
 
@@ -267,8 +267,11 @@ cap the RTDB socket and map tiles also draw on.
 - **`admits`** is metric and stateful. It compares the new input against the
   last input *actually dispatched*, so its baseline advances with every
   accepted call.
-- **`identity`** is pure and depends only on the current input. It exists
-  solely to collapse concurrent duplicate requests.
+- **`identity`** is pure and depends only on the current input. It collapses
+  concurrent duplicate requests, and it tells a re-offer from churn: the
+  same request offered again keeps the deadline already scheduled for it.
+  Every tick offers every node its input, so restarting the trailing
+  debounce on each offer held every first fetch to its `maxWait`.
 
 Quantising coordinates into grid cells is fine for `identity` — a collision
 merely skips a duplicate. It must never gate admission. A stationary user
@@ -334,9 +337,18 @@ counters, breaker state and in-flight aborts; under Vitest it would bleed
 state across files. `useGraphRuntime` detects the simulated teardown and
 stands up a replacement, so `npm run dev` behaves like production.
 
-`selectedVenueId` and `travelProfile` live in the runtime, not React state.
-Mirroring them would create two sources of truth and the venue list would
-highlight a venue the graph had already stopped routing to.
+The picked venue (`selectedPlace`) and `travelProfile` live in the runtime,
+not React state. Mirroring them would create two sources of truth and the
+venue list would highlight a venue the graph had already stopped routing to.
+The pick is the place itself, not an id to look up: the venues node pins it
+into the list (`rankWithPinned`), so it stays listed, clearable and the
+destination until it is cleared — however the ranking moves, and after a
+search stops returning it.
+
+The snapshot says what the venue list knows in `venueStatus` — `searching`,
+`ready` (a list, which may truthfully be empty) or `failed` — rather than in
+a `loading` flag: a list is shown whenever there is one, through a refresh
+and after a failure that left an earlier answer.
 
 ---
 
@@ -374,6 +386,9 @@ tests.
 | **Expiry judged by the device clock.** The join compared `created` with `Date.now()`. The rules already refuse an expired session's reads, so the check could fire only when the device's clock ran fast — refusing a session the server still held open. | `useLiveSession` |
 | **Listener leaked by an aborted join.** The join checked for an abort only before its first write. Torn down while its slot claim was in flight, it published its state and attached a participants listener after the cleanup that would have removed it had already run. | `useLiveSession` |
 | **Teardown on a navigation that never happened.** `beforeunload` detached the listener and stopped GPS, and it can fire for a navigation that is then not made — leaving a page that stayed open frozen. | `LiveMidpointPage` |
+| **A debounce pushed back by its own input.** `request()` restarted the trailing debounce on every offer, and the runtime offers every node its input on every tick, so under a GPS reporting once a second every first fetch waited out its ceiling: routes at 9 s, not 3 s; the venue search at 15 s, not 5 s. The same request offered again now keeps its deadline. | `core/dag/resource` |
+| **A venue list that could not say what it knew.** One `venuesLoading` flag: "No venues found" while the first search was only scheduled, a skeleton over the list on every refresh, and "No venues found" again when the search failed — the conflation `places-api.ts` was rewritten to undo, back at the last step. | `runtime` + `VenueListCard` |
+| **A picked venue that blinked.** The pick was an id looked up in a top five re-ranked against the live midpoint on every move, so a venue near the cut dropped out and came back with no search at all, taking the destination, the card's title and the camera's framing with it. | `runtime` + `nodes` |
 
 ---
 

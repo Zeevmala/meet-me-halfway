@@ -8,6 +8,7 @@ import {
 import { PRESENCE_HEARTBEAT_MS } from "./policies";
 import type { GraphPorts } from "./ports";
 import type { ParticipantSource, RouteInfo, SessionLifecycle } from "./types";
+import { geographicCentroid } from "../lib/geo-math";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
@@ -260,47 +261,89 @@ describe("createRuntime", () => {
     expect(snapshot.routes[1]).toBeNull();
   });
 
-  it("routes to a selected venue instead of the midpoint", async () => {
+  // Regression: every tick re-offers every node its input, and each offer
+  // restarted the trailing debounce. Under a GPS reporting once a second the
+  // first routes came at the ceiling, 9 s, not 3 s, and the first venue
+  // search at 15 s, not 5 s.
+  it("fetches on its debounce, not its ceiling, under a once-a-second GPS", async () => {
+    const h = createHarness();
+    let firstRouteAt = -1;
+    let firstSearchAt = -1;
+    vi.mocked(h.ports.fetchRoute).mockImplementation(async () => {
+      if (firstRouteAt < 0) firstRouteAt = h.now();
+      return ok(route(1000));
+    });
+    vi.mocked(h.ports.searchVenues).mockImplementation(async () => {
+      if (firstSearchAt < 0) firstSearchAt = h.now();
+      return ok(PLACES);
+    });
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownPosition: TEL_AVIV,
+      participants: [peer(1, JERUSALEM)],
+    });
+
+    for (let second = 0; second < 20; second++) {
+      await h.advance(1_000);
+      // The same fix again: same coordinates, a new object, as every report.
+      r.setSources({ ownPosition: { ...TEL_AVIV } });
+    }
+
+    expect(firstRouteAt).toBe(3_000);
+    expect(firstSearchAt).toBe(5_000);
+    r.dispose();
+  });
+
+  it("routes to a picked venue instead of the midpoint", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
       session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
-    await h.advance(15_000);
+    await h.advance(5_000);
 
-    r.setSources({ selectedVenueId: "v1" });
+    r.setSources({ selectedPlace: PLACES[0] ?? null });
     await h.advance(10_000);
 
     expect(r.getSnapshot().selectedVenue?.id).toBe("v1");
     expect(r.getSnapshot().destination).toEqual({ lat: 31.93, lng: 35.0 });
   });
 
-  // Regression: the old reconciliation effect only ran when venues.length > 0,
-  // so an empty result left a stale selection pinned as the destination.
-  it("falls back to the midpoint when the selected venue vanishes", async () => {
+  // The pick used to be an id looked up in the latest results, so a search
+  // around a moved midpoint that no longer returned it dropped it — and one
+  // that returned it again brought it back. It is pinned now: listed, so it
+  // can be seen and cleared, and the destination until it is. (Before the
+  // lookup, an empty search left it the destination while the list showed
+  // nothing at all.)
+  it("keeps a picked venue listed, and the destination, once a search stops returning it", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
       session: LIVE,
       ownPosition: TEL_AVIV,
       participants: [peer(1, JERUSALEM)],
     });
-    await h.advance(15_000);
-    r.setSources({ selectedVenueId: "v1" });
+    await h.advance(5_000);
+    r.setSources({ selectedPlace: PLACES[0] ?? null });
     await h.advance(10_000);
-    expect(r.getSnapshot().selectedVenue?.id).toBe("v1");
 
-    // A later search comes back empty.
-    (h.ports.searchVenues as ReturnType<typeof vi.fn>).mockResolvedValue(
-      ok([]),
-    );
+    // A later search, around a moved midpoint, comes back empty.
+    vi.mocked(h.ports.searchVenues).mockResolvedValue(ok([]));
     r.setSources({ ownPosition: { lat: 32.5, lng: 34.9 } });
     await h.advance(60_000);
 
-    const snapshot = r.getSnapshot();
-    expect(snapshot.venues).toEqual([]);
-    expect(snapshot.selectedVenue).toBeNull();
-    expect(snapshot.destination).toEqual(snapshot.midpoint);
+    const kept = r.getSnapshot();
+    expect(kept.venues.map((venue) => venue.id)).toEqual(["v1"]);
+    expect(kept.selectedVenue?.id).toBe("v1");
+    expect(kept.destination).toEqual({ lat: 31.93, lng: 35.0 });
+
+    r.setSources({ selectedPlace: null });
+
+    const cleared = r.getSnapshot();
+    expect(cleared.venues).toEqual([]);
+    expect(cleared.selectedVenue).toBeNull();
+    expect(cleared.destination).toEqual(cleared.midpoint);
+    r.dispose();
   });
 
   it("stops scheduling work once disposed", async () => {
@@ -840,6 +883,150 @@ describe("createRuntime — expiry", () => {
   });
 });
 
+describe("createRuntime — the picked venue", () => {
+  const M_PER_DEG_LAT = 111_320;
+  function offset(p: LatLng, eastM: number, northM = 0): LatLng {
+    const mPerDegLng = M_PER_DEG_LAT * Math.cos((p.lat * Math.PI) / 180);
+    return {
+      lat: p.lat + northM / M_PER_DEG_LAT,
+      lng: p.lng + eastM / mPerDegLng,
+    };
+  }
+  /** Equal in every respect but distance, so distance alone ranks them. */
+  function place(id: string, location: LatLng): PlaceResult {
+    return {
+      id,
+      displayName: id,
+      location,
+      rating: 4,
+      userRatingCount: 100,
+      openNow: true,
+      types: ["cafe"],
+    };
+  }
+
+  // Ranking is relative to the live midpoint, so a pick near the top-five cut
+  // fell out of the list as people walked — with no search at all — and the
+  // destination, the card's title and the camera's framing went with it, then
+  // came back when they walked back.
+  it("keeps a pick near the cut-off listed, and the destination, however the ranking moves", async () => {
+    const midpoint = geographicCentroid([TEL_AVIV, JERUSALEM]);
+    const picked = place("picked", offset(midpoint, 500));
+    const places = [
+      place("near1", offset(midpoint, 50)),
+      place("near2", offset(midpoint, 0, 100)),
+      place("near3", offset(midpoint, -150)),
+      place("near4", offset(midpoint, 0, -200)),
+      picked,
+      place("rival", offset(midpoint, -505)),
+    ];
+    const h = createHarness({
+      searchVenues: vi.fn().mockResolvedValue(ok(places)),
+    });
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownPosition: TEL_AVIV,
+      participants: [peer(1, JERUSALEM)],
+    });
+    await h.advance(5_000);
+    r.setSources({ selectedPlace: picked });
+    expect(r.getSnapshot().venues.map((v) => v.id)).toContain("picked");
+
+    // I walk 30 m west: the midpoint moves 15 m, and "rival" now outranks the
+    // pick for fifth place.
+    r.setSources({ ownPosition: offset(TEL_AVIV, -30) });
+
+    const moved = r.getSnapshot();
+    expect(moved.venues.slice(0, 5).map((v) => v.id)).toContain("rival");
+    expect(moved.venues.map((v) => v.id)).toContain("picked");
+    expect(moved.selectedVenue?.id).toBe("picked");
+    expect(moved.destination).toEqual(picked.location);
+
+    r.setSources({ ownPosition: TEL_AVIV });
+    expect(r.getSnapshot().selectedVenue?.id).toBe("picked");
+    // All of it from the one search: nothing here was a new answer.
+    expect(h.ports.searchVenues).toHaveBeenCalledTimes(1);
+    r.dispose();
+  });
+});
+
+describe("createRuntime — what the venue list says", () => {
+  const SESSION = {
+    session: LIVE,
+    ownPosition: TEL_AVIV,
+    participants: [peer(1, JERUSALEM)],
+  };
+
+  // It said "No venues found" while the first search was only scheduled.
+  it("is searching, not empty, until the first answer", async () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports, SESSION);
+    expect(r.getSnapshot().venueStatus).toBe("searching");
+    expect(r.getSnapshot().venues).toEqual([]);
+
+    await h.advance(5_000);
+
+    expect(r.getSnapshot().venueStatus).toBe("ready");
+    expect(r.getSnapshot().venues.length).toBeGreaterThan(0);
+    r.dispose();
+  });
+
+  // A refresh swapped the list for a skeleton until it landed.
+  it("keeps the list while a newer search is out", async () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports, SESSION);
+    await h.advance(5_000);
+    const listed = r
+      .getSnapshot()
+      .venues.map((v) => v.id)
+      .sort();
+    vi.mocked(h.ports.searchVenues).mockImplementation(
+      () => new Promise(() => {}),
+    );
+
+    // I move 300 m: the midpoint moves 150 m, and a new search goes out.
+    r.setSources({
+      ownPosition: { lat: TEL_AVIV.lat + 0.0027, lng: TEL_AVIV.lng },
+    });
+    await h.advance(5_000);
+
+    expect(h.ports.searchVenues).toHaveBeenCalledTimes(2);
+    expect(r.getSnapshot().venueStatus).toBe("ready");
+    expect(
+      r
+        .getSnapshot()
+        .venues.map((v) => v.id)
+        .sort(),
+    ).toEqual(listed);
+    r.dispose();
+  });
+
+  // ...and the same "No venues found" when the search had failed.
+  it("says a failed search failed", async () => {
+    const h = createHarness({
+      searchVenues: vi
+        .fn()
+        .mockResolvedValue(err({ kind: "HTTP", status: 503 })),
+    });
+    const r = createRuntime(h.ports, SESSION);
+
+    // Past the first search and its one retry; before the next attempt.
+    await h.advance(8_000);
+
+    expect(r.getSnapshot().venueStatus).toBe("failed");
+    expect(r.getSnapshot().venues).toEqual([]);
+    r.dispose();
+  });
+
+  it("is idle with venue search off", () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports, SESSION);
+
+    expect(r.getSnapshot().venueStatus).toBe("idle");
+    r.dispose();
+  });
+});
+
 describe("createRuntime — departed peers and stale routes", () => {
   function session(
     participants: ParticipantSource[],
@@ -898,12 +1085,11 @@ describe("createRuntime — departed peers and stale routes", () => {
     const h = createHarness();
     const r = createRuntime(h.ports);
     r.setSources(session([peer(1, JERUSALEM, h.now())]));
-    // The venue search's maxWait, as in "routes to a selected venue": every
-    // tick re-offers its input, so its trailing debounce alone never fires.
-    await h.advance(15_000);
+    // Past the venue search's debounce, so there is a venue to pick.
+    await h.advance(5_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
 
-    r.setSources({ selectedVenueId: "v1" });
+    r.setSources({ selectedPlace: PLACES[0] ?? null });
     expect(r.getSnapshot().destination).toEqual(PLACES[0]?.location);
     expect(r.getSnapshot().routes.filter(Boolean)).toHaveLength(0);
 

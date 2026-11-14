@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeVenueScore,
   rankVenues,
+  rankWithPinned,
   type PlaceResult,
 } from "./venue-ranking";
 import type { LatLng } from "./geo-math";
@@ -218,5 +219,73 @@ describe("rankVenues", () => {
 
     const ranked = rankVenues(places, MIDPOINT);
     expect(ranked[0].id).toBe("near");
+  });
+});
+
+describe("rankWithPinned", () => {
+  const MIDPOINT: LatLng = { lat: 32.0, lng: 34.8 };
+  /** Equal in all but distance: `i` steps of ~110 m north of the midpoint. */
+  const places = Array.from({ length: 7 }, (_, i) =>
+    makePlaceAt({
+      id: `p${i}`,
+      location: { lat: MIDPOINT.lat + (i + 1) * 0.001, lng: MIDPOINT.lng },
+      rating: 4,
+      userRatingCount: 100,
+      openNow: true,
+    }),
+  );
+  const ids = (venues: readonly { id: string }[]) => venues.map((v) => v.id);
+
+  it("is the plain top N when nothing is picked", () => {
+    expect(ids(rankWithPinned(places, MIDPOINT, 5, null))).toEqual(
+      ids(rankVenues(places, MIDPOINT, 5)),
+    );
+  });
+
+  it("leaves the top N as it is when the pick is in it", () => {
+    const picked = places[2] ?? null;
+    expect(ids(rankWithPinned(places, MIDPOINT, 5, picked))).toEqual(
+      ids(rankVenues(places, MIDPOINT, 5)),
+    );
+  });
+
+  // The pick stays listed wherever it ranks, and the top N is not reshuffled
+  // to make room for it.
+  it("lists a pick that ranks below the cut after the top N, as the results rank it", () => {
+    const picked = places[6] ?? null;
+    const ranked = rankWithPinned(places, MIDPOINT, 5, picked);
+
+    expect(ids(ranked)).toEqual(["p0", "p1", "p2", "p3", "p4", "p6"]);
+    const fromResults = rankVenues(places, MIDPOINT, 7).find(
+      (v) => v.id === "p6",
+    );
+    expect(ranked[5]).toEqual(fromResults);
+  });
+
+  // A later search around a moved midpoint may not return the pick at all;
+  // it is listed from the place as it was picked, scored on the others' scale.
+  it("lists a pick the results no longer hold, from the place as picked", () => {
+    const gone = makePlaceAt({
+      id: "gone",
+      displayName: "Gone Cafe",
+      location: { lat: MIDPOINT.lat + 0.02, lng: MIDPOINT.lng },
+      rating: 5,
+      userRatingCount: 200,
+      openNow: false,
+    });
+    const ranked = rankWithPinned(places.slice(0, 3), MIDPOINT, 5, gone);
+
+    expect(ids(ranked)).toEqual(["p0", "p1", "p2", "gone"]);
+    const pinned = ranked[3];
+    expect(pinned?.displayName).toBe("Gone Cafe");
+    expect(pinned?.distanceFromMidpoint).toBeGreaterThan(2_000);
+    // Farther than all the others: its proximity counts for nothing, and its
+    // rating and popularity still do.
+    expect(pinned?.score).toBeCloseTo(0.4 + 0.2, 5);
+  });
+
+  it("lists only the pick when there are no results", () => {
+    const gone = makePlaceAt({ id: "gone", location: MIDPOINT });
+    expect(ids(rankWithPinned([], MIDPOINT, 5, gone))).toEqual(["gone"]);
   });
 });

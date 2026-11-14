@@ -130,16 +130,41 @@ describe("createResource", () => {
     });
     const r = createResource(makePolicy(run), t.ports);
 
-    // An input every 500ms — each one resets a 1000ms trailing debounce, so
-    // without the ceiling the timer would never survive long enough to fire.
+    // A different request every 500ms — each one resets a 1000ms trailing
+    // debounce, so without the ceiling the timer would never survive long
+    // enough to fire.
     for (let i = 0; i < 10; i++) {
-      r.request({ at: i * 100, tag: "a" });
+      r.request({ at: i * 100, tag: `a${i}` });
       await t.advance(500);
     }
 
     expect(run).toHaveBeenCalled();
-    expect(firstCallAtMs).toBeGreaterThanOrEqual(0);
-    expect(firstCallAtMs).toBeLessThanOrEqual(3000);
+    expect(firstCallAtMs).toBe(3000);
+  });
+
+  // Regression: an identical re-offer restarted the debounce too, and the
+  // runtime re-offers every node on every tick, so every first fetch waited
+  // for the ceiling — routes 9 s and venue search 15 s after they were wanted,
+  // under a GPS reporting once a second.
+  it("does not push back a dispatch when the same request is offered again", async () => {
+    const t = createTestPorts();
+    let firstCallAtMs = -1;
+    const run = vi.fn().mockImplementation(() => {
+      if (firstCallAtMs < 0) firstCallAtMs = t.now();
+      return Promise.resolve(ok("v1"));
+    });
+    const r = createResource(makePolicy(run), t.ports);
+
+    // The same request — one identity — offered every 200ms.
+    for (let i = 0; i < 8; i++) {
+      r.request({ at: i, tag: "same" });
+      await t.advance(200);
+    }
+
+    expect(firstCallAtMs).toBe(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+    // It went out with the latest input offered by then, not the first.
+    expect(run.mock.calls[0]?.[0]).toEqual({ at: 4, tag: "same" });
   });
 
   it("suppresses a call when the input has not moved far enough", async () => {

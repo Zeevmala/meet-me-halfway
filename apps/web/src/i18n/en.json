@@ -59,6 +59,7 @@
     "clearVenue": "Clear",
     "openNow": "Open now",
     "noVenues": "No venues found",
+    "venuesFailed": "Couldn't search nearby. Trying again...",
     "driving": "Driving",
     "walking": "Walking",
     "meetAt": "Meet at {{name}}",

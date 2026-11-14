@@ -62,7 +62,7 @@ function renderCard(
 ) {
   const defaults = {
     venues,
-    loading: false,
+    status: "ready" as const,
     selectedVenue: null as RankedVenue | null,
     onSelectVenue: vi.fn(),
   };
@@ -70,19 +70,44 @@ function renderCard(
 }
 
 describe("VenueListCard", () => {
-  it("shows loading shimmer when loading=true", () => {
-    const { container } = renderCard({ loading: true });
+  it("shows the searching shimmer while nothing has come back yet", () => {
+    const { container } = renderCard({ venues: [], status: "searching" });
 
     expect(screen.getByText("live.searchingVenues")).toBeTruthy();
     const skeletons = container.querySelectorAll(".live-venue-skeleton");
     expect(skeletons.length).toBe(3);
   });
 
-  it("shows empty state when venues=[] and loading=false", () => {
-    renderCard({ venues: [], loading: false });
+  it("says there are no venues only when an answer said so", () => {
+    renderCard({ venues: [], status: "ready" });
 
     expect(screen.getByText("live.nearbyVenues")).toBeTruthy();
     expect(screen.getByText("live.noVenues")).toBeTruthy();
+  });
+
+  // It said "No venues found" when the search had failed — the conflation
+  // places-api.ts was rewritten to undo, come back at the last step.
+  it("says the search failed, not that there is nothing nearby", () => {
+    renderCard({ venues: [], status: "failed" });
+
+    expect(screen.getByRole("status").textContent).toBe("live.venuesFailed");
+    expect(screen.queryByText("live.noVenues")).toBeNull();
+  });
+
+  // The skeleton used to replace the list for every refresh, and hide Clear
+  // with it.
+  it("keeps the list, and Clear, while a newer search is out", () => {
+    renderCard({ status: "searching", selectedVenue: venues[0] ?? null });
+
+    expect(screen.getByText("Cafe Central")).toBeTruthy();
+    expect(screen.getByText("live.clearVenue")).toBeTruthy();
+    expect(screen.queryByText("live.searchingVenues")).toBeNull();
+  });
+
+  it("renders nothing while no search is wanted", () => {
+    const { container } = renderCard({ venues: [], status: "idle" });
+
+    expect(container.firstChild).toBeNull();
   });
 
   it("renders venue list with names, ratings, distances", () => {

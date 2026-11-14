@@ -87,7 +87,7 @@ apps/web/src/
 │       ├── geo-math.ts                # sphericalMidpoint, geographicCentroid, haversineDistance, accuracyCircleGeoJSON
 │       ├── participant-config.ts      # MAX_PARTICIPANTS, ParticipantIndex type, PARTICIPANT_COLORS (5-color palette)
 │       ├── session-code.ts            # 6-char code generation/validation
-│       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now
+│       ├── venue-ranking.ts           # Weighted scoring: 0.40 rating + 0.30 proximity + 0.20 popularity + 0.10 open_now; rankWithPinned keeps the picked venue listed
 │       ├── places-api.ts              # createPlacesClient(key) → Result<PlaceResult[], ResourceError>
 │       ├── directions-api.ts          # createDirectionsClient(token) → Result<RouteInfo | null, ResourceError>
 │       ├── presence-rtdb.ts           # slot-keyed own-location write + onDisconnect arming, behind the port

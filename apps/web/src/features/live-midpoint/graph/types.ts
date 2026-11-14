@@ -1,7 +1,7 @@
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { RankedVenue } from "../lib/venue-ranking";
+import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 
 export type TravelProfile = "driving" | "walking";
 
@@ -124,7 +124,12 @@ export interface GraphSources {
   readonly ownPosition: LatLng | null;
   readonly ownAccuracy: number | null;
   readonly participants: readonly ParticipantSource[];
-  readonly selectedVenueId: string | null;
+  /**
+   * The venue the user picked, as it was when they picked it. The place, not
+   * an id to look up: the pick stays listed — pinned — and stays the
+   * destination until it is cleared, even once a search no longer returns it.
+   */
+  readonly selectedPlace: PlaceResult | null;
   readonly travelProfile: TravelProfile;
   readonly ownUid: string | null;
   readonly ownName: string;
@@ -173,6 +178,22 @@ export interface DestinationResult {
   readonly destination: LatLng | null;
   readonly selectedVenue: RankedVenue | null;
 }
+
+/**
+ * What the venue list can truthfully say. It was one `loading` flag, so it
+ * said "No venues found" while the first search was still only scheduled,
+ * blanked the list for a skeleton on every refresh, and said the same "No
+ * venues found" when the search had failed.
+ */
+export type VenueStatus =
+  /** No search is wanted: venue search is off, or there is no midpoint. */
+  | "idle"
+  /** A search is scheduled or out, and nothing has come back yet. */
+  | "searching"
+  /** An answer — a list, which may truthfully be empty. */
+  | "ready"
+  /** The search failed, with no earlier answer young enough to show. */
+  | "failed";
 
 /**
  * View projections of the slot vector.

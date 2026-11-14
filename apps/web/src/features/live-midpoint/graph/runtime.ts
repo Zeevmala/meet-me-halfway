@@ -9,8 +9,8 @@
  * between `it()` blocks and make tests order-dependent.
  */
 import { createResource } from "../../../core/dag/resource";
-import type { Resource } from "../../../core/dag/resource";
-import { rankVenues } from "../lib/venue-ranking";
+import type { Resource, ResourceState } from "../../../core/dag/resource";
+import { rankWithPinned } from "../lib/venue-ranking";
 import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
@@ -43,9 +43,26 @@ import type {
   SessionPhase,
   SlotVector,
   TravelProfile,
+  VenueStatus,
 } from "./types";
 
 const TOP_VENUES = 5;
+
+/**
+ * What the venue list can truthfully say, from the search resource's state.
+ * A value — fresh, being refreshed, or degraded to the last good one — is an
+ * answer; a failure with nothing to show is a failure; anything else while a
+ * search is wanted is still searching, including the debounce before the
+ * first request, which the resource reports as `idle`.
+ */
+function venueStatusOf(
+  state: ResourceState<PlaceResult[]>,
+  wanted: boolean,
+): VenueStatus {
+  if (!wanted) return "idle";
+  if (state.value !== null) return "ready";
+  return state.status === "failed" ? "failed" : "searching";
+}
 
 const EMPTY_VENUES: readonly RankedVenue[] = Object.freeze([]);
 const EMPTY_ROUTES: readonly (RouteInfo | null)[] = Object.freeze(
@@ -59,7 +76,7 @@ export const DEFAULT_SOURCES: GraphSources = {
   ownPosition: null,
   ownAccuracy: null,
   participants: [],
-  selectedVenueId: null,
+  selectedPlace: null,
   travelProfile: "driving",
   ownUid: null,
   ownName: "",
@@ -84,8 +101,9 @@ const NOT_EXPIRING: ExpiryResult = Object.freeze({
 export interface GraphSnapshot {
   readonly slots: SlotVector;
   readonly midpoint: LatLng | null;
+  /** The top five, plus the picked venue wherever it now ranks. */
   readonly venues: readonly RankedVenue[];
-  readonly venuesLoading: boolean;
+  readonly venueStatus: VenueStatus;
   readonly selectedVenue: RankedVenue | null;
   readonly destination: LatLng | null;
   readonly routes: readonly (RouteInfo | null)[];
@@ -194,13 +212,14 @@ export function createRuntime(
   let publishedMask = "";
   let ranked: readonly RankedVenue[] = EMPTY_VENUES;
   let rankedFromRaw: PlaceResult[] | null = null;
+  let rankedWithPick: PlaceResult | null = null;
   let rankedAtCenter: LatLng | null = null;
 
   let snapshot: GraphSnapshot = {
     slots,
     midpoint: null,
     venues: EMPTY_VENUES,
-    venuesLoading: false,
+    venueStatus: "idle",
     selectedVenue: null,
     destination: null,
     routes: EMPTY_ROUTES,
@@ -420,19 +439,29 @@ export function createRuntime(
             venues.request(null);
           }
           const raw = venues.getState().value;
+          const picked = sources.selectedPlace;
           // Re-rank per tick against the live midpoint: scores are relative
           // to the max distance within the returned set, so a ranking
-          // computed for an older centre would be subtly wrong.
-          if (raw === null || midpoint === null) {
+          // computed for an older centre would be subtly wrong. The pick is
+          // pinned into the result (`rankWithPinned`), so it stays listed —
+          // and the destination — however the ranking moves.
+          if (
+            !ports.placesEnabled ||
+            midpoint === null ||
+            (raw === null && picked === null)
+          ) {
             ranked = EMPTY_VENUES;
             rankedFromRaw = null;
+            rankedWithPick = null;
             rankedAtCenter = null;
           } else if (
             raw !== rankedFromRaw ||
+            picked !== rankedWithPick ||
             !sameLatLng(midpoint, rankedAtCenter)
           ) {
-            ranked = rankVenues(raw, midpoint, TOP_VENUES);
+            ranked = rankWithPinned(raw ?? [], midpoint, TOP_VENUES, picked);
             rankedFromRaw = raw;
+            rankedWithPick = picked;
             rankedAtCenter = midpoint;
           }
           break;
@@ -440,7 +469,7 @@ export function createRuntime(
         case "destination": {
           const result = deriveDestination(
             ranked,
-            sources.selectedVenueId,
+            sources.selectedPlace,
             midpoint,
           );
           nextDestination = result.destination;
@@ -467,7 +496,10 @@ export function createRuntime(
             slots,
             midpoint,
             venues: ranked,
-            venuesLoading: venueState.status === "pending",
+            venueStatus: venueStatusOf(
+              venueState,
+              ports.placesEnabled && midpoint !== null,
+            ),
             selectedVenue: nextSelected,
             destination: sameLatLng(nextDestination, snapshot.destination)
               ? snapshot.destination
@@ -482,7 +514,7 @@ export function createRuntime(
             next.slots !== snapshot.slots ||
             next.midpoint !== snapshot.midpoint ||
             next.venues !== snapshot.venues ||
-            next.venuesLoading !== snapshot.venuesLoading ||
+            next.venueStatus !== snapshot.venueStatus ||
             next.selectedVenue !== snapshot.selectedVenue ||
             next.destination !== snapshot.destination ||
             next.routes !== snapshot.routes ||

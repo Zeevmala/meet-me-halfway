@@ -7,7 +7,7 @@ import { geographicCentroid } from "../lib/geo-math";
 import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { RankedVenue } from "../lib/venue-ranking";
+import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 import type {
   DestinationResult,
   ExpiryResult,
@@ -252,27 +252,28 @@ export function deriveMidpoint(slots: SlotVector): LatLng | null {
 }
 
 /**
- * Resolve the meeting point: the selected venue if it still exists in the
- * current results, otherwise the midpoint.
+ * Resolve the meeting point: the picked venue as it is listed, otherwise the
+ * midpoint.
  *
- * This is a derivation rather than a write-back, which is the whole point.
- * Reconciliation used to be an effect that cleared the selection only when
- * `venues.length > 0`, so a search returning no results left a deleted venue
- * pinned as the destination indefinitely. Deriving it means an absent venue
- * simply cannot be the destination, and there is no second source of truth to
- * fall out of sync with the list highlight.
+ * The venues node pins the pick into the list (`rankWithPinned`), so while
+ * there is a list at all the pick is in it, and the destination cannot drift
+ * away from what the list highlights. It used to: the pick was an id looked
+ * up in a top five re-ranked on every move, so a venue near the cut-off
+ * dropped out and came back, and the destination flipped with it. Before
+ * that, an effect cleared the pick only when the list was non-empty, so an
+ * empty search left a venue nobody could see as the destination. A pick with
+ * no list to show it in — venue search off — is not one.
  */
 export function deriveDestination(
   venues: readonly RankedVenue[],
-  selectedVenueId: string | null,
+  picked: PlaceResult | null,
   midpoint: LatLng | null,
 ): DestinationResult {
-  if (selectedVenueId === null) {
-    return { destination: midpoint, selectedVenue: null };
-  }
-  const selected = venues.find((venue) => venue.id === selectedVenueId) ?? null;
-  return {
-    destination: selected ? selected.location : midpoint,
-    selectedVenue: selected,
-  };
+  const shown =
+    picked === null
+      ? null
+      : (venues.find((venue) => venue.id === picked.id) ?? null);
+  return shown === null
+    ? { destination: midpoint, selectedVenue: null }
+    : { destination: shown.location, selectedVenue: shown };
 }

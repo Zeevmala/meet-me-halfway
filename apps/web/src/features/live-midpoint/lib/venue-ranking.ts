@@ -62,7 +62,7 @@ export function computeVenueScore(
  * @param topN - Maximum venues to return (default 5)
  */
 export function rankVenues(
-  places: PlaceResult[],
+  places: readonly PlaceResult[],
   midpoint: LatLng,
   topN: number = 5,
 ): RankedVenue[] {
@@ -84,4 +84,56 @@ export function rankVenues(
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, topN);
+}
+
+/**
+ * The top `topN`, plus the venue the user picked, wherever it now ranks.
+ *
+ * A pick is a decision, not a ranking. Scores are relative to the live
+ * midpoint, so a venue near the cut-off moved in and out of the top `topN` as
+ * people walked — and the pick, found by looking it up in that list, went with
+ * it: the destination flipped between the venue and the midpoint with no
+ * search at all. Pinned, it stays listed, and clearable, until it is cleared.
+ *
+ * The pick is ranked from the latest results while they still hold it, and
+ * from the place as it was picked once they do not: a later search around a
+ * moved midpoint may no longer return it.
+ */
+export function rankWithPinned(
+  places: readonly PlaceResult[],
+  midpoint: LatLng,
+  topN: number,
+  pinned: PlaceResult | null,
+): RankedVenue[] {
+  const all = rankVenues(places, midpoint, places.length);
+  const top = all.slice(0, topN);
+  if (pinned === null || top.some((venue) => venue.id === pinned.id)) {
+    return top;
+  }
+  const ranked =
+    all.find((venue) => venue.id === pinned.id) ??
+    rankAmong(pinned, midpoint, all);
+  return [...top, ranked];
+}
+
+/**
+ * Score one place on the same scale as `others` — proximity relative to the
+ * farthest of them — so its score sorts among theirs. A place farther than
+ * all of them scores no proximity at all.
+ */
+function rankAmong(
+  place: PlaceResult,
+  midpoint: LatLng,
+  others: readonly RankedVenue[],
+): RankedVenue {
+  const distanceFromMidpoint = haversineDistance(midpoint, place.location);
+  const maxDistance = Math.max(
+    distanceFromMidpoint,
+    ...others.map((venue) => venue.distanceFromMidpoint ?? 0),
+  );
+  const withDistance = { ...place, distanceFromMidpoint };
+  return {
+    ...withDistance,
+    score: computeVenueScore(withDistance, maxDistance),
+  };
 }

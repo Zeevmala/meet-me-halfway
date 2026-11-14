@@ -212,10 +212,12 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
   // Selection and travel mode live in the graph rather than in React state.
   // Mirroring them would give two sources of truth: the list would highlight
-  // a venue the graph had already stopped routing to.
+  // a venue the graph had already stopped routing to. The pick goes in as the
+  // place itself, so the graph can keep it listed once a search stops
+  // returning it.
   const handleSelectVenue = useCallback(
     (venue: RankedVenue | null) => {
-      runtime.setSources({ selectedVenueId: venue?.id ?? null });
+      runtime.setSources({ selectedPlace: venue });
     },
     [runtime],
   );
@@ -512,7 +514,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
                 <Suspense fallback={null}>
                   <VenueListCard
                     venues={graph.venues}
-                    loading={graph.venuesLoading}
+                    status={graph.venueStatus}
                     selectedVenue={graph.selectedVenue}
                     onSelectVenue={handleSelectVenue}
                   />

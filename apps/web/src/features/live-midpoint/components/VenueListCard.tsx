@@ -2,46 +2,62 @@ import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { RankedVenue } from "../lib/venue-ranking";
 import { formatDistance } from "../lib/geo-math";
+import type { VenueStatus } from "../graph/types";
 import "../styles/live-midpoint.css";
 
 interface VenueListCardProps {
+  /** The top five, plus the picked venue wherever it now ranks. */
   venues: readonly RankedVenue[];
-  loading: boolean;
+  /** What to say while there is no list to show. */
+  status: VenueStatus;
   selectedVenue: RankedVenue | null;
   onSelectVenue: (venue: RankedVenue | null) => void;
 }
 
-/** Bottom card listing nearby venues ranked by composite score. */
+/**
+ * Bottom card listing nearby venues ranked by composite score.
+ *
+ * A list is shown whenever there is one: through a refresh, and after a
+ * failed search that left an earlier answer or a pinned pick to show. It
+ * used to go by a single `loading` flag, which put up the skeleton over the
+ * list on every refresh, and said "No venues found" both before the first
+ * search had even gone out and when it had failed.
+ */
 export default memo(function VenueListCard({
   venues,
-  loading,
+  status,
   selectedVenue,
   onSelectVenue,
 }: VenueListCardProps) {
   const { t } = useTranslation();
 
-  if (loading) {
-    return (
-      <div className="live-venues live-glass">
-        <div className="live-venues-header">
-          <span className="live-venues-title">{t("live.searchingVenues")}</span>
-        </div>
-        <div className="live-venues-shimmer">
-          <div className="live-venue-skeleton live-waiting-shimmer" />
-          <div className="live-venue-skeleton live-waiting-shimmer" />
-          <div className="live-venue-skeleton live-waiting-shimmer" />
-        </div>
-      </div>
-    );
-  }
-
   if (venues.length === 0) {
+    if (status === "idle") return null;
+    if (status === "searching") {
+      return (
+        <div className="live-venues live-glass">
+          <div className="live-venues-header">
+            <span className="live-venues-title">
+              {t("live.searchingVenues")}
+            </span>
+          </div>
+          <div className="live-venues-shimmer">
+            <div className="live-venue-skeleton live-waiting-shimmer" />
+            <div className="live-venue-skeleton live-waiting-shimmer" />
+            <div className="live-venue-skeleton live-waiting-shimmer" />
+          </div>
+        </div>
+      );
+    }
+    const failed = status === "failed";
     return (
       <div className="live-venues live-glass">
         <div className="live-venues-header">
           <span className="live-venues-title">{t("live.nearbyVenues")}</span>
         </div>
-        <div className="live-venue-empty">{t("live.noVenues")}</div>
+        <div className="live-venue-empty" role={failed ? "status" : undefined}>
+          {t(failed ? "live.venuesFailed" : "live.noVenues")}
+        </div>
       </div>
     );
   }
