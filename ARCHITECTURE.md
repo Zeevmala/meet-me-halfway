@@ -179,10 +179,11 @@ stateDiagram-v2
     closed --> [*]
 
     note right of live
-        Listener attached. Presence publishes
-        while there is a position.
+        Listeners attached: participants and
+        slot claims. Presence publishes while
+        there is a position.
         Leaving live, for any reason, detaches
-        the listener and removes your position.
+        both and removes your position.
     end note
 
     classDef derived fill:#ddf6ec,stroke:#00a383,stroke-width:2px,color:#0b3d2e
@@ -199,8 +200,9 @@ stateDiagram-v2
   runtime disposed — it deletes what it published. The session hook used to
   delete it while the graph wrote it, and a write still retrying in the graph
   put back a position the hook had just removed.
-- **Effects follow state.** Entering `live` attaches the participants
-  listener and writes the code to the URL; leaving detaches it. Handshakes
+- **Effects follow state.** Entering `live` attaches the participants and
+  slot-claims listeners and writes the code to the URL; leaving detaches
+  them. Handshakes
   only report what happened, so nothing they do can outlive the state it was
   for.
 - **Results of a handshake nobody waits on are dropped.** `creating` and
@@ -226,6 +228,43 @@ session exactly as of a missing one, on purpose, so codes cannot be probed;
 the join already reports it as not found, and that copy says the session may
 have expired. The check that stood there compared `created` with the device's
 clock, so it fired only when that clock ran fast.
+
+---
+
+## What the page shows
+
+`deriveScreen` (`features/live-midpoint/screen.ts`) is one pure function from
+the phase, the session, the GPS status, own position, the midpoint and the
+slot claims to a `Screen` union, and the page renders it with a `switch`. The
+precedence is the contract, and it is tested as such:
+
+| Screen | When | Way out |
+|---|---|---|
+| `ended` | the phase and the session agree it is over: expired, failed, lost | the error panel's |
+| `locationDenied` | GPS `denied` | Try again — a tap is the only time Chrome offers to turn Location on — and Reload, since WebKit fixes a denial for the page's lifetime |
+| `locationUnsupported` | no `navigator.geolocation` | none to retry; another browser |
+| `map` | anything else | — |
+
+An ended session comes first because nothing else can help it: a location
+fixed for an expired session is of no use to anyone. On the map, the sheet:
+
+| Sheet | When |
+|---|---|
+| `creating` / `joining` | the handshake has not reached the database; nothing to share |
+| `waiting` | live and nobody else counted; `full` once all five slots are claimed, when the card offers a new session instead of an invite |
+| `locating` | others counted, no own fix |
+| `meeting` | others counted, own fix, so a midpoint |
+
+GPS `timeout` and `unavailable` are banners over the map, never screens. They
+happen only before the first fix, and neither stops anything: the watch keeps
+acquiring after a timeout, and the hook restarts one the device failed. The
+Try again they had as screens tore down the watch that was still at work.
+
+**Invites go by claims.** `canInvite` is "a slot is unclaimed", read from a
+listener on `slots` that `useLiveSession` holds while live. A claim is never
+released, so the people present say nothing about whether anyone new can
+join: five claims with two people present is a full session, and the count of
+people present kept offering its invite.
 
 ---
 
@@ -389,6 +428,8 @@ tests.
 | **A debounce pushed back by its own input.** `request()` restarted the trailing debounce on every offer, and the runtime offers every node its input on every tick, so under a GPS reporting once a second every first fetch waited out its ceiling: routes at 9 s, not 3 s; the venue search at 15 s, not 5 s. The same request offered again now keeps its deadline. | `core/dag/resource` |
 | **A venue list that could not say what it knew.** One `venuesLoading` flag: "No venues found" while the first search was only scheduled, a skeleton over the list on every refresh, and "No venues found" again when the search failed — the conflation `places-api.ts` was rewritten to undo, back at the last step. | `runtime` + `VenueListCard` |
 | **A picked venue that blinked.** The pick was an id looked up in a top five re-ranked against the live midpoint on every move, so a venue near the cut dropped out and came back with no search at all, taking the destination, the card's title and the camera's framing with it. | `runtime` + `nodes` |
+| **A screen chosen by the order of `if`s.** Each condition was written for one case, and between them they told a phone whose own GPS had no fix "Waiting for others to join" while the others were on its map; drew a GPS timeout — the watch still acquiring — as a full-screen failure whose Try again tore that watch down; and gave a browser with no geolocation the Try again of one that was only retrying. | `LiveMidpointPage` → `screen.ts` |
+| **Invites into full sessions.** `canInvite` counted the people present, but a claim is never released, so a session that had had five kept offering its invite — the badge's and the waiting card's — to people who could only be told "Session is full". | `LiveMidpointPage` + `WaitingCard` |
 
 ---
 

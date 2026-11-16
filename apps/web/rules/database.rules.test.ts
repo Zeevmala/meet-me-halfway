@@ -464,6 +464,8 @@ describe("the handshake the deployed client actually performs", () => {
       }),
     );
     await assertSucceeds(creator.ref(`sessions/${CODE}/participants`).get());
+    // Live, the client also listens to the claims: invites go by them.
+    await assertSucceeds(creator.ref(`sessions/${CODE}/slots`).get());
     await assertSucceeds(
       creator.ref(`sessions/${CODE}/participants/0`).set(position(CREATOR)),
     );
@@ -480,6 +482,7 @@ describe("the handshake the deployed client actually performs", () => {
       joiner.ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]),
     );
     await assertSucceeds(joiner.ref(`sessions/${CODE}/participants`).get());
+    await assertSucceeds(joiner.ref(`sessions/${CODE}/slots`).get());
     await assertSucceeds(
       joiner.ref(`sessions/${CODE}/participants/1`).set(position(JOINERS[0])),
     );

@@ -92,3 +92,41 @@ describe("WaitingCard", () => {
     }
   });
 });
+
+describe("WaitingCard — full session", () => {
+  const CODE = "ABC234";
+
+  // Every slot is claimed: an invite could only be refused.
+  it("offers no invite", () => {
+    render(<WaitingCard code={CODE} full />);
+
+    expect(screen.getByText("live.waitingReturnTitle")).toBeTruthy();
+    expect(screen.getByText("live.sessionFullWaiting")).toBeTruthy();
+    expect(screen.queryByText("live.waitingTitle")).toBeNull();
+    expect(screen.queryByText("live.shareWhatsApp")).toBeNull();
+    expect(screen.queryByRole("button", { name: "live.copyLink" })).toBeNull();
+  });
+
+  it("offers a new session of one's own instead", () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    try {
+      render(<WaitingCard code={CODE} full />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "live.startNewSession" }),
+      );
+
+      expect(assign).toHaveBeenCalledWith("/");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the legal links", () => {
+    render(<WaitingCard code={CODE} full />);
+
+    expect(screen.getByRole("link", { name: "live.privacy" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "live.terms" })).toBeTruthy();
+  });
+});

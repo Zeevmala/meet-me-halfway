@@ -121,13 +121,19 @@ vi.mock("../../components/LanguageSwitcher", () => ({
 
 // ── Mock SessionBadge ──
 vi.mock("./components/SessionBadge", () => ({
-  default: () => <div data-testid="session-badge">Badge</div>,
+  default: ({ canInvite }: { canInvite: boolean }) => (
+    <div data-testid="session-badge" data-can-invite={String(canInvite)}>
+      Badge
+    </div>
+  ),
 }));
 
 // ── Mock WaitingCard ──
 vi.mock("./components/WaitingCard", () => ({
-  default: ({ code }: { code: string }) => (
-    <div data-testid="waiting-card">{code}</div>
+  default: ({ code, full }: { code: string; full?: boolean }) => (
+    <div data-testid="waiting-card" data-full={String(full ?? false)}>
+      {code}
+    </div>
   ),
 }));
 
@@ -185,6 +191,8 @@ function defaultSession() {
     // roster fixture below unassignable — and the spread in the movement test
     // a spread of `never`.
     participants: [] as ParticipantInfo[],
+    // Own claim only. Claims are not the participants: they never shrink.
+    claimedSlots: 1,
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
@@ -282,49 +290,100 @@ describe("LiveMidpointPage", () => {
     expect(mockPresenceRemove).not.toHaveBeenCalled();
   });
 
-  it("shows geo unavailable error screen", () => {
+  // A denial must not be a dead end: a phone with its Location toggle off
+  // lands here, and only a request made inside a tap lets Chrome offer to
+  // turn Location on.
+  it("geo denied screen: Try again restarts GPS, and the reason is visible", () => {
+    const error = "PERMISSION_DENIED: User denied Geolocation";
+    const startFn = vi.fn();
     mockGeo.mockReturnValue({
       ...defaultGeo(),
-      status: "unavailable",
+      status: "denied",
       position: null,
+      error,
+      start: startFn,
+    });
+
+    renderPage();
+    // The mount effect starts GPS once; the button must start it again.
+    startFn.mockClear();
+    fireEvent.click(screen.getByText("common.retry"));
+
+    expect(startFn).toHaveBeenCalledTimes(1);
+    // Open by default, so a screenshot says what actually failed.
+    const reason = screen.getByText(error);
+    expect(reason.closest("details")?.open).toBe(true);
+  });
+
+  // It used to share `unavailable` — and its Try again — with a device still
+  // retrying, though no request in this browser can succeed.
+  it("says so when the browser has no geolocation, with nothing to retry", () => {
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "unsupported",
+      position: null,
+      error: "Geolocation is not supported by this browser.",
     });
 
     renderPage();
 
-    expect(screen.getByText("live.geoUnavailable")).toBeTruthy();
-    expect(screen.getByText("live.geoUnavailableInstructions")).toBeTruthy();
+    expect(screen.getByText("live.geoUnsupported")).toBeTruthy();
+    expect(screen.getByText("live.geoUnsupportedInstructions")).toBeTruthy();
+    expect(screen.queryByText("common.retry")).toBeNull();
+    expect(screen.queryByText("app.reload")).toBeNull();
+    expect(
+      screen.getByText("Geolocation is not supported by this browser."),
+    ).toBeTruthy();
   });
 
-  // No location failure may be a dead end. Denied matters most: a phone with
-  // its Location toggle off lands there, and only a request made inside a tap
-  // lets Chrome offer to turn Location on.
+  // A slow or failing GPS stops nothing: the watch keeps acquiring after a
+  // timeout, and the hook restarts one the device failed. Both used to be
+  // full-screen failures, whose Try again tore down the watch at work.
   it.each([
-    ["denied", "PERMISSION_DENIED: User denied Geolocation"],
-    ["unavailable", "POSITION_UNAVAILABLE: Failed to request location updates"],
-    ["error", "TIMEOUT: Timeout expired"],
+    ["timeout", "live.locationSlow"],
+    ["unavailable", "live.locationUnavailable"],
   ] as const)(
-    "geo %s screen: Try again restarts GPS, and the reason is visible",
-    (status, error) => {
+    "draws a GPS %s as a banner over the map, with nothing to tap",
+    (status, message) => {
       const startFn = vi.fn();
       mockGeo.mockReturnValue({
         ...defaultGeo(),
         status,
         position: null,
-        error,
+        accuracy: null,
         start: startFn,
       });
 
       renderPage();
-      // The mount effect starts GPS once; the button must start it again.
-      startFn.mockClear();
-      fireEvent.click(screen.getByText("common.retry"));
 
+      expect(screen.getByTestId("live-map")).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toContain(message);
+      expect(screen.getByTestId("waiting-card")).toBeTruthy();
+      expect(screen.queryByText("common.retry")).toBeNull();
+      expect(screen.queryByText("app.reload")).toBeNull();
+      // Started once, by the mount effect, and left to acquire.
       expect(startFn).toHaveBeenCalledTimes(1);
-      // Open by default, so a screenshot says what actually failed.
-      const reason = screen.getByText(error);
-      expect(reason.closest("details")?.open).toBe(true);
     },
   );
+
+  // Nothing about location can help a session that has ended, so the ended
+  // session is what the page says.
+  it("says the session has ended rather than that location is denied", () => {
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "denied",
+      position: null,
+    });
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      state: failed("SESSION_FULL"),
+    });
+
+    renderPage();
+
+    expect(screen.getByText("live.sessionFull")).toBeTruthy();
+    expect(screen.queryByText("live.geoDenied")).toBeNull();
+  });
 
   it("geo denied screen offers Reload, for WebKit's page-lifetime denial", () => {
     const reload = vi.fn();
@@ -339,38 +398,6 @@ describe("LiveMidpointPage", () => {
     fireEvent.click(screen.getByText("app.reload"));
 
     expect(reload).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["unavailable", "error"] as const)(
-    "geo %s screen does not offer Reload",
-    (status) => {
-      mockGeo.mockReturnValue({ ...defaultGeo(), status, position: null });
-
-      renderPage();
-
-      expect(screen.queryByText("app.reload")).toBeNull();
-    },
-  );
-
-  it("shows geo timeout error with retry button", () => {
-    const startFn = vi.fn();
-    mockGeo.mockReturnValue({
-      ...defaultGeo(),
-      status: "error",
-      position: null,
-      start: startFn,
-    });
-
-    renderPage();
-
-    expect(screen.getByText("live.geoTimeout")).toBeTruthy();
-    expect(screen.getByText("live.geoTimeoutInstructions")).toBeTruthy();
-
-    const retryBtn = screen.getByText("common.retry");
-    expect(retryBtn).toBeTruthy();
-
-    fireEvent.click(retryBtn);
-    expect(startFn).toHaveBeenCalled();
   });
 
   it("shows session not found error", () => {
@@ -646,6 +673,79 @@ describe("LiveMidpointPage", () => {
 
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
     expect(screen.queryByTestId("midpoint-card")).toBeNull();
+  });
+
+  // The others were on the map, and the sheet said "Waiting for others to
+  // join": the one missing was this phone's own fix.
+  it("says it is locating, not waiting, while the others are here and own GPS has no fix", () => {
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "requesting",
+      position: null,
+      accuracy: null,
+    });
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0,
+          index: 1,
+          name: null,
+        },
+      ],
+      claimedSlots: 2,
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("status").textContent).toBe("live.locating");
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+    expect(screen.queryByTestId("midpoint-card")).toBeNull();
+  });
+
+  // A claim is never released. Counting the people present offered invites
+  // into a session that had had five, which nobody new could join.
+  it("offers no invite once all five slots are claimed, however few are here", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), claimedSlots: 5 });
+
+    renderPage();
+
+    expect(screen.getByTestId("waiting-card").dataset.full).toBe("true");
+    expect(screen.getByTestId("session-badge").dataset.canInvite).toBe("false");
+  });
+
+  it("offers the invite while a slot is free", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), claimedSlots: 4 });
+
+    renderPage();
+
+    expect(screen.getByTestId("waiting-card").dataset.full).toBe("false");
+    expect(screen.getByTestId("session-badge").dataset.canInvite).toBe("true");
+  });
+
+  it("goes by the claims, not the people present, in a meeting too", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0,
+          index: 1,
+          name: null,
+        },
+      ],
+      claimedSlots: 5,
+    });
+
+    renderPage();
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.getByTestId("session-badge").dataset.canInvite).toBe("false");
   });
 
   it("shows connected state with multiple participants", () => {

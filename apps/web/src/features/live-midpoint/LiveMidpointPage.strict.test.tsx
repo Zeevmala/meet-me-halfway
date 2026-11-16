@@ -39,6 +39,7 @@ vi.mock("./hooks/useLiveSession", async (importOriginal) => ({
     state: { kind: "live", code: "ABC234", slot: 0, createdAtMs: 0 },
     ownName: "Me",
     participants: [],
+    claimedSlots: 1,
     createSession: mockCreateSession,
     joinSession: mockJoinSession,
     setOwnName: vi.fn(),

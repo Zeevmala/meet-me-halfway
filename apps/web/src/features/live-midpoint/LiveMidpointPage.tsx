@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
@@ -15,22 +15,17 @@ import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import type { Connectivity } from "../../hooks/useNetworkStatus";
 import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
-import type { GeoStatus } from "./hooks/useLiveGeolocation";
 import { CLOSED_SESSION, useLiveSession } from "./hooks/useLiveSession";
-import type { SessionFailure, SessionState } from "./hooks/useLiveSession";
 import { useOverlayInsets } from "./hooks/useOverlayInsets";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
-import { sessionCode, sessionSlot } from "./graph/nodes";
-import type {
-  OtherParticipantView,
-  SessionPhase,
-  TravelProfile,
-} from "./graph/types";
+import { sessionSlot } from "./graph/nodes";
+import type { OtherParticipantView, TravelProfile } from "./graph/types";
+import { deriveScreen } from "./screen";
+import type { LocationTrouble, Screen, Sheet } from "./screen";
 import type { RankedVenue } from "./lib/venue-ranking";
 import { normalizeCode } from "./lib/session-code";
 import { participantInitial } from "./lib/display-name";
 import type { ParticipantIndex } from "./lib/participant-config";
-import { MAX_PARTICIPANTS } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
 import type { MapParticipant } from "./components/LiveMap";
 import SessionBadge from "./components/SessionBadge";
@@ -55,56 +50,40 @@ const CONNECTIVITY_BANNER: Record<Exclude<Connectivity, "online">, string> = {
   unreachable: "app.serverUnreachable",
 };
 
-type GeoErrorStatus = Extract<GeoStatus, "denied" | "unavailable" | "error">;
-
-/** The location failures that replace the page, and what each one says. */
-const GEO_ERROR_SCREENS: Record<
-  GeoErrorStatus,
-  { icon: string; title: string; instructions: string; offerReload: boolean }
+/**
+ * The two location states that replace the map, and what each says. Both stop
+ * sharing until the user acts; a slow or failing GPS does not, and is a
+ * banner instead.
+ */
+const LOCATION_SCREENS: Record<
+  Extract<Screen["kind"], "locationDenied" | "locationUnsupported">,
+  { title: string; instructions: string; canRetry: boolean }
 > = {
-  // Reload as well as Try again: WebKit (every iOS browser) fixes a page's
-  // denial for the page's lifetime, so there only a reload asks again — and an
-  // installed PWA has no reload control of its own.
-  denied: {
-    icon: "\u{1F4CD}",
+  locationDenied: {
     title: "live.geoDenied",
     instructions: "live.geoDeniedInstructions",
-    offerReload: true,
+    canRetry: true,
   },
-  unavailable: {
-    icon: "\u{1F4CD}",
-    title: "live.geoUnavailable",
-    instructions: "live.geoUnavailableInstructions",
-    offerReload: false,
-  },
-  error: {
-    icon: "\u23F2",
-    title: "live.geoTimeout",
-    instructions: "live.geoTimeoutInstructions",
-    offerReload: false,
+  // Nothing to retry: no request in this browser can succeed.
+  locationUnsupported: {
+    title: "live.geoUnsupported",
+    instructions: "live.geoUnsupportedInstructions",
+    canRetry: false,
   },
 };
 
 /**
- * What the error panel says when the session has ended, or `null` while it
- * has not. The phase decides — expiry is the graph's, derived from the clock —
- * and the session supplies the details. Both have to agree: the graph takes
- * the session one render later, and in that render the page stays as it was
- * rather than guessing.
+ * Location trouble that stops nothing. A timeout leaves the watch acquiring,
+ * and the hook restarts one the device failed, so there is nothing to tap:
+ * the Try again these had as full screens tore down a watch still at work.
  */
-function endedSession(
-  phase: SessionPhase,
-  state: SessionState,
-): SessionFailure | null {
-  if (phase === "expired") return { code: "SESSION_EXPIRED", details: null };
-  if (phase === "failed" && state.kind === "failed") {
-    return { code: state.reason, details: state.details };
-  }
-  if (phase === "lost" && state.kind === "lost") {
-    return { code: "CONNECTION_ERROR", details: state.details };
-  }
-  return null;
-}
+const LOCATION_BANNER: Record<
+  LocationTrouble,
+  { icon: string; message: string }
+> = {
+  slow: { icon: "\u23F2", message: "live.locationSlow" },
+  unavailable: { icon: "\u26A0", message: "live.locationUnavailable" },
+};
 
 /**
  * Read ?code= from the URL, normalised but not validated: `joinSession`
@@ -380,32 +359,58 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     };
   }, [runtime]);
 
-  // ── Error states ──
-  // Every location failure gets the same way out. The denied screen used to
-  // have none, and it is where a phone with its Location toggle off lands:
-  // Chrome reports that as PERMISSION_DENIED and offers its "turn on location"
-  // dialog only for a request made inside a tap, so a reload never recovers.
-  if (
-    geo.status === "denied" ||
-    geo.status === "unavailable" ||
-    geo.status === "error"
-  ) {
-    const screen = GEO_ERROR_SCREENS[geo.status];
+  // Read own position back out of the slot vector rather than from a second
+  // source: everything on screen is keyed by slot, and this is that index.
+  const ownPosition =
+    slots.ownSlot === null ? null : (slots.positions[slots.ownSlot] ?? null);
+
+  // ── What to show ──
+  // One pure function over the inputs, so the precedence is written down
+  // once (screen.ts) instead of falling out of the order of the `if`s here.
+  const screen = deriveScreen({
+    phase: graph.phase,
+    session: session.state,
+    geo: geo.status,
+    ownPosition,
+    midpoint: graph.midpoint,
+    claimedSlots: session.claimedSlots,
+  });
+
+  if (screen.kind === "ended") {
+    return (
+      <SessionErrorPanel
+        errorCode={screen.failure.code}
+        errorDetails={screen.failure.details}
+      />
+    );
+  }
+
+  if (screen.kind !== "map") {
+    const location = LOCATION_SCREENS[screen.kind];
     return (
       <div className="live-page">
         <div className="live-error">
-          <div className="live-error-icon">{screen.icon}</div>
-          <div className="live-error-title">{t(screen.title)}</div>
-          <div className="live-error-message">{t(screen.instructions)}</div>
-          <div className="live-error-actions">
-            <button
-              type="button"
-              className="live-btn live-btn-primary"
-              onClick={() => geo.start()}
-            >
-              {t("common.retry")}
-            </button>
-            {screen.offerReload && (
+          <div className="live-error-icon" aria-hidden="true">
+            {"\u{1F4CD}"}
+          </div>
+          <div className="live-error-title">{t(location.title)}</div>
+          <div className="live-error-message">{t(location.instructions)}</div>
+          {/* The denied screen used to have no way out, and it is where a
+              phone with its Location toggle off lands: Chrome reports that
+              as PERMISSION_DENIED and offers its "turn on location" dialog
+              only for a request made inside a tap, so a reload never
+              recovers. Reload as well: WebKit (every iOS browser) fixes a
+              page's denial for the page's lifetime, so there only a reload
+              asks again — and an installed PWA has no reload control. */}
+          {location.canRetry && (
+            <div className="live-error-actions">
+              <button
+                type="button"
+                className="live-btn live-btn-primary"
+                onClick={() => geo.start()}
+              >
+                {t("common.retry")}
+              </button>
               <button
                 type="button"
                 className="live-btn live-btn-secondary"
@@ -413,8 +418,8 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               >
                 {t("app.reload")}
               </button>
-            )}
-          </div>
+            </div>
+          )}
           {/* Open, so a screenshot of this screen carries the reason. */}
           {geo.error && (
             <details className="live-error-details" open>
@@ -427,23 +432,68 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     );
   }
 
-  const ended = endedSession(graph.phase, session.state);
-  if (ended !== null) {
-    return (
-      <SessionErrorPanel errorCode={ended.code} errorDetails={ended.details} />
-    );
-  }
-
-  const code = sessionCode(session.state);
   const ownIndex = sessionSlot(session.state) ?? (0 as ParticipantIndex);
 
-  const isConnected =
-    graph.phase === "connected" || graph.phase === "some_stale";
-
-  // Read own position back out of the slot vector rather than from a second
-  // source: everything on screen is keyed by slot, and this is that index.
-  const ownPosition =
-    slots.ownSlot === null ? null : (slots.positions[slots.ownSlot] ?? null);
+  const renderSheet = (sheet: Sheet): ReactNode => {
+    switch (sheet.kind) {
+      case "none":
+        return null;
+      // Until the database holds the session there is nothing to share and
+      // nobody to wait for, and a bare map said neither. A joiner sat on one
+      // for as long as its handshake took — forever, on a device that could
+      // not connect — and a creator would too, now that its code appears
+      // only once the session is written.
+      case "creating":
+      case "joining":
+        return (
+          <div
+            className="live-card live-glass live-waiting-shimmer live-handshake"
+            role="status"
+          >
+            {t(sheet.kind === "creating" ? "live.creating" : "live.connecting")}
+          </div>
+        );
+      case "waiting":
+        return <WaitingCard code={sheet.code} full={sheet.full} />;
+      // The others are on the map already; "Waiting for others to join" is
+      // what this said, while the one missing was this phone's own fix.
+      case "locating":
+        return (
+          <div
+            className="live-card live-glass live-waiting-shimmer live-handshake"
+            role="status"
+          >
+            {t("live.locating")}
+          </div>
+        );
+      case "meeting":
+        return (
+          <>
+            {placesEnabled && (
+              <Suspense fallback={null}>
+                <VenueListCard
+                  venues={graph.venues}
+                  status={graph.venueStatus}
+                  selectedVenue={graph.selectedVenue}
+                  onSelectVenue={handleSelectVenue}
+                />
+              </Suspense>
+            )}
+            <MidpointCard
+              ownIndex={ownIndex}
+              ownPosition={sheet.ownPosition}
+              ownRoute={routes[ownIndex] ?? null}
+              otherParticipants={otherParticipants}
+              destination={graph.destination ?? sheet.midpoint}
+              travelProfile={graph.travelProfile}
+              onProfileChange={handleProfileChange}
+              selectedVenueName={graph.selectedVenue?.displayName ?? null}
+              routesStale={graph.routesDegraded}
+            />
+          </>
+        );
+    }
+  };
 
   return (
     <main className="live-page" ref={setPageEl} style={overlayStyle}>
@@ -459,15 +509,15 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       {/* Everything drawn over the top of the map. Measured, like the sheet:
           an overlay outside these two is one the camera cannot see. */}
       <div className="live-topbar" ref={setTopbarEl}>
-        {code && (
+        {screen.code && (
           <SessionBadge
-            code={code}
+            code={screen.code}
             phase={graph.phase}
             ownConnected={geo.status === "watching"}
             ownIndex={ownIndex}
             ownName={session.ownName}
             onNameChange={session.setOwnName}
-            canInvite={session.participants.length + 1 < MAX_PARTICIPANTS}
+            canInvite={screen.canInvite}
             participants={badgeParticipants}
           />
         )}
@@ -488,53 +538,19 @@ function LiveMidpointInner({ uid }: { uid: string }) {
             {t("live.presenceFailed")}
           </div>
         )}
+
+        {screen.locationTrouble !== null && (
+          <div className="live-offline-banner" role="status">
+            <span aria-hidden="true">
+              {LOCATION_BANNER[screen.locationTrouble].icon}
+            </span>
+            {t(LOCATION_BANNER[screen.locationTrouble].message)}
+          </div>
+        )}
       </div>
 
       <div className="live-sheet" ref={setSheetEl}>
-        {/* Until the database holds the session there is nothing to share
-            and nobody to wait for, and a bare map said neither. A joiner sat
-            on one for as long as its handshake took — forever, on a device
-            that could not connect — and a creator would too, now that its
-            code appears only once the session is written. */}
-        {(graph.phase === "creating" || graph.phase === "joining") && (
-          <div
-            className="live-card live-glass live-waiting-shimmer live-handshake"
-            role="status"
-          >
-            {t(
-              graph.phase === "creating" ? "live.creating" : "live.connecting",
-            )}
-          </div>
-        )}
-
-        {code &&
-          (isConnected && graph.midpoint && ownPosition ? (
-            <>
-              {placesEnabled && (
-                <Suspense fallback={null}>
-                  <VenueListCard
-                    venues={graph.venues}
-                    status={graph.venueStatus}
-                    selectedVenue={graph.selectedVenue}
-                    onSelectVenue={handleSelectVenue}
-                  />
-                </Suspense>
-              )}
-              <MidpointCard
-                ownIndex={ownIndex}
-                ownPosition={ownPosition}
-                ownRoute={routes[ownIndex] ?? null}
-                otherParticipants={otherParticipants}
-                destination={graph.destination ?? graph.midpoint}
-                travelProfile={graph.travelProfile}
-                onProfileChange={handleProfileChange}
-                selectedVenueName={graph.selectedVenue?.displayName ?? null}
-                routesStale={graph.routesDegraded}
-              />
-            </>
-          ) : (
-            <WaitingCard code={code} />
-          ))}
+        {renderSheet(screen.sheet)}
       </div>
     </main>
   );

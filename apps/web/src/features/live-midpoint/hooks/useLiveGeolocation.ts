@@ -2,8 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as Sentry from "@sentry/react";
 import { backoffDelayMs } from "../../../core/dag/backoff";
 
+/**
+ * Where location has got to. `timeout` and `unavailable` happen only before
+ * the first fix, and neither is a failure: the watch keeps acquiring after a
+ * timeout, and is restarted with backoff after POSITION_UNAVAILABLE. Only
+ * `denied` and `unsupported` end it.
+ *
+ * The names used to hide that. A timeout was `error`, and the page drew it as
+ * a full-screen failure whose Try again tore down the watch that was still
+ * acquiring; a browser with no geolocation was `unavailable`, so the page
+ * could not tell it from one that was still retrying.
+ */
 export type GeoStatus =
-  "idle" | "requesting" | "watching" | "denied" | "error" | "unavailable";
+  | "idle"
+  | "requesting"
+  | "watching"
+  | "denied"
+  | "timeout"
+  | "unavailable"
+  | "unsupported";
 
 export interface LiveGeoState {
   status: GeoStatus;
@@ -100,7 +117,7 @@ export function useLiveGeolocation(): LiveGeoState {
 
   const start = useCallback(() => {
     if (!navigator.geolocation) {
-      setStatus("unavailable");
+      setStatus("unsupported");
       setError("Geolocation is not supported by this browser.");
       return;
     }
@@ -172,7 +189,7 @@ export function useLiveGeolocation(): LiveGeoState {
           // out too, and the screen would otherwise flip between two titles,
           // hiding the message that names the actual failure.
           if (!hasFixRef.current && !(timedOut && sawUnavailableRef.current)) {
-            setStatus(timedOut ? "error" : "unavailable");
+            setStatus(timedOut ? "timeout" : "unavailable");
             setError(describeGeoError(err));
           }
 

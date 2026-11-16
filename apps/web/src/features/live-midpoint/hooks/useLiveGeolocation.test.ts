@@ -172,13 +172,13 @@ describe("useLiveGeolocation", () => {
     expect(result.current.error).toBe("POSITION_UNAVAILABLE");
   });
 
-  it('sets status to "error" on TIMEOUT', () => {
+  it('sets status to "timeout" on TIMEOUT', () => {
     const { result } = renderHook(() => useLiveGeolocation());
     act(() => result.current.start());
 
     act(() => sendError(3, "Timeout expired"));
 
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("timeout");
     expect(result.current.error).toBe("TIMEOUT: Timeout expired");
   });
 
@@ -201,13 +201,15 @@ describe("useLiveGeolocation", () => {
     expect(mockClearWatch).toHaveBeenCalled();
   });
 
-  it("sets unavailable when navigator.geolocation is missing", () => {
+  // Its own state, not `unavailable`: that one is retried with backoff, and
+  // a browser with no geolocation at all has nothing to retry.
+  it("is unsupported when navigator.geolocation is missing", () => {
     vi.stubGlobal("navigator", {});
     const { result } = renderHook(() => useLiveGeolocation());
 
     act(() => result.current.start());
 
-    expect(result.current.status).toBe("unavailable");
+    expect(result.current.status).toBe("unsupported");
     expect(result.current.error).toBe(
       "Geolocation is not supported by this browser.",
     );
@@ -441,7 +443,7 @@ describe("useLiveGeolocation", () => {
       act(() => sendError(3, "Timeout expired"));
 
       // Not stuck on "requesting" over the pre-denial position.
-      expect(result.current.status).toBe("error");
+      expect(result.current.status).toBe("timeout");
       expect(result.current.error).toBe("TIMEOUT: Timeout expired");
     });
 
@@ -484,7 +486,7 @@ describe("useLiveGeolocation", () => {
       act(() => result.current.start());
       act(() => sendError(3, "Timeout expired"));
 
-      expect(result.current.status).toBe("error");
+      expect(result.current.status).toBe("timeout");
     });
 
     it("schedules one restart however many errors arrive", () => {

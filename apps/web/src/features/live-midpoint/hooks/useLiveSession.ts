@@ -213,6 +213,12 @@ export interface LiveSession {
   readonly ownName: string;
   readonly participants: ParticipantInfo[];
   /**
+   * How many of the five slots have ever been claimed, own included: 0 until
+   * the live session answers, and whenever no session is live. Not how many
+   * people are present — they come and go, and a claim is never released.
+   */
+  readonly claimedSlots: number;
+  /**
    * Both return a Result rather than throwing.
    *
    * They used to throw, and the page called them from an effect with no
@@ -450,6 +456,10 @@ export function useLiveSession(uid: string): LiveSession {
 
   const [state, dispatch] = useReducer(sessionReducer, IDLE_SESSION);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
+  const [slotCount, setSlotCount] = useState<{
+    readonly code: string;
+    readonly claimed: number;
+  } | null>(null);
   const [ownName, setOwnNameState] = useState<string>(() =>
     getOrCreateDisplayName(),
   );
@@ -528,6 +538,47 @@ export function useLiveSession(uid: string): LiveSession {
       },
     );
   }, [db, uid, appCheck, liveCode]);
+
+  // Count the claims while the session is live. A claim is never released,
+  // so a session that has had five people is full for good, however few are
+  // present. Invites went by the participants — who come and go — and kept
+  // offering a session nobody else could join. `slots` is readable by anyone
+  // signed in while the session is fresh, and holds no position or name.
+  useEffect(() => {
+    if (liveCode === null) return;
+    const code = liveCode;
+    return onValue(
+      ref(db, `sessions/${code}/slots`),
+      (snap) => {
+        const slots = (snap.val() ?? {}) as SlotMap;
+        let claimed = 0;
+        for (const [slotKey, holder] of Object.entries(slots)) {
+          // Untrusted input, as in the participants listener: the rules
+          // allow no other keys, but a snapshot is not the rules.
+          const slot = Number(slotKey);
+          if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_PARTICIPANTS) {
+            continue;
+          }
+          if (typeof holder === "string") claimed++;
+        }
+        setSlotCount({ code, claimed });
+      },
+      (error) => {
+        // Refused when this client may no longer read the session, which
+        // the participants listener reports as `lost` — or when the rules
+        // refuse the claims alone. The count keeps its last value, claims
+        // only ever growing, but that second case would quietly bring back
+        // invites into full sessions, so it is reported, not swallowed.
+        Sentry.captureException(error, {
+          tags: { phase: "listen-slots", classified: classifyJoinError(error) },
+          contexts: sessionContext(code, appCheck !== null),
+        });
+      },
+    );
+  }, [db, appCheck, liveCode]);
+  // Keyed by code, so a count can only ever describe the live session.
+  const claimedSlots =
+    slotCount !== null && slotCount.code === liveCode ? slotCount.claimed : 0;
 
   /** Record a handshake failure once, in the shape the UI and caller need. */
   const fail = useCallback(
@@ -786,6 +837,7 @@ export function useLiveSession(uid: string): LiveSession {
     state,
     ownName,
     participants,
+    claimedSlots,
     createSession,
     joinSession,
     setOwnName,

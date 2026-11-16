@@ -9,6 +9,15 @@ import type {
 import { sessionCode, sessionSlot } from "../graph/nodes";
 import type { Result } from "../../../core/dag/result";
 
+// ── Mock Sentry: what the hook reports is part of its contract ──
+const { mockCaptureException } = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
+}));
+vi.mock("@sentry/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/react")>()),
+  captureException: mockCaptureException,
+}));
+
 // ── Mock firebase/database ──
 const mockSet = vi.fn();
 const mockUpdate = vi.fn();
@@ -19,13 +28,22 @@ const mockRef = vi.fn((_db: unknown, path?: string) => ({ path }));
 let onValueCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let onValueErrorCallback: ((err: Error) => void) | null = null;
 const mockOnValueUnsub = vi.fn();
+// The slot claims have a listener of their own, beside the participants'.
+let slotsCallback: ((snap: { val: () => unknown }) => void) | null = null;
+let slotsErrorCallback: ((err: Error) => void) | null = null;
+const mockSlotsUnsub = vi.fn();
 
 vi.mock("firebase/database", () => ({
   onValue: (
-    _ref: unknown,
+    ref: { path?: string },
     onSnap: (snap: { val: () => unknown }) => void,
     onErr: (err: Error) => void,
   ) => {
+    if (ref.path?.endsWith("/slots")) {
+      slotsCallback = onSnap;
+      slotsErrorCallback = onErr;
+      return mockSlotsUnsub;
+    }
     onValueCallback = onSnap;
     onValueErrorCallback = onErr;
     return mockOnValueUnsub;
@@ -145,6 +163,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   onValueCallback = null;
   onValueErrorCallback = null;
+  slotsCallback = null;
+  slotsErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
@@ -1085,6 +1105,131 @@ describe("useLiveSession", () => {
 
       expect(result.current.participants).toEqual([]);
       expect(result.current.state.kind).toBe("live");
+    });
+  });
+
+  describe("claimedSlots", () => {
+    // A claim is never released, so the claims say whether anyone new can
+    // join; the people present do not. Invites went by the people present,
+    // and kept offering sessions that had had five.
+    it("counts the claims, not the people present", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        slotsCallback?.({
+          val: () => ({
+            "0": TEST_UID,
+            "1": PARTNER_UID,
+            "2": PARTNER_UID_2,
+            "3": PARTNER_UID_3,
+            "4": PARTNER_UID_4,
+          }),
+        });
+        onValueCallback?.({
+          val: () => ({
+            "0": { uid: TEST_UID, lat: 32.08, lng: 34.78, accuracy: 10, ts: 1 },
+            "1": { uid: PARTNER_UID, lat: 31.7, lng: 35.2, accuracy: 9, ts: 1 },
+          }),
+        });
+      });
+
+      expect(result.current.participants).toHaveLength(1);
+      expect(result.current.claimedSlots).toBe(5);
+    });
+
+    it("is 0, with nothing listening, until the session is live", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      expect(result.current.claimedSlots).toBe(0);
+      expect(slotsCallback).toBeNull();
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      expect(mockRef).toHaveBeenCalledWith(mockDb, "sessions/ABC234/slots");
+      expect(result.current.claimedSlots).toBe(0);
+      act(() => {
+        slotsCallback?.({ val: () => ({ "0": TEST_UID }) });
+      });
+      expect(result.current.claimedSlots).toBe(1);
+    });
+
+    // RTDB hands back an object keyed 0..4 as an array once enough of the
+    // keys are present.
+    it("reads the array form RTDB returns for dense integer keys", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        slotsCallback?.({ val: () => [TEST_UID, PARTNER_UID, PARTNER_UID_2] });
+      });
+
+      expect(result.current.claimedSlots).toBe(3);
+    });
+
+    it("counts only the five slots, each held by a uid", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        slotsCallback?.({
+          val: () => ({ "0": TEST_UID, "1": 42, "5": PARTNER_UID, x: "y" }),
+        });
+      });
+
+      expect(result.current.claimedSlots).toBe(1);
+    });
+
+    // Claims only grow, so the count stands. The session is the
+    // participants listener's to call lost. But a refusal of the claims
+    // alone would quietly bring back invites into full sessions, so it is
+    // reported.
+    it("keeps the count and the session, and reports it, when the claims stop being readable", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        slotsCallback?.({ val: () => ({ "0": TEST_UID, "1": PARTNER_UID }) });
+      });
+      const refusal = new Error("Permission denied");
+      act(() => {
+        slotsErrorCallback?.(refusal);
+      });
+
+      expect(result.current.state.kind).toBe("live");
+      expect(result.current.claimedSlots).toBe(2);
+      expect(mockCaptureException).toHaveBeenCalledWith(
+        refusal,
+        expect.objectContaining({
+          tags: expect.objectContaining({ phase: "listen-slots" }),
+        }),
+      );
+    });
+
+    it("detaches with the session, and describes no session once it is gone", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        slotsCallback?.({ val: () => ({ "0": TEST_UID, "1": PARTNER_UID }) });
+      });
+      act(() => {
+        result.current.close();
+      });
+
+      expect(mockSlotsUnsub).toHaveBeenCalledTimes(1);
+      expect(result.current.claimedSlots).toBe(0);
     });
   });
 
