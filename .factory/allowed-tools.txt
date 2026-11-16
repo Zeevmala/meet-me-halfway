@@ -1,0 +1,9 @@
+# Extra tools the implementer run may use, one per line (Claude Code permission rules).
+# Kept to what the gate runs, so a run can check its own work the same way.
+Bash(npm run:*)
+Bash(npm test:*)
+Bash(npx eslint:*)
+Bash(npx prettier:*)
+Bash(npx vitest:*)
+Bash(npx tsc:*)
+Bash(node --test:*)

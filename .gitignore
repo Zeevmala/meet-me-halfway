@@ -68,3 +68,4 @@ apps/api/
 firebase-debug.log
 database-debug.log
 ui-debug.log
+.factory-run/
