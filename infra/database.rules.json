@@ -20,23 +20,23 @@
           ".read": "auth != null && data.parent().child('created').val() > now - 86400000",
           "0": {
             ".write": "auth != null && !data.exists()",
-            ".validate": "newData.isString() && newData.val() === auth.uid && newData.val() === newData.parent().parent().child('creatorUid').val() && newData.parent().parent().child('created').val() > now - 86400000"
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.val() === newData.parent().parent().child('creatorUid').val() && newData.parent().parent().child('created').val() > now - 86400000 && newData.parent().child('1').val() !== auth.uid && newData.parent().child('2').val() !== auth.uid && newData.parent().child('3').val() !== auth.uid && newData.parent().child('4').val() !== auth.uid"
           },
           "1": {
             ".write": "auth != null && !data.exists() && root.child('sessions').child($code).child('created').val() > now - 86400000",
-            ".validate": "newData.isString() && newData.val() === auth.uid"
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.parent().child('0').val() !== auth.uid && newData.parent().child('2').val() !== auth.uid && newData.parent().child('3').val() !== auth.uid && newData.parent().child('4').val() !== auth.uid"
           },
           "2": {
             ".write": "auth != null && !data.exists() && root.child('sessions').child($code).child('created').val() > now - 86400000",
-            ".validate": "newData.isString() && newData.val() === auth.uid"
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.parent().child('0').val() !== auth.uid && newData.parent().child('1').val() !== auth.uid && newData.parent().child('3').val() !== auth.uid && newData.parent().child('4').val() !== auth.uid"
           },
           "3": {
             ".write": "auth != null && !data.exists() && root.child('sessions').child($code).child('created').val() > now - 86400000",
-            ".validate": "newData.isString() && newData.val() === auth.uid"
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.parent().child('0').val() !== auth.uid && newData.parent().child('1').val() !== auth.uid && newData.parent().child('2').val() !== auth.uid && newData.parent().child('4').val() !== auth.uid"
           },
           "4": {
             ".write": "auth != null && !data.exists() && root.child('sessions').child($code).child('created').val() > now - 86400000",
-            ".validate": "newData.isString() && newData.val() === auth.uid"
+            ".validate": "newData.isString() && newData.val() === auth.uid && newData.parent().child('0').val() !== auth.uid && newData.parent().child('1').val() !== auth.uid && newData.parent().child('2').val() !== auth.uid && newData.parent().child('3').val() !== auth.uid"
           },
           "$other": { ".validate": false }
         },

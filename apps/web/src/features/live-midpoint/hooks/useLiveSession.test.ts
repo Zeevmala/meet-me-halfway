@@ -660,6 +660,34 @@ describe("useLiveSession", () => {
       expect(sessionSlot(result.current.state)).toBe(2);
     });
 
+    it("takes the slot another tab of this browser claimed, when a second is refused", async () => {
+      // The rules allow an account one slot per session. Two tabs signed in
+      // as the same account can still race: this one read the slots before
+      // the other tab's claim of index 2 landed, so its own claim of index 1
+      // is refused with index 1 still free. That is neither a lost race nor a
+      // structural denial: the account's slot is the one the other tab took.
+      const slots: Record<string, string> = { "0": "creator-uid" };
+      mockSession({ created: Date.now(), creatorUid: "creator-uid" }, slots);
+      mockSet.mockImplementationOnce(() => {
+        slots["2"] = TEST_UID; // the other tab's claim, already landed
+        return Promise.reject(
+          Object.assign(new Error("Permission denied"), {
+            code: "PERMISSION_DENIED",
+          }),
+        );
+      });
+
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.joinSession("XYZ789", live());
+      });
+
+      expect(result.current.state.kind).toBe("live");
+      expect(sessionSlot(result.current.state)).toBe(2);
+      expect(mockSet).toHaveBeenCalledTimes(1);
+    });
+
     it("reports SESSION_FULL when all five slots are claimed", async () => {
       // The cap is now the database's: five write-once keys exist and every
       // one is taken by somebody else, so claimSlot has nothing to claim.

@@ -362,6 +362,14 @@ async function readCreated(db: Database, code: string): Promise<number> {
 /** `sessions/{code}/slots` as RTDB stores it: slot key → holder uid. */
 type SlotMap = Partial<Record<string, string>>;
 
+/** The slot `uid` holds in `slots`, if any. */
+function heldBy(slots: SlotMap, uid: string): ParticipantIndex | null {
+  for (const [key, holder] of Object.entries(slots)) {
+    if (holder === uid) return Number(key) as ParticipantIndex;
+  }
+  return null;
+}
+
 /**
  * Claim a slot, letting the database arbitrate.
  *
@@ -384,6 +392,9 @@ type SlotMap = Partial<Record<string, string>>;
  * treat it as a lost race if somebody is actually in it; anything else is a
  * real error and is rethrown for `withRetry` to classify.
  *
+ * The rules also allow an account one slot per session, so a refusal can
+ * mean "you already hold one" as well: that slot is returned.
+ *
  * @returns the claimed slot, or `null` when all five are genuinely held.
  * @throws if a claim is refused for any reason other than losing the race.
  */
@@ -405,9 +416,8 @@ async function claimSlot(
     const slots = (snap.val() ?? {}) as SlotMap;
 
     // Idempotent rejoin: we may already hold one from a previous mount.
-    for (const [key, holder] of Object.entries(slots)) {
-      if (holder === uid) return Number(key) as ParticipantIndex;
-    }
+    const mine = heldBy(slots, uid);
+    if (mine !== null) return mine;
 
     const free = candidates.find((slot) => slots[String(slot)] === undefined);
     if (free === undefined) return null;
@@ -423,7 +433,19 @@ async function claimSlot(
       // cannot see the session at all.
       const holder = (await get(slotRef)).val() as string | null;
       if (holder === uid) return free; // write landed, ack lost
-      if (holder === null) throw refused; // nobody took it: not a race
+      if (holder === null) {
+        // Nobody took it, so this was not a race for the index. The rules
+        // allow an account one slot per session, though, so there is one
+        // refusal that is not an error either: another tab of this browser,
+        // signed in as the same account, claimed a different index between
+        // our read and our write. That slot is ours.
+        const elsewhere = heldBy(
+          ((await get(slotsRef)).val() ?? {}) as SlotMap,
+          uid,
+        );
+        if (elsewhere !== null) return elsewhere;
+        throw refused;
+      }
       // Somebody holds it — a genuine lost race. Try the next free index.
     }
   }

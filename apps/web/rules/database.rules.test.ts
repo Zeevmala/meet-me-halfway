@@ -162,6 +162,52 @@ describe("slots — the participant cap", () => {
   });
 });
 
+describe("slots — one per account", () => {
+  // One account could take all four joiner slots. The friend who was
+  // invited then got "Session is full" from a session with one person in it,
+  // for good: a claim is never released.
+  it("refuses a second slot to an account that already holds one", async () => {
+    await assertSucceeds(
+      as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]),
+    );
+
+    for (const slot of [2, 3, 4]) {
+      await assertFails(
+        as(JOINERS[0]).ref(`sessions/${CODE}/slots/${slot}`).set(JOINERS[0]),
+      );
+    }
+  });
+
+  // Checked against the data as it would be after the write, so one update
+  // cannot slip two claims past a rule that only looked at what was there.
+  it("refuses two slots claimed in a single update", async () => {
+    await assertFails(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/slots`)
+        .update({ 1: JOINERS[0], 2: JOINERS[0] }),
+    );
+  });
+
+  it("refuses the creator a joiner's slot on top of slot 0", async () => {
+    for (const slot of [1, 2, 3, 4]) {
+      await assertFails(
+        as(CREATOR).ref(`sessions/${CODE}/slots/${slot}`).set(CREATOR),
+      );
+    }
+  });
+
+  it("leaves the slots it did not take to everyone else", async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+    await assertFails(
+      as(JOINERS[0]).ref(`sessions/${CODE}/slots/2`).set(JOINERS[0]),
+    );
+
+    await assertSucceeds(
+      as(JOINERS[1]).ref(`sessions/${CODE}/slots/2`).set(JOINERS[1]),
+    );
+  });
+});
+
 describe("participants — writable only by the slot holder", () => {
   beforeEach(async () => {
     await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);

@@ -129,7 +129,7 @@ Tests are typechecked. Vitest strips types without checking them, so `tsc` is th
 /sessions/{6charCode}/
   created: number (server timestamp)
   creatorUid: string (write-once, must match auth.uid)
-  slots/{0..4}: uid (write-once; exactly five keys may ever exist)
+  slots/{0..4}: uid (write-once; exactly five keys may ever exist; one per account)
   participants/{slot}: { uid, lat, lng, accuracy, ts, name }   # ts: server timestamp
 /probe   (never holds data; readable by anyone signed in, writable by nobody)
 ```
@@ -143,6 +143,8 @@ A read of a session that does not exist, or is over 24 hours old, is **denied**,
 The client has the server stamp both timestamps (`serverTimestamp()`), never the device: every peer judges staleness from `ts`, and phones run minutes off. The rules require both to equal their `now`, so no client can backdate `created` to stretch the 24 hours, or game the 2s write throttle with a `ts` it chose. Liveness compares them against `Date.now()` plus `.info/serverTimeOffset` (`useServerTimeOffset` → the graph's `serverTimeOffsetMs` source), never the device clock alone.
 
 The cap is a property of the schema, not a client-side check. Exactly five keys are declared under `slots`, each write-once and each validated to equal the writer's `auth.uid`; any other key has no `.write` rule anywhere up the tree and is rejected. `participants/{slot}` is then writable only by whoever holds `slots/{slot}`, which needs no key-pattern matching: since only 0–4 can exist under `slots`, any other participant key resolves to a null holder and is denied for free. Slot 0 additionally validates against `creatorUid`, making "the creator is green" a server invariant.
+
+An account holds at most one slot per session. Each slot's rule refuses a uid that any other slot holds, and judges it against the data as it would be after the write (`newData`), so one multi-path update cannot claim two. One account used to be able to take all four joiner slots, and the friend who was invited got "Session is full" for good. Anonymous accounts are free, so this raises the cost of locking a session rather than removing it. A refusal with the index still free can therefore now mean "you already hold one" — a second tab of the same browser got there first — and `claimSlot` returns that slot instead of an error.
 
 Claiming is arbitrated by the database rather than by a client registry: two clients racing for one index are serialised, and the loser's `set` is rejected with `permission_denied`, so `claimSlot` in `useLiveSession` retries the next free index. But a rejection is only evidence of a lost race if the index actually ends up held — a rejection with the index still free means the write was denied structurally (stale rules, a revoked token), not that somebody beat us to it. `claimSlot` re-reads to tell those apart and rethrows the second case, because reporting it as `SESSION_FULL` is a lie about an empty session and it is what made the 2026-09-11 outage read as a capacity problem. `SESSION_FULL` is a fact about the session only because that distinction is drawn. Slot claims are deliberately **not** released on disconnect — `onDisconnect` clears `participants/{slot}` only — so a reconnect returns to the same slot and colour. An `onDisconnect` belongs to the connection that registered it — the server runs it once, when that connection drops, then forgets it — so `presence-rtdb.ts` re-arms every published path each time `.info/connected` comes back; `rules/presence-disconnect.test.ts` proves it against the emulator.
 
