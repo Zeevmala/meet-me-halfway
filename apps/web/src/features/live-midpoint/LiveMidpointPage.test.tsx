@@ -1093,7 +1093,7 @@ describe("LiveMidpointPage — the meeting point", () => {
     expect(lastCard().onMovePin).toBeNull();
   });
 
-  it("draws the meeting point on the map", () => {
+  it("draws the meeting point on the map", async () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       participants: [PEER],
@@ -1101,6 +1101,8 @@ describe("LiveMidpointPage — the meeting point", () => {
     });
 
     renderPage();
+    // The map is loaded on its own, after the page.
+    await screen.findByTestId("live-map");
 
     expect(liveMapProps[liveMapProps.length - 1]?.pinned).toEqual(HAIFA);
   });
@@ -1121,13 +1123,15 @@ describe("LiveMidpointPage — render-path stability", () => {
     ];
   }
 
-  it("keeps LiveMap's props referentially stable across an unchanged heartbeat", () => {
+  it("keeps LiveMap's props referentially stable across an unchanged heartbeat", async () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       participants: roster(),
     });
 
     const { rerender } = renderPage();
+    // The map is loaded on its own, after the page.
+    await screen.findByTestId("live-map");
     const before = liveMapProps.length;
     expect(before).toBeGreaterThan(0);
     const first = liveMapProps[before - 1];
@@ -1159,13 +1163,14 @@ describe("LiveMidpointPage — render-path stability", () => {
     expect(second.insets).toBe(first.insets);
   });
 
-  it("hands LiveMap new projections when the roster actually changes", () => {
+  it("hands LiveMap new projections when the roster actually changes", async () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       participants: roster(),
     });
 
     const { rerender } = renderPage();
+    await screen.findByTestId("live-map");
     const first = liveMapProps[liveMapProps.length - 1];
 
     const moved = roster();

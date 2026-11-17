@@ -28,8 +28,7 @@ import type { RankedVenue } from "./lib/venue-ranking";
 import { rememberConsent } from "./lib/consent";
 import { participantInitial } from "./lib/display-name";
 import type { ParticipantIndex } from "./lib/participant-config";
-import LiveMap from "./components/LiveMap";
-import type { MapParticipant } from "./components/LiveMap";
+import type { MapParticipant } from "./graph/types";
 import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
@@ -42,6 +41,19 @@ import "./styles/live-midpoint.css";
 const VenueListCard = lazy(
   pendingWhileReloading(() => import("./components/VenueListCard")),
 );
+
+/**
+ * The map, loaded on its own. It is most of what this page weighs —
+ * mapbox-gl is ~545 KB gzipped — and it was a static import, so nothing on
+ * the page could start before it had arrived: not the sign-in, not the
+ * location request, not the session handshake. A reload into a remembered
+ * session waited on it every time. Now they run while it loads, and the map
+ * fills in under the sheet when it comes.
+ */
+export const loadLiveMap = pendingWhileReloading(
+  () => import("./components/LiveMap"),
+);
+const LiveMap = lazy(loadLiveMap);
 
 /**
  * What the banner says when the page cannot talk to the database. Two
@@ -590,15 +602,18 @@ function LiveMidpointInner({
 
   return (
     <main className="live-page" ref={setPageEl} style={overlayStyle}>
-      <LiveMap
-        participants={mapParticipants}
-        midpoint={graph.midpoint}
-        routes={routeGeometries}
-        venues={graph.venues}
-        selectedVenue={graph.selectedVenue}
-        pinned={graph.pin?.position ?? null}
-        insets={overlay.insets}
-      />
+      {/* The same box the map will fill, so nothing moves when it does. */}
+      <Suspense fallback={<div className="live-map-container" />}>
+        <LiveMap
+          participants={mapParticipants}
+          midpoint={graph.midpoint}
+          routes={routeGeometries}
+          venues={graph.venues}
+          selectedVenue={graph.selectedVenue}
+          pinned={graph.pin?.position ?? null}
+          insets={overlay.insets}
+        />
+      </Suspense>
 
       {/* Everything drawn over the top of the map. Measured, like the sheet:
           an overlay outside these two is one the camera cannot see. */}

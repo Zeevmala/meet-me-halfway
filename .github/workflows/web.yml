@@ -142,6 +142,8 @@ jobs:
           VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
           VITE_GOOGLE_PLACES_API_KEY: ${{ secrets.VITE_GOOGLE_PLACES_API_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          # Not a secret: the commit, so a Sentry report names its deploy.
+          VITE_RELEASE: ${{ github.sha }}
       - uses: actions/upload-artifact@v7
         with:
           name: web-dist

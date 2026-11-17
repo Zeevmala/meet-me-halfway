@@ -97,6 +97,9 @@ if (dsn !== null) {
     Sentry.init({
       dsn,
       environment: import.meta.env.MODE,
+      // Which deploy a report came from. Left out when the build was not
+      // given one, rather than guessed.
+      ...(APP_CONFIG.release === null ? {} : { release: APP_CONFIG.release }),
       integrations: [Sentry.browserTracingIntegration()],
       tracesSampleRate: 0.1,
       // No session replay. The sample rates that used to sit here did

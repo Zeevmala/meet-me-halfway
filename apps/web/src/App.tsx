@@ -13,8 +13,8 @@ import {
 import { pendingWhileReloading } from "./lib/stale-chunk-reload";
 import { t } from "./strings";
 
-// The page is the heavy chunk: the map is most of it. Named, so that it can
-// be fetched while the start screen is still being read.
+// The page and its map are the heavy chunks, the map most of all. Named, so
+// that both can be fetched while the start screen is still being read.
 const loadPage = pendingWhileReloading(
   () => import("./features/live-midpoint/LiveMidpointPage"),
 );
@@ -43,9 +43,12 @@ export default function App() {
 
   useEffect(() => {
     if (invalid) return;
-    // After the first paint, so the start screen is not kept waiting for it.
-    // A failure here is the lazy import's to report when it is needed.
-    loadPage().catch(() => {});
+    // After the first paint, so the start screen is not kept waiting for
+    // them. A failure here is the lazy imports' to report when they are
+    // needed.
+    loadPage()
+      .then((page) => page?.loadLiveMap())
+      .catch(() => {});
   }, [invalid]);
 
   if (invalid) {

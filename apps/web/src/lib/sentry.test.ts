@@ -14,7 +14,10 @@ vi.mock("@sentry/react", () => ({
 }));
 
 vi.mock("./config", () => ({
-  APP_CONFIG: { sentryDsn: "https://key@o0.ingest.sentry.io/0" },
+  APP_CONFIG: {
+    sentryDsn: "https://key@o0.ingest.sentry.io/0",
+    release: "0123abc",
+  },
 }));
 
 import { redact, scrub } from "./sentry";
@@ -44,6 +47,11 @@ async function directionsUrl(): Promise<string> {
 }
 
 describe("Sentry init", () => {
+  // Every report from every release used to read the same.
+  it("tags reports with the commit the bundle was built from", () => {
+    expect(captured.options?.release).toBe("0123abc");
+  });
+
   // Left unset, v11's `dataCollection` stores every reporter's IP address,
   // which privacy.html says a report never carries. Nothing else would notice.
   it("never lets the SDK identify the reporter", () => {

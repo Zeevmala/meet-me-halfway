@@ -15,6 +15,7 @@ function complete(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     recaptchaSiteKey: "site-key",
     sentryDsn: null,
+    release: null,
     rtdbEmulatorHost: null,
     ...overrides,
   };
@@ -109,6 +110,7 @@ describe("createAppConfig", () => {
     expect(config.places?.apiKey).not.toBe("");
     expect(config.recaptchaSiteKey).not.toBe("");
     expect(config.sentryDsn).not.toBe("");
+    expect(config.release).not.toBe("");
     expect(config.firebase.appId).not.toBe("");
     expect(config.rtdbEmulatorHost).not.toBe("");
   });

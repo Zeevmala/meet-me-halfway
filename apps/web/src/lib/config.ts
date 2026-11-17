@@ -41,6 +41,13 @@ export interface AppConfig {
   readonly recaptchaSiteKey: string | null;
   readonly sentryDsn: string | null;
   /**
+   * The commit the bundle was built from (CI sets it to `github.sha`), so an
+   * error report says which deploy it came from. Without it every report from
+   * every release read the same, and a fix could not be told from what it
+   * fixed.
+   */
+  readonly release: string | null;
+  /**
    * `host:port` of a Realtime Database emulator, for end-to-end tests only.
    *
    * The e2e suite drives the real client against the emulator loaded with the
@@ -70,6 +77,7 @@ export function createAppConfig(): AppConfig {
     },
     recaptchaSiteKey: orNull(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
     sentryDsn: orNull(import.meta.env.VITE_SENTRY_DSN),
+    release: orNull(import.meta.env.VITE_RELEASE),
     rtdbEmulatorHost: orNull(import.meta.env.VITE_RTDB_EMULATOR_HOST),
   };
 }
