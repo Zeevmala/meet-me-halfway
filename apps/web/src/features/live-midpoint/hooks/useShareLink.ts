@@ -30,8 +30,12 @@ export function useShareLink(code: string): ShareLink {
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const shareUrl = `${window.location.origin}?code=${code}`;
-  const message = t("live.shareMessage", { url: shareUrl });
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+  // One sentence, and the link after it. WhatsApp's own link takes a single
+  // string, so it gets both; the share sheet takes them apart.
+  const invitation = t("live.shareText");
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
+    `${invitation} ${shareUrl}`,
+  )}`;
 
   const copy = useCallback(async () => {
     try {
@@ -57,9 +61,12 @@ export function useShareLink(code: string): ShareLink {
       return;
     }
     try {
+      // The link goes in `url` and nowhere else. It used to be in `text` as
+      // well, and a share target that joins the two — every Android one, by
+      // the Web Share spec's own note — sent the invite with the link twice.
       await navigator.share({
         title: t("app.title"),
-        text: message,
+        text: invitation,
         url: shareUrl,
       });
     } catch (err: unknown) {
@@ -67,7 +74,7 @@ export function useShareLink(code: string): ShareLink {
       if (err instanceof DOMException && err.name === "AbortError") return;
       await copy();
     }
-  }, [copy, message, shareUrl]);
+  }, [copy, invitation, shareUrl]);
 
   return { shareUrl, whatsappUrl, copied, copy, share };
 }

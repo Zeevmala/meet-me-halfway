@@ -33,6 +33,7 @@ import SessionBadge from "./components/SessionBadge";
 import WaitingCard from "./components/WaitingCard";
 import MidpointCard from "./components/MidpointCard";
 import SessionErrorPanel from "./components/SessionErrorPanel";
+import LegalLinks from "./components/LegalLinks";
 import { pendingWhileReloading } from "../../lib/stale-chunk-reload";
 import "./styles/live-midpoint.css";
 
@@ -376,6 +377,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     ownPosition,
     midpoint: graph.midpoint,
     claimedSlots: session.claimedSlots,
+    othersSharing: otherParticipants.length,
   });
 
   if (screen.kind === "ended") {
@@ -429,6 +431,9 @@ function LiveMidpointInner({ uid }: { uid: string }) {
               <code>{geo.error}</code>
             </details>
           )}
+          {/* This is the screen that asks for location: what happens to it
+              has to be one tap away. */}
+          <LegalLinks />
         </div>
       </div>
     );
@@ -553,6 +558,18 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
       <div className="live-sheet" ref={setSheetEl}>
         {renderSheet(screen.sheet)}
+        {/* Anyone who holds a slot can read every position, and a device
+            that shares none of its own is on nobody's map. */}
+        {screen.unseenDevices > 0 && (
+          <p className="live-card live-glass live-sheet-note" role="status">
+            {screen.unseenDevices === 1
+              ? t("live.unseenDeviceOne")
+              : t("live.unseenDeviceMany", { count: screen.unseenDevices })}
+          </p>
+        )}
+        {/* Under every card, not only the waiting one: a joiner never sees
+            that card. */}
+        {screen.sheet.kind !== "none" && <LegalLinks />}
       </div>
     </main>
   );

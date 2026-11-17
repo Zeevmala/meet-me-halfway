@@ -7,6 +7,7 @@ import {
   detectInAppBrowser,
   buildOpenInBrowserLink,
 } from "../lib/in-app-browser";
+import LegalLinks from "./LegalLinks";
 
 /** What each session error says. */
 const SESSION_ERROR_I18N: Record<SessionErrorCode, StringKey> = {
@@ -170,6 +171,7 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
             <code>{errorDetails}</code>
           </details>
         )}
+        <LegalLinks />
       </div>
     </div>
   );

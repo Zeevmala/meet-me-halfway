@@ -78,16 +78,24 @@ describe("WaitingCard", () => {
     expect(promptSpy).toHaveBeenCalledWith("live.copyLink", shareUrl);
   });
 
-  // Followed in place, they unloaded the page — tearing down the session
-  // listener and GPS — and Back restored it frozen.
-  it("opens the legal pages in a new tab, keeping the session", () => {
-    render(<WaitingCard code="ABC234" />);
+  // WhatsApp's link takes one string, so the sentence and the link share it.
+  it("WhatsApp message is the invitation followed by the link, once", () => {
+    render(<WaitingCard code={CODE} />);
+    const link = screen.getByText("live.shareWhatsApp").closest("a")!;
+    const shareUrl = `${window.location.origin}?code=${CODE}`;
+    const text = new URL(link.getAttribute("href")!).searchParams.get("text");
 
-    for (const name of ["live.privacy", "live.terms"]) {
-      const link = screen.getByRole("link", { name });
-      expect(link.getAttribute("target")).toBe("_blank");
-      expect(link.getAttribute("rel")).toContain("noopener");
-    }
+    expect(text).toBe(`live.shareText ${shareUrl}`);
+    expect(text!.split(shareUrl)).toHaveLength(2);
+  });
+
+  // The legal links are the page's now, under every card (LegalLinks): as
+  // part of this one they were shown to creators only.
+  it("leaves the legal links to the page", () => {
+    render(<WaitingCard code={CODE} />);
+
+    expect(screen.queryByRole("link", { name: "live.privacy" })).toBeNull();
+    expect(screen.queryByRole("navigation")).toBeNull();
   });
 });
 
@@ -119,12 +127,5 @@ describe("WaitingCard — full session", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("keeps the legal links", () => {
-    render(<WaitingCard code={CODE} full />);
-
-    expect(screen.getByRole("link", { name: "live.privacy" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "live.terms" })).toBeTruthy();
   });
 });

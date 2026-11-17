@@ -1254,6 +1254,19 @@
 
 /* ── Legal links footer (shown beneath WaitingCard) ── */
 
+/* A device that joined without sharing: said plainly, under the cards. */
+.live-sheet-note {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--live-text-muted);
+}
+
+.live-error .live-legal-links {
+  margin-top: 24px;
+}
+
 .live-legal-links {
   flex: 0 0 auto;
   display: flex;

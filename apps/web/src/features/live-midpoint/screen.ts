@@ -48,6 +48,13 @@ export type Screen =
       readonly locationTrouble: LocationTrouble | null;
       /** A slot is free, so an invite can be accepted. */
       readonly canInvite: boolean;
+      /**
+       * Other devices that hold a slot and publish no position: joined and
+       * still waiting for a fix, joined and gone, or joined to watch. A slot
+       * is what lets a device read everyone's position, and nothing on the
+       * map shows one that does not share its own — so the page says so.
+       */
+      readonly unseenDevices: number;
     };
 
 export interface ScreenInputs {
@@ -58,6 +65,8 @@ export interface ScreenInputs {
   readonly ownPosition: LatLng | null;
   readonly midpoint: LatLng | null;
   readonly claimedSlots: number;
+  /** Other participants with a position on the map; own is not counted. */
+  readonly othersSharing: number;
 }
 
 const NO_SHEET: Sheet = { kind: "none" };
@@ -88,6 +97,7 @@ export function deriveScreen(inputs: ScreenInputs): Screen {
     sheet: deriveSheet(inputs, code, full),
     locationTrouble: locationTrouble(inputs.geo),
     canInvite: code !== null && !full,
+    unseenDevices: unseenDevices(inputs, code),
   };
 }
 
@@ -124,6 +134,18 @@ function deriveSheet(
     case "failed":
       return NO_SHEET;
   }
+}
+
+/**
+ * Claims, less this device's own, less the others who are on the map.
+ *
+ * Zero until the claims have been counted (`claimedSlots` is 0 until the
+ * live session answers), and never negative: the two listeners it is fed by
+ * do not arrive together.
+ */
+function unseenDevices(inputs: ScreenInputs, code: string | null): number {
+  if (code === null) return 0;
+  return Math.max(0, inputs.claimedSlots - 1 - inputs.othersSharing);
 }
 
 function locationTrouble(geo: GeoStatus): LocationTrouble | null {

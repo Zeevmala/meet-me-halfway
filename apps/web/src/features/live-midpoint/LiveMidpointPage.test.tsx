@@ -741,6 +741,101 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByTestId("session-badge").dataset.canInvite).toBe("false");
   });
 
+  // A slot is what lets a device read every position, and a device that
+  // shares none of its own was on nobody's map: the creator's screen said
+  // "Waiting for others to join" while someone was already watching.
+  it("says so when a device has joined without sharing its location", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), claimedSlots: 2 });
+
+    renderPage();
+
+    expect(screen.getByTestId("waiting-card")).toBeTruthy();
+    expect(screen.getByText("live.unseenDeviceOne")).toBeTruthy();
+  });
+
+  it("counts every such device, in a meeting too", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0,
+          index: 1,
+          name: null,
+        },
+      ],
+      claimedSlots: 4,
+    });
+
+    renderPage();
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.getByText('live.unseenDeviceMany:{"count":2}')).toBeTruthy();
+  });
+
+  it("says nothing of it while everyone who joined is on the map", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0,
+          index: 1,
+          name: null,
+        },
+      ],
+      claimedSlots: 2,
+    });
+
+    renderPage();
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.queryByText(/live\.unseenDevice/)).toBeNull();
+  });
+
+  // The links were part of the waiting card, which a joiner never sees: they
+  // go from "Connecting" straight to the meeting.
+  it("keeps the privacy policy and terms under the meeting card", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [
+        {
+          uid: "p1",
+          position: { lat: 31.77, lng: 35.21 },
+          accuracy: 15,
+          lastSeen: 0,
+          index: 1,
+          name: null,
+        },
+      ],
+      claimedSlots: 2,
+    });
+
+    renderPage();
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "live.privacy" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "live.terms" })).toBeTruthy();
+  });
+
+  it("links the privacy policy from the screen that asks for location", () => {
+    mockGeo.mockReturnValue({
+      ...defaultGeo(),
+      status: "denied",
+      position: null,
+      accuracy: null,
+    });
+
+    renderPage();
+
+    expect(screen.getByText("live.geoDenied")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "live.privacy" })).toBeTruthy();
+  });
+
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),

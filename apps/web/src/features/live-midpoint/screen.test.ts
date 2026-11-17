@@ -27,6 +27,7 @@ function inputs(overrides: Partial<ScreenInputs> = {}): ScreenInputs {
     ownPosition: OWN,
     midpoint: MIDPOINT,
     claimedSlots: 2,
+    othersSharing: 1,
     ...overrides,
   };
 }
@@ -102,7 +103,12 @@ describe("deriveScreen — the sheet", () => {
 
   it("waits with the code to share while alone and a slot is free", () => {
     const screen = deriveScreen(
-      inputs({ phase: "waiting", midpoint: null, claimedSlots: 3 }),
+      inputs({
+        phase: "waiting",
+        midpoint: null,
+        claimedSlots: 3,
+        othersSharing: 0,
+      }),
     );
     expect(screen).toEqual({
       kind: "map",
@@ -110,6 +116,7 @@ describe("deriveScreen — the sheet", () => {
       sheet: { kind: "waiting", code: CODE, full: false },
       locationTrouble: null,
       canInvite: true,
+      unseenDevices: 2,
     });
   });
 
@@ -166,6 +173,55 @@ describe("deriveScreen — the sheet", () => {
       code: CODE,
       sheet: { kind: "meeting" },
     });
+  });
+});
+
+describe("deriveScreen — devices that joined without sharing", () => {
+  // A slot is what lets a device read everyone's position. One that claims
+  // a slot and publishes nothing was on nobody's map and in nobody's list:
+  // the creator's screen went on saying "Waiting for others to join".
+  it("counts the claims that are neither this device nor anyone on the map", () => {
+    expect(
+      deriveScreen(
+        inputs({ phase: "waiting", claimedSlots: 2, othersSharing: 0 }),
+      ),
+    ).toMatchObject({ kind: "map", unseenDevices: 1 });
+    expect(
+      deriveScreen(inputs({ claimedSlots: 5, othersSharing: 2 })),
+    ).toMatchObject({ unseenDevices: 2 });
+  });
+
+  it("is zero when everyone who joined is on the map", () => {
+    expect(
+      deriveScreen(inputs({ claimedSlots: 2, othersSharing: 1 })),
+    ).toMatchObject({ unseenDevices: 0 });
+    expect(
+      deriveScreen(inputs({ claimedSlots: 5, othersSharing: 4 })),
+    ).toMatchObject({ unseenDevices: 0 });
+  });
+
+  // The claims listener answers after the session goes live, and not in step
+  // with the participants listener.
+  it("is zero until the claims are counted, and never negative", () => {
+    expect(
+      deriveScreen(inputs({ claimedSlots: 0, othersSharing: 0 })),
+    ).toMatchObject({ unseenDevices: 0 });
+    expect(
+      deriveScreen(inputs({ claimedSlots: 1, othersSharing: 2 })),
+    ).toMatchObject({ unseenDevices: 0 });
+  });
+
+  it("is zero while there is no session to have joined", () => {
+    expect(
+      deriveScreen(
+        inputs({
+          phase: "joining",
+          session: { kind: "joining", handshake: 1 },
+          claimedSlots: 3,
+          othersSharing: 0,
+        }),
+      ),
+    ).toMatchObject({ unseenDevices: 0 });
   });
 });
 
