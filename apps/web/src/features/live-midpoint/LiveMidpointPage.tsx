@@ -8,7 +8,8 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../strings";
+import type { StringKey } from "../../strings";
 import { useAuth } from "../../hooks/useAuth";
 import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
@@ -45,7 +46,10 @@ const VenueListCard = lazy(
  * messages, because "You are offline" over a map still loading its tiles told
  * the user to fix a network that was working.
  */
-const CONNECTIVITY_BANNER: Record<Exclude<Connectivity, "online">, string> = {
+const CONNECTIVITY_BANNER: Record<
+  Exclude<Connectivity, "online">,
+  StringKey
+> = {
   offline: "app.offline",
   unreachable: "app.serverUnreachable",
 };
@@ -57,7 +61,7 @@ const CONNECTIVITY_BANNER: Record<Exclude<Connectivity, "online">, string> = {
  */
 const LOCATION_SCREENS: Record<
   Extract<Screen["kind"], "locationDenied" | "locationUnsupported">,
-  { title: string; instructions: string; canRetry: boolean }
+  { title: StringKey; instructions: StringKey; canRetry: boolean }
 > = {
   locationDenied: {
     title: "live.geoDenied",
@@ -79,7 +83,7 @@ const LOCATION_SCREENS: Record<
  */
 const LOCATION_BANNER: Record<
   LocationTrouble,
-  { icon: string; message: string }
+  { icon: string; message: StringKey }
 > = {
   slow: { icon: "\u23F2", message: "live.locationSlow" },
   unavailable: { icon: "\u26A0", message: "live.locationUnavailable" },
@@ -99,7 +103,6 @@ function getCodeFromURL(): string | null {
 
 /** Auth gate — waits for Firebase Anonymous Auth before rendering inner page. */
 export default function LiveMidpointPage() {
-  const { t } = useTranslation();
   const auth = useAuth();
 
   if (auth.status === "loading") {
@@ -121,7 +124,6 @@ export default function LiveMidpointPage() {
 
 /** Inner page — only renders after auth is resolved. */
 function LiveMidpointInner({ uid }: { uid: string }) {
-  const { t } = useTranslation();
   const geo = useLiveGeolocation();
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();

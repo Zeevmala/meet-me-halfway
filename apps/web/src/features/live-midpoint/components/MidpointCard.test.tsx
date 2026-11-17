@@ -1,13 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => {
-      if (opts) return `${key}:${JSON.stringify(opts)}`;
-      return key;
-    },
-  }),
+vi.mock("../../../strings", () => ({
+  t: (key: string, opts?: Record<string, unknown>) => {
+    if (opts) return `${key}:${JSON.stringify(opts)}`;
+    return key;
+  },
 }));
 
 vi.mock("../styles/live-midpoint.css", () => ({}));

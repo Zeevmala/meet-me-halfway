@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock("../../../strings", () => ({ t: (key: string) => key }));
 vi.mock("../../../lib/config", () => ({
   APP_CONFIG: { mapboxToken: "pk.test" },
 }));

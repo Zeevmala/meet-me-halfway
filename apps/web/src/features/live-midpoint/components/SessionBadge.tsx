@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 import type { SessionPhase } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { isDerivedName, participantInitial } from "../lib/display-name";
@@ -39,7 +39,6 @@ export default memo(function SessionBadge({
   canInvite,
   participants,
 }: SessionBadgeProps) {
-  const { t } = useTranslation();
   const { copied, share } = useShareLink(code);
 
   const [editing, setEditing] = useState(false);

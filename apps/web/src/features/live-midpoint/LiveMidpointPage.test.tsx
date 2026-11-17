@@ -9,14 +9,12 @@ import type { ParticipantInfo, SessionState } from "./hooks/useLiveSession";
 import { ok, err } from "../../core/dag/result";
 import { DEPARTED_THRESHOLD_MS, SESSION_TTL_MS } from "./graph/nodes";
 
-// ── Mock i18next ──
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => {
-      if (opts) return `${key}:${JSON.stringify(opts)}`;
-      return key;
-    },
-  }),
+// ── Mock the string table ──
+vi.mock("../../strings", () => ({
+  t: (key: string, opts?: Record<string, unknown>) => {
+    if (opts) return `${key}:${JSON.stringify(opts)}`;
+    return key;
+  },
 }));
 
 // ── Mock useAuth ──
@@ -112,11 +110,6 @@ vi.mock("./components/LiveMap", () => ({
     liveMapProps.push(props);
     return <div data-testid="live-map">Map</div>;
   },
-}));
-
-// ── Mock LanguageSwitcher ──
-vi.mock("../../components/LanguageSwitcher", () => ({
-  default: () => <div data-testid="lang-switcher">Lang</div>,
 }));
 
 // ── Mock SessionBadge ──

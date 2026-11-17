@@ -72,7 +72,6 @@ export default defineConfig(({ mode }) => ({
           react: ["react", "react-dom"],
           firebase: ["firebase/app", "firebase/auth", "firebase/database"],
           mapbox: ["mapbox-gl"],
-          i18n: ["i18next", "react-i18next"],
           sentry: ["@sentry/react"],
         },
       },

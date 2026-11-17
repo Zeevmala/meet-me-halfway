@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 
 /** How long "Link copied" stays up. */
 const COPIED_MS = 2000;
@@ -24,7 +24,6 @@ export interface ShareLink {
  * here once.
  */
 export function useShareLink(code: string): ShareLink {
-  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -44,7 +43,7 @@ export function useShareLink(code: string): ShareLink {
       // No clipboard (an old browser, or one refusing it): hand it over.
       window.prompt(t("live.copyLink"), shareUrl);
     }
-  }, [shareUrl, t]);
+  }, [shareUrl]);
 
   const share = useCallback(async () => {
     // navigator.share exists on desktop Chrome but works only on mobile, over
@@ -68,7 +67,7 @@ export function useShareLink(code: string): ShareLink {
       if (err instanceof DOMException && err.name === "AbortError") return;
       await copy();
     }
-  }, [copy, message, shareUrl, t]);
+  }, [copy, message, shareUrl]);
 
   return { shareUrl, whatsappUrl, copied, copy, share };
 }

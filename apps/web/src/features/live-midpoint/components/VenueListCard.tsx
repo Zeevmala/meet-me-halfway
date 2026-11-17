@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 import type { RankedVenue } from "../lib/venue-ranking";
 import { formatDistance } from "../lib/geo-math";
 import type { VenueStatus } from "../graph/types";
@@ -29,8 +29,6 @@ export default memo(function VenueListCard({
   selectedVenue,
   onSelectVenue,
 }: VenueListCardProps) {
-  const { t } = useTranslation();
-
   if (venues.length === 0) {
     if (status === "idle") return null;
     if (status === "searching") {

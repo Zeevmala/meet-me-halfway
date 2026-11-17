@@ -4,7 +4,6 @@ import "./lib/register-sw"; // Registers the PWA SW in prod, tears it down in de
 import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import "./lib/i18n"; // Initialize i18next before React renders
 import { APP_CONFIG, validateAppConfig } from "./lib/config";
 import { createServices } from "./lib/services";
 import { ServicesProvider } from "./components/ServicesProvider";

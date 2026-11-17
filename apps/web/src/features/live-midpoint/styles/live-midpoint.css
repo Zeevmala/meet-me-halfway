@@ -1227,54 +1227,6 @@
   color: var(--live-text-muted);
 }
 
-/* ── Language Switcher (dark theme) ── */
-
-.live-lang-switcher {
-  position: absolute;
-  top: max(8px, env(safe-area-inset-top, 8px));
-  inset-inline-end: 10px;
-  z-index: 10;
-  display: flex;
-  gap: 4px;
-}
-
-.live-lang-btn {
-  min-width: 44px;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--live-border);
-  background: var(--live-surface);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  color: var(--live-text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  font-family: var(--live-font);
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.live-lang-btn--active {
-  background: var(--live-glass);
-  color: var(--live-text);
-  border-color: var(--live-blue);
-}
-
-.live-lang-btn:hover:not(.live-lang-btn--active) {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.live-lang-btn:focus-visible {
-  outline: 2px solid var(--live-blue);
-  outline-offset: 2px;
-}
-
 /* ── Tablet/desktop layout: the sheet docks in the inline-end bottom corner ── */
 
 @media (min-width: 600px) {

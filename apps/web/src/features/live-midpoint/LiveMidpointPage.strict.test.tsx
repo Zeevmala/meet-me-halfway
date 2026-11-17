@@ -14,9 +14,7 @@ import { ok } from "../../core/dag/result";
  * the GPS watch on mount and abort the session handshake.
  */
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock("../../strings", () => ({ t: (key: string) => key }));
 vi.mock("@sentry/react", () => ({ captureMessage: vi.fn() }));
 vi.mock("../../hooks/useAuth", () => ({
   useAuth: () => ({ status: "authenticated", uid: "test-uid" }),

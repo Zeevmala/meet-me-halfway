@@ -499,6 +499,6 @@ in module state on first import.
 ```bash
 cd apps/web
 npm test                              # 410 tests
-npx eslint src/ --max-warnings=0      # exhaustive-deps and the RTL rule are CI-fatal
+npx eslint src/ --max-warnings=0      # exhaustive-deps and the custom syntax rules are CI-fatal
 npm run tsc
 ```

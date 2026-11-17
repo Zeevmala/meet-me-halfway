@@ -293,18 +293,16 @@ test("a link to a session that was never created reads 'Session not found'", asy
 });
 
 /**
- * The connectivity banner sits under the badge, clear of Mapbox's controls,
- * and says so in the browser's language.
+ * The connectivity banner sits under the badge, clear of Mapbox's controls.
  *
  * It used to run edge to edge on a phone, across the zoom and compass buttons,
- * and took their taps. Mapbox pins its controls to the physical top-right
- * whichever way the text runs, so logical insets put it over them in Hebrew
- * as well — and on a wide screen in Hebrew it was pinned to that corner.
+ * and took their taps.
+ *
+ * The app is English only, whatever language the browser asks for. A Hebrew
+ * browser used to get a Hebrew, right-to-left page here; it is opened too, to
+ * hold that it now gets the same left-to-right English one.
  */
-for (const { locale, offline } of [
-  { locale: "en-US", offline: "You are offline" },
-  { locale: "he-IL", offline: "אין חיבור לאינטרנט" },
-] as const) {
+for (const locale of ["en-US", "he-IL"] as const) {
   for (const viewport of [PHONE, { width: 1280, height: 800 }]) {
     test(`the offline banner leaves the map controls clear (${locale}, ${viewport.width}px)`, async ({
       browser,
@@ -324,7 +322,13 @@ for (const { locale, offline } of [
 
       await context.setOffline(true);
       const banner = page.locator(".live-offline-banner");
-      await expect(banner).toContainText(offline);
+      await expect(banner).toContainText("You are offline");
+      expect(
+        await page.evaluate(() => [
+          document.documentElement.lang,
+          getComputedStyle(document.documentElement).direction,
+        ]),
+      ).toEqual(["en", "ltr"]);
 
       const bannerBox = await banner.boundingBox();
       const controlsBox = await controls.boundingBox();

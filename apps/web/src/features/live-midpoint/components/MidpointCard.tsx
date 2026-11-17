@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
@@ -66,8 +66,6 @@ export default memo(function MidpointCard({
   selectedVenueName,
   routesStale,
 }: MidpointCardProps) {
-  const { t } = useTranslation();
-
   const rows: Row[] = [
     {
       index: ownIndex,

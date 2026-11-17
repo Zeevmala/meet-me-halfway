@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 import { useShareLink } from "../hooks/useShareLink";
 import "../styles/live-midpoint.css";
 
@@ -18,7 +18,6 @@ export default memo(function WaitingCard({
   code,
   full = false,
 }: WaitingCardProps) {
-  const { t } = useTranslation();
   const { whatsappUrl, copied, copy } = useShareLink(code);
 
   return (

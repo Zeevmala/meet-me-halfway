@@ -19,16 +19,15 @@
   "dependencies": {
     "@sentry/react": "^11.12.0",
     "firebase": "^13.2.0",
-    "i18next": "^27.1.1",
     "mapbox-gl": "^3.34.2",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "react-i18next": "^18.0.1"
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^6.0.0",
     "@lhci/cli": "^0.16.0",
     "@playwright/test": "^1.65.0",
+    "@tailwindcss/vite": "^4.3.5",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/geojson": "^7946.0.16",
@@ -46,7 +45,6 @@
     "jsdom": "^31.0.0",
     "postcss": "^8.5.32",
     "prettier": "^3.9.10",
-    "@tailwindcss/vite": "^4.3.5",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.3",
     "vite": "^6.4.6",

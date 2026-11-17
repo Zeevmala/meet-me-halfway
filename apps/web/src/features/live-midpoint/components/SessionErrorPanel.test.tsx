@@ -2,10 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import SessionErrorPanel from "./SessionErrorPanel";
 
-// Stub react-i18next: return the key as-is for assertion stability.
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+// Stub the string table: return the key as-is for assertion stability.
+vi.mock("../../../strings", () => ({ t: (key: string) => key }));
 
 const originalUA = navigator.userAgent;
 const setUA = (ua: string) =>

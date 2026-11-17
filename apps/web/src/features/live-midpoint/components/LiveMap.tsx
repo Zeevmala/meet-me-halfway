@@ -6,7 +6,7 @@ import mapboxgl from "mapbox-gl";
 // installed mapbox-gl rather than a hard-coded, older CDN version.
 import "mapbox-gl/dist/mapbox-gl.css";
 import { memo, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
 import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
@@ -236,7 +236,6 @@ function LiveMap({
   selectedVenue,
   insets,
 }: LiveMapProps) {
-  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);

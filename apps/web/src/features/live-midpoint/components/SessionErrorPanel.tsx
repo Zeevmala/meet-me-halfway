@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../../../strings";
+import type { StringKey } from "../../../strings";
 import type { SessionErrorCode } from "../hooks/useLiveSession";
 import type { AuthErrorCode } from "../../../hooks/useAuth";
 import {
@@ -7,8 +8,8 @@ import {
   buildOpenInBrowserLink,
 } from "../lib/in-app-browser";
 
-/** Map session error codes to i18n keys. */
-const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
+/** What each session error says. */
+const SESSION_ERROR_I18N: Record<SessionErrorCode, StringKey> = {
   INVALID_CODE: "live.sessionInvalidCode",
   SESSION_NOT_FOUND: "live.sessionNotFound",
   SESSION_FULL: "live.sessionFull",
@@ -21,7 +22,7 @@ const SESSION_ERROR_I18N: Record<SessionErrorCode, string> = {
 };
 
 /** Errors surfaced by the auth gate, before a session exists. */
-const AUTH_ERROR_I18N: Record<AuthErrorCode, string> = {
+const AUTH_ERROR_I18N: Record<AuthErrorCode, StringKey> = {
   AUTH_NETWORK: "live.authNetwork",
   AUTH_STORAGE_BLOCKED: "live.authStorageBlocked",
   AUTH_FAILED: "live.authFailed",
@@ -30,7 +31,7 @@ const AUTH_ERROR_I18N: Record<AuthErrorCode, string> = {
 /** Every error code this panel can render. */
 export type LiveErrorCode = SessionErrorCode | AuthErrorCode;
 
-const PANEL_ERROR_I18N: Record<LiveErrorCode, string> = {
+const PANEL_ERROR_I18N: Record<LiveErrorCode, StringKey> = {
   ...SESSION_ERROR_I18N,
   ...AUTH_ERROR_I18N,
 };
@@ -80,7 +81,6 @@ interface Props {
 }
 
 export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
-  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const inApp = detectInAppBrowser();
@@ -98,7 +98,7 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
     } catch {
       window.prompt(t("live.copyLink"), shareUrl);
     }
-  }, [shareUrl, t]);
+  }, [shareUrl]);
 
   const handleOpenInBrowser = useCallback(() => {
     const link = buildOpenInBrowserLink(shareUrl);

@@ -29,7 +29,7 @@
 - **Stale Detection** — Per-participant offline detection (> 30s) triggers dimmed marker + warning banner
 - **Error Handling** — GPS denied/unavailable/timeout with retry, offline/reconnect banner, 24h session expiry
 - **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
-- **i18n + RTL** — English, Hebrew with full RTL support via CSS logical properties
+- **English interface** — one typed string table; a key that is not in it fails the typecheck
 - **PWA** — Installable, offline fallback, service worker caching
 - **Declared execution graph** — the derived pipeline runs as a DAG with cycle detection, per-node circuit breakers, retry and last-known-good degradation ([ARCHITECTURE.md](ARCHITECTURE.md))
 - **344 Unit + Integration Tests** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
@@ -110,7 +110,7 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 | Routing | Mapbox Directions API (client-side) |
 | Venues | Google Places API (New) — optional |
 | Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
-| i18n | i18next — English, Hebrew (full RTL) |
+| Copy | English only — typed string table (`src/strings`) |
 | Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
 | Tests | Vitest + React Testing Library (344 tests) |
 
@@ -170,7 +170,7 @@ meet-me-halfway/
 │   │   │   ├── lib/                   # geo-math, slot-registry, venue-ranking, places-api, directions-api
 │   │   │   └── styles/               # Dark glass-morphism theme
 │   │   ├── hooks/                     # useFirebase, useAuth, useNetworkStatus
-│   │   ├── i18n/                      # en.json, he.json
+│   │   ├── strings/                   # en.json + t()
 │   │   └── main.tsx
 │   ├── public/                        # PWA manifest, service worker, icons
 │   └── package.json
@@ -228,10 +228,9 @@ In development, App Check uses a debug token. On first run, a debug token is pri
 
 ---
 
-## i18n
+## Language
 
-Two locales with full RTL support: English (`en`), Hebrew (`he`).
-Translation files in `apps/web/src/i18n/`.
+English only. Every string lives in `apps/web/src/strings/en.json` and is read through `t()`.
 
 ---
 

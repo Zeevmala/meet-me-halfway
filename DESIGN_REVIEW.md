@@ -5,14 +5,14 @@ Audit of UI/UX quality across color consistency, typography, accessibility, resp
 ## What's Good
 
 - **CSS variable system** — 15 theme tokens in `:root`, consistent usage across all components
-- **RTL support** — CSS logical properties (`inset-inline-start/end`, `margin-inline-start`) throughout; Hebrew and Arabic layouts verified correct
+- **Logical properties** — `inset-inline-start/end`, `margin-inline-start` throughout. The interface is English only now; the Hebrew locale and its right-to-left layout were removed
 - **Touch targets** — All interactive elements meet 44px minimum (buttons, venue items, profile toggles)
 - **Loading states** — Venue list shimmer skeleton, "Connecting..." text, waiting card shimmer animation
 - **Error states** — Dedicated full-screen error with icon, title, message, and retry button; GPS denied/unavailable/timeout each have specific copy
 - **Dark theme** — Glass-morphism cards with backdrop-blur, dark-v11 Mapbox basemap, consistent dark surface colors
 - **Typography hierarchy** — Clear scale: 18px titles, 14px body, 13px subtitles, 12px meta, 11px labels
 - **Micro-interactions** — Button press scale(0.97), marker pulse rings, card slide-up animation, dot blink
-- **i18n complete** — 45+ keys in en/he/ar, all UI strings translated
+- **One string table** — every UI string in `src/strings/en.json`, English only
 - **Marker differentiation** — The five palette colours are people only, each with their initial (the own marker gets a white ring); the destination — midpoint or picked venue — is a static white target glyph; venues are gray. (Pink once marked the midpoint and green the picked venue: participant 5's and the creator's colours.)
 - **Stale partner UX** — Dimmed grayscale marker + warning banner with hint sublabel
 - **Navigation deep links** — Waze and Google Maps one-tap links point to selected venue or midpoint
@@ -34,12 +34,9 @@ Audit of UI/UX quality across color consistency, typography, accessibility, resp
 | Priority | Issue | Effort | Notes |
 |----------|-------|--------|-------|
 | P2 | No loading state for initial map render | M | Add skeleton/shimmer while Mapbox GL JS loads (~1-2s on slow connections) |
-| P2 | Badge still overlaps lang switcher at desktop when both pills show "Partner" text | S | Lang switcher overlays badge at z-index 15 vs 10 — consider integrating switcher into badge |
 | P3 | Bottom sheet not draggable | L | Cards are fixed-position, not gesture-aware. Would need a gesture library (react-spring, framer-motion) |
 | P3 | Accuracy circles may clutter at low zoom | S | Hide below zoom level 12 |
 | P3 | Map markers may overlap at certain zoom levels | M | Implement Mapbox symbol-sort-key or marker clustering |
-| P3 | Venue marker labels use `left: 50%` not logical property | S | Change to `inset-inline-start: 50%` for RTL |
 | P3 | No empty state illustration | S | "No venues found" could have a simple SVG illustration |
-| P3 | LanguageSwitcher uses Tailwind classes (not CSS variables) | S | Inconsistent with rest of UI which uses custom CSS. Low priority — works correctly |
 
 **Effort key:** S = small (< 1h), M = medium (1-4h), L = large (4h+)

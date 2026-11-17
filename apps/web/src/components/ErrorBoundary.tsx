@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { t } from "../strings";
 import * as Sentry from "@sentry/react";
 import "../features/live-midpoint/styles/live-midpoint.css";
 
@@ -13,8 +13,6 @@ interface State {
 }
 
 function ErrorFallback({ error }: { error: Error | null }) {
-  const { t } = useTranslation();
-
   return (
     <div className="live-page">
       <div className="live-error">

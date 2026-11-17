@@ -1,5 +1,7 @@
 {
   "name": "Meet Me Halfway",
+  "lang": "en",
+  "dir": "ltr",
   "short_name": "MeetHalf",
   "description": "Share a link, stream locations live, and meet in the middle",
   "start_url": "/",
