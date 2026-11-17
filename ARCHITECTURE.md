@@ -319,7 +319,7 @@ Every effectful node is one `createResource` instance. The policy record
 | | debounce | maxWait | admit | timeout | retry | breaker | TTL | degrade |
 |---|---|---|---|---|---|---|---|---|
 | `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | last-good, else `failed` |
-| `routes` | 3 s | 9 s | 200 m | 10 s | 2 | 5 fails / 60 s | 60 s | last-good |
+| `routes` | 3 s | 9 s | 200 m, per route | 10 s | 2 | 5 fails / 60 s | 5 min (60 s after a failed route) | last-good |
 | `presence` | 3 s | 3 s | 10 m | 10 s | 3 | 5 fails / 60 s | — | report failed |
 | `meet` | 0 | 0 | a new pin | 10 s | 3 | 5 fails / 60 s | 30 s rewrite | report failed |
 
@@ -512,9 +512,36 @@ fetching*, not in how it multiplies.
 
 **Scale limits.** `MAX_PARTICIPANTS = 5` is enforced by the database: five
 write-once keys under `sessions/{code}/slots`, and nothing else may be created
-there. Mapbox at 5 participants × 1 request / 3 s is
-~100 req/min against a 300/min free tier; the semaphore caps simultaneity at 4,
-which is the browser's per-host budget rather than the API's.
+there. The semaphore caps simultaneity at 4, which is the browser's per-host
+budget rather than the API's.
+
+Mapbox Directions is the binding cost, and it is paid per **device**, not per
+session: every device routes every participant. This paragraph used to count
+one device ("5 participants × 1 request / 3 s is ~100 req/min against a
+300/min free tier"); the limit is per access token, shared by every device of
+every session. Measured with Playwright against the e2e build (requests
+counted at the browser, one participant driving 50 km/h for two minutes):
+
+| | before | after |
+|---|---|---|
+| two devices standing still, 135 s | 12 requests | 4 (the first routes only) |
+| two devices, one driving | 14.9 / min | 11.5 / min |
+| three devices, one driving | 31.3 / min | 16.4 / min |
+| three devices, one driving, meeting point set | — | 10.5 / min |
+
+Two changes made the difference. A route is kept per participant and asked for
+again only when that participant or the destination has moved 200 m
+(`createRoutePolicy`); any dispatch used to refetch everyone. And the refresh
+went from 60 s to 5 min: `driving` and `walking` are not traffic-aware, so
+the minute's refresh asked the same question for the same answer. What remains
+before a meeting point is set is the live midpoint moving under everyone, which
+refetches every route; once one is set, only a mover's route is asked for.
+
+The worst case left is five devices with everyone driving: each device asks
+for each mover's route every 200 m, about 100 requests a minute for one
+session. Routing only one's own trip and publishing its time would make the
+cost linear in participants; it needs a schema change, and the others' route
+lines would go.
 
 **Heartbeat.** `presence` is offered on every tick, but a tick needs an event,
 and a participant standing still produces none: with GPS quiet and nobody

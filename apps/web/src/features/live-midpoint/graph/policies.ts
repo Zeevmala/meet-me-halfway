@@ -25,8 +25,24 @@ const ROUTE_ADMIT_M = 200;
 
 /** Refresh venues at least this often even while standing still. */
 const VENUE_TTL_MS = 5 * 60_000;
-/** Routes go stale faster — traffic moves. */
-const ROUTE_TTL_MS = 60_000;
+
+/**
+ * How long a route stands for the same start, destination and profile.
+ *
+ * It was a minute — "routes go stale faster: traffic moves" — and every
+ * minute every device asked again for every participant's route. But the
+ * profiles asked for, `driving` and `walking`, are not traffic-aware: the
+ * same question gets the same answer. Movement is what changes a route, and
+ * movement asks again by itself. This only bounds how old an answer gets.
+ */
+export const ROUTE_REFRESH_MS = 5 * 60_000;
+
+/**
+ * How soon routes are asked for again after some of them failed. One
+ * participant's failed route does not fail the set — the others stand — so
+ * nothing else would ask again until somebody moved, or the refresh.
+ */
+export const ROUTE_RETRY_MS = 60_000;
 
 const METERS_PER_DEG_LAT = 111_320;
 
@@ -303,15 +319,32 @@ export function routesAnswer(
   );
 }
 
+/** A route as it was fetched: from where, to where, for which profile, when. */
+interface CachedRoute {
+  readonly from: LatLng;
+  readonly to: LatLng;
+  readonly profile: TravelProfile;
+  readonly route: RouteInfo | null;
+  readonly atMs: number;
+}
+
 export function createRoutePolicy(
   ports: GraphPorts,
 ): ResourcePolicy<RouteInput, RouteSet> {
+  // By slot: the route each participant was last given. Held here rather than
+  // read off the resource's last value, which keeps no start points and is
+  // replaced whole by every answer.
+  let cache: readonly (CachedRoute | null)[] = [];
+  // Whether the last answer left a participant without a route it asked for.
+  let missing = false;
   return {
     id: "routes",
     debounceMs: 3_000,
     maxWaitMs: 9_000,
     timeoutMs: 10_000,
-    staleAfterMs: ROUTE_TTL_MS,
+    // Served after a failed refresh for as long as an answer stands, and a
+    // little past the refresh that failed.
+    staleAfterMs: 2 * ROUTE_REFRESH_MS,
     retryAttempts: 2,
     retryBaseMs: 1_000,
     breaker: {
@@ -327,13 +360,24 @@ export function createRoutePolicy(
       occupancyKey(previous.slots) !== occupancyKey(next.slots) ||
       haversineDistance(previous.dest, next.dest) >= ROUTE_ADMIT_M ||
       anySlotMoved(previous.slots, next.slots, ROUTE_ADMIT_M) ||
-      nowMs - previousAtMs >= ROUTE_TTL_MS,
+      nowMs - previousAtMs >= (missing ? ROUTE_RETRY_MS : ROUTE_REFRESH_MS),
     identity: (input) =>
       `r:${input.profile}:${cellKey(input.dest, ROUTE_ADMIT_M)}:` +
       occupancyKey(input.slots),
 
     /**
-     * Fan out one request per occupied slot and settle them independently.
+     * One request per participant whose route no longer answers, settled
+     * independently; every other route is the one already fetched.
+     *
+     * Any dispatch used to refetch everyone's route. One person walking 200 m
+     * cost a request per participant on every device — five people, five
+     * devices: twenty-five requests for one person's move, against a limit
+     * of 300 a minute that every device shares. A route still answers while
+     * its participant and the destination are each within 200 m of where it
+     * was asked from and to, for the same profile, and it is younger than
+     * `ROUTE_REFRESH_MS`. The destination is checked per route, not per set:
+     * a midpoint drifting less than 200 m at a time would otherwise carry
+     * routes ever further from where they lead.
      *
      * `Promise.all` used to mean a single 429 discarded every participant's
      * route and left the previous ones on screen with no indication they were
@@ -342,9 +386,28 @@ export function createRoutePolicy(
      * outage still trips the breaker but one bad leg does not.
      */
     run: async (input, signal): Promise<Result<RouteSet, ResourceError>> => {
+      const nowMs = ports.now();
+      const bySlot: (RouteInfo | null)[] = input.slots.map(() => null);
+      const kept: (CachedRoute | null)[] = input.slots.map(() => null);
       const targets: { slot: number; position: LatLng }[] = [];
+      let reused = 0;
+
       input.slots.forEach((position, slot) => {
-        if (position !== null) targets.push({ slot, position });
+        if (position === null) return;
+        const entry = cache[slot] ?? null;
+        if (
+          entry !== null &&
+          entry.profile === input.profile &&
+          haversineDistance(entry.from, position) < ROUTE_ADMIT_M &&
+          haversineDistance(entry.to, input.dest) < ROUTE_ADMIT_M &&
+          nowMs - entry.atMs < ROUTE_REFRESH_MS
+        ) {
+          bySlot[slot] = entry.route;
+          kept[slot] = entry;
+          reused++;
+        } else {
+          targets.push({ slot, position });
+        }
       });
 
       const settled = await Promise.allSettled(
@@ -353,7 +416,6 @@ export function createRoutePolicy(
         ),
       );
 
-      const bySlot: (RouteInfo | null)[] = input.slots.map(() => null);
       let successes = 0;
       let firstError: ResourceError | null = null;
 
@@ -364,6 +426,13 @@ export function createRoutePolicy(
         if (outcome.status === "fulfilled") {
           if (outcome.value.ok) {
             bySlot[target.slot] = outcome.value.value;
+            kept[target.slot] = {
+              from: target.position,
+              to: input.dest,
+              profile: input.profile,
+              route: outcome.value.value,
+              atMs: nowMs,
+            };
             successes++;
           } else if (firstError === null) {
             firstError = outcome.value.error;
@@ -373,7 +442,14 @@ export function createRoutePolicy(
         }
       }
 
-      if (successes === 0 && firstError !== null) return err(firstError);
+      // Answers are answers, whoever is still waiting for them. A slot that
+      // is empty now, or failed, keeps nothing — and a failure asks again
+      // within a minute, for that route alone.
+      cache = kept;
+      missing = successes < targets.length;
+      if (successes === 0 && reused === 0 && firstError !== null) {
+        return err(firstError);
+      }
       return ok({ dest: input.dest, profile: input.profile, bySlot });
     },
   };

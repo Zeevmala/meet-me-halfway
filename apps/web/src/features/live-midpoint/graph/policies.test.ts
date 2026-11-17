@@ -4,6 +4,8 @@ import {
   createVenuePolicy,
   createRoutePolicy,
   MEET_REFRESH_MS,
+  ROUTE_REFRESH_MS,
+  ROUTE_RETRY_MS,
   routesAnswer,
 } from "./policies";
 import type { MeetInput, RouteInput, VenueInput } from "./policies";
@@ -135,9 +137,11 @@ describe("route policy", () => {
     expect(policy.identity(base)).not.toBe(policy.identity(swapped));
   });
 
-  it("admits a stationary refresh once routes age past the TTL", () => {
-    expect(policy.admits(base, base, 0, 30_000)).toBe(false);
-    expect(policy.admits(base, base, 0, 60_000)).toBe(true);
+  // `driving` and `walking` are not traffic-aware: asking the same question
+  // every minute, as it did, got the same answer.
+  it("admits a stationary refresh only once routes age past the refresh", () => {
+    expect(policy.admits(base, base, 0, 60_000)).toBe(false);
+    expect(policy.admits(base, base, 0, ROUTE_REFRESH_MS)).toBe(true);
   });
 
   it("returns routes keyed by slot", async () => {
@@ -207,6 +211,164 @@ describe("route policy", () => {
     if (!result.ok) return;
     expect(result.value.bySlot[0]).toBeNull();
     expect(result.value.bySlot[1]?.distance).toBe(22);
+  });
+
+  describe("asks only for the routes that no longer answer", () => {
+    function route(distance: number) {
+      return ok({
+        geometry: { type: "LineString" as const, coordinates: [] },
+        duration: distance / 10,
+        distance,
+      });
+    }
+    /** A policy on a clock the test moves, fetching routes it counts. */
+    function counting() {
+      let nowMs = 0;
+      let next = 0;
+      const fetchRoute = vi.fn().mockImplementation(async () => route(++next));
+      const p = createRoutePolicy(makePorts({ fetchRoute, now: () => nowMs }));
+      const run = (input: RouteInput) =>
+        p.run(input, new AbortController().signal);
+      return { fetchRoute, run, tick: (ms: number) => (nowMs += ms) };
+    }
+
+    // One person walking 200 m cost a request per participant on every
+    // device: five devices, five people, twenty-five requests for one move.
+    it("fetches again only the route of whoever moved", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, NEARBY, null, null], FAR));
+      expect(c.fetchRoute).toHaveBeenCalledTimes(3);
+
+      const moved = await c.run(
+        routeInput([TEL_AVIV, FAR, NEARBY, null, null], FAR),
+      );
+
+      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
+      expect(c.fetchRoute.mock.calls[3][0]).toEqual(FAR);
+      expect(moved.ok && moved.value.bySlot.map((r) => r?.distance)).toEqual([
+        1,
+        4,
+        3,
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("fetches every route again when the destination moves", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
+
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], NEARBY));
+
+      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
+    });
+
+    it("fetches every route again for another profile", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
+
+      await c.run(
+        routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR, "walking"),
+      );
+
+      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
+    });
+
+    it("fetches a route again once it is older than the refresh", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
+
+      c.tick(ROUTE_REFRESH_MS - 1);
+      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
+      expect(c.fetchRoute).toHaveBeenCalledTimes(1);
+
+      c.tick(1);
+      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
+      expect(c.fetchRoute).toHaveBeenCalledTimes(2);
+    });
+
+    // Checked per route: a destination drifting under 200 m at a time would
+    // otherwise carry kept routes ever further from where they lead.
+    it("does not keep a route whose destination has drifted step by step", async () => {
+      const c = counting();
+      const step1 = { lat: TEL_AVIV.lat + 0.0013, lng: TEL_AVIV.lng }; // ~145 m
+      const step2 = { lat: TEL_AVIV.lat + 0.0026, lng: TEL_AVIV.lng }; // ~290 m
+      await c.run(routeInput([JERUSALEM, null, null, null, null], TEL_AVIV));
+
+      await c.run(routeInput([JERUSALEM, null, null, null, null], step1));
+      expect(c.fetchRoute).toHaveBeenCalledTimes(1);
+
+      await c.run(routeInput([JERUSALEM, null, null, null, null], step2));
+      expect(c.fetchRoute).toHaveBeenCalledTimes(2);
+    });
+
+    it("forgets the route of a slot that empties", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
+      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
+
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
+
+      expect(c.fetchRoute).toHaveBeenCalledTimes(3);
+    });
+
+    // Nothing was asked, so nothing failed.
+    it("answers with the kept routes when none needs fetching", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
+      c.fetchRoute.mockResolvedValue(
+        err({ kind: "RATE_LIMITED", retryAfterMs: 0 }),
+      );
+
+      const again = await c.run(
+        routeInput([TEL_AVIV, null, null, null, null], FAR),
+      );
+
+      expect(again.ok).toBe(true);
+    });
+
+    // A failed route does not fail the set, so nothing else would ask again
+    // until somebody moved, or the refresh five minutes on.
+    it("asks again within a minute once a route has failed, and then only for it", async () => {
+      let nowMs = 0;
+      const fetchRoute = vi
+        .fn()
+        .mockResolvedValueOnce(route(1))
+        .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "reset" }))
+        .mockResolvedValue(route(3));
+      const p = createRoutePolicy(makePorts({ fetchRoute, now: () => nowMs }));
+      const input = routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR);
+      await p.run(input, new AbortController().signal);
+
+      expect(p.admits(input, input, 0, ROUTE_RETRY_MS - 1)).toBe(false);
+      expect(p.admits(input, input, 0, ROUTE_RETRY_MS)).toBe(true);
+
+      nowMs = ROUTE_RETRY_MS;
+      const retried = await p.run(input, new AbortController().signal);
+      expect(fetchRoute).toHaveBeenCalledTimes(3);
+      expect(fetchRoute.mock.calls[2][0]).toEqual(JERUSALEM);
+      expect(retried.ok && retried.value.bySlot[1]?.distance).toBe(3);
+      // Answered: back to the refresh.
+      expect(p.admits(input, input, 0, ROUTE_RETRY_MS)).toBe(false);
+    });
+
+    // Keeping one route is not an answer for a participant whose route failed.
+    it("does not count a kept route as an answer for a failed one", async () => {
+      const c = counting();
+      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
+      c.fetchRoute.mockResolvedValue(
+        err({ kind: "RATE_LIMITED", retryAfterMs: 0 }),
+      );
+
+      const moved = await c.run(
+        routeInput([TEL_AVIV, NEARBY, null, null, null], FAR),
+      );
+
+      expect(moved.ok).toBe(true);
+      if (!moved.ok) return;
+      expect(moved.value.bySlot[0]?.distance).toBe(1);
+      expect(moved.value.bySlot[1]).toBeNull();
+    });
   });
 
   // But a total wipeout is a real outage and must reach the breaker.
