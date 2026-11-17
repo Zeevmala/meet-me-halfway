@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { generateCode, isValidCode, normalizeCode } from "./session-code";
+import {
+  generateCode,
+  isValidCode,
+  LONG_CODE_LENGTH,
+  normalizeCode,
+} from "./session-code";
 
 // The exact alphabet used in session-code.ts
 const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
@@ -9,6 +14,10 @@ describe("generateCode", () => {
   it("produces a string of exactly 6 characters", () => {
     const code = generateCode();
     expect(code).toHaveLength(CODE_LENGTH);
+  });
+
+  it("produces the longer codes the next release will draw", () => {
+    expect(generateCode(LONG_CODE_LENGTH)).toHaveLength(10);
   });
 
   it("uses only characters from the allowed alphabet", () => {
@@ -91,9 +100,19 @@ describe("isValidCode", () => {
     expect(isValidCode("A")).toBe(false);
   });
 
-  it("rejects codes that are too long", () => {
+  it("rejects codes of any length but six or ten", () => {
     expect(isValidCode("ABC2345")).toBe(false);
     expect(isValidCode("ABCDEFGH")).toBe(false);
+    expect(isValidCode("ABCDEFGH2")).toBe(false);
+    expect(isValidCode("ABCDEFGH234")).toBe(false);
+  });
+
+  // The length codes are moving to, accepted ahead of being drawn, so a link
+  // to a session created with one is never refused as invalid.
+  it("accepts a ten-character code", () => {
+    expect(isValidCode("ABCDEFGH23")).toBe(true);
+    expect(isValidCode(generateCode(LONG_CODE_LENGTH))).toBe(true);
+    expect(isValidCode("ABCDEFGH2O")).toBe(false);
   });
 
   it("rejects ambiguous character 0 (zero)", () => {

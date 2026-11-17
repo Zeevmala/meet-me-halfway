@@ -5,7 +5,7 @@
     },
     "sessions": {
       "$code": {
-        ".validate": "$code.matches(/^[2-9A-HJKMNP-Z]{6}$/)",
+        ".validate": "$code.matches(/^([2-9A-HJKMNP-Z]{6}|[2-9A-HJKMNP-Z]{10})$/)",
         "created": {
           ".read": "auth != null && data.val() > now - 86400000",
           ".write": "auth != null && !data.exists()",

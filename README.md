@@ -1,6 +1,6 @@
 # Meet Me Halfway
 
-**A real-time midpoint PWA for up to 5 participants.** Share a link, stream locations live, find nearby venues, and meet in the middle — all from the browser.
+**A real-time midpoint PWA for up to 5 participants.** Share a link, stream locations live, and meet in the middle — all from the browser.
 
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white)
@@ -21,18 +21,18 @@
 - **Multi-Participant** — Up to 5 participants per session with color-coded markers (green, blue, orange, purple, pink)
 - **Live Location Streaming** — All participants stream GPS coords via Firebase RTDB in real-time
 - **Geographic Centroid** — Cartesian mean on unit sphere updates live as any participant moves
-- **Venue Search** — Google Places API finds nearby restaurants, cafes, and bars ranked by rating, proximity, popularity, and open status
 - **N-Participant Routing** — Mapbox Directions API shows driving or walking routes for all participants to the meeting point
 - **Dark Map UI** — Mapbox GL JS 3.x dark basemap with glass-morphism cards, accuracy circles, and smooth transitions
-- **Navigation Links** — One-tap Waze / Google Maps deep links to the selected venue or midpoint
-- **Session Codes** — 6-character codes with WhatsApp share and copy-link for instant invites
+- **A meeting point that stays put** — the first Navigate fixes it for everyone, and it stays when that person leaves the page; anyone can move it
+- **Navigation Links** — One-tap Waze / Google Maps deep links to the meeting point
+- **Session Codes** — short codes in a link, shared by WhatsApp, the system share sheet or copy; nothing is shared until the person who opens it taps Join
 - **Stale Detection** — Per-participant offline detection (> 30s) triggers dimmed marker + warning banner
 - **Error Handling** — GPS denied/unavailable/timeout with retry, offline/reconnect banner, 24h session expiry
 - **App Check** — Firebase App Check with reCAPTCHA Enterprise (optional, graceful degradation)
 - **English interface** — one typed string table; a key that is not in it fails the typecheck
 - **PWA** — Installable, offline fallback, service worker caching
 - **Declared execution graph** — the derived pipeline runs as a DAG with cycle detection, per-node circuit breakers, retry and last-known-good degradation ([ARCHITECTURE.md](ARCHITECTURE.md))
-- **344 Unit + Integration Tests** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
+- **830+ unit tests, security-rules tests against the database emulator, and two-device e2e under the production CSP** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
 
 ---
 
@@ -108,11 +108,11 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 | Security | Firebase App Check (reCAPTCHA Enterprise) |
 | Real-time | Firebase 12 Realtime Database |
 | Routing | Mapbox Directions API (client-side) |
-| Venues | Google Places API (New) — optional |
+| Venues | Google Places API (New) — off; see below |
 | Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
 | Copy | English only — typed string table (`src/strings`) |
 | Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
-| Tests | Vitest + React Testing Library (344 tests) |
+| Tests | Vitest + React Testing Library (830+), rules tests on the RTDB emulator, Playwright e2e |
 
 ---
 
@@ -151,7 +151,7 @@ Create a `.env` file at the project root:
 | `VITE_FIREBASE_PROJECT_ID` | Yes | Firebase project ID |
 | `VITE_RECAPTCHA_SITE_KEY` | Yes | reCAPTCHA Enterprise site key for App Check |
 | `VITE_FIREBASE_APP_ID` | For App Check | Web app ID. Attestation posts to `/apps/{appId}/…` and can only 400 without it, so App Check is skipped with a warning when it is unset — the app runs, entirely unattested |
-| `VITE_GOOGLE_PLACES_API_KEY` | No | Google Places API key — venue search disabled if not set |
+| `VITE_GOOGLE_PLACES_API_KEY` | No | Google Places API key — venue search disabled if not set. Not for production as built: Google's policy allows Places results on a Google map only, and this map is Mapbox |
 
 ---
 
@@ -187,14 +187,13 @@ meet-me-halfway/
 
 ## How It Works
 
-1. **Auth** — Firebase Anonymous Auth signs in silently on app load
-2. **Create** — 6-character session code generated, URL becomes `/?code=XXXXX`
-3. **Join** — Up to 4 others open the shared link and join the session
+1. **Start** — a screen says what is shared and with whom; nothing signs in, asks for location or touches the database until Start or Join is tapped
+2. **Create** — Firebase Anonymous Auth signs in, a session code is generated, URL becomes `/?code=XXXXXX`
+3. **Join** — Up to 4 others open the shared link and tap Join
 4. **Stream** — All locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
 5. **Midpoint** — Client computes geographic centroid in real-time
 6. **Routes** — Mapbox Directions API fetches driving/walking routes for all participants
-7. **Venues** — Google Places API searches nearby; ranked by rating, proximity, popularity, open status
-8. **Navigate** — Tap a venue to pin as meeting point; one-tap Waze/Google Maps navigation
+7. **Navigate** — the first tap on Waze or Google Maps fixes the meeting point for everyone, and it stays when that person leaves
 
 ---
 

@@ -436,6 +436,8 @@ describe("hardening — holes the review found open", () => {
       "ABC23", // too short
       "ABC2345", // too long
       "ABCD0O", // 0 and O are not in the alphabet
+      "ABCDEFGH2", // nine: neither the old length nor the new
+      "ABCDEFGH234", // eleven
       "ILL234", // nor are I and L
       "not-a-code",
     ]) {
@@ -445,6 +447,10 @@ describe("hardening — holes the review found open", () => {
     }
     await assertSucceeds(
       as(CREATOR).ref(`sessions/ZY98XW/created`).set(SERVER_NOW),
+    );
+    // The length codes are moving to, accepted before it is drawn.
+    await assertSucceeds(
+      as(CREATOR).ref(`sessions/ZY98XW2345/created`).set(SERVER_NOW),
     );
   });
 

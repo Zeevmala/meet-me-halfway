@@ -57,7 +57,7 @@ test("starting a session reaches the map, with a code to share", async ({
   await start(page);
 
   await expect(page.locator(".live-badge-code")).toHaveText(
-    /^[2-9A-HJKMNP-Z]{6}$/,
+    /^([2-9A-HJKMNP-Z]{6}|[2-9A-HJKMNP-Z]{10})$/,
     { timeout: 30_000 },
   );
   await expect(page.locator(".live-waiting-title")).toBeVisible();

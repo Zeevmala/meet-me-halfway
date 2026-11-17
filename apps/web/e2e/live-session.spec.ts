@@ -225,9 +225,12 @@ test("two devices meet, and the map draws them where they are", async ({
     viewport: PHONE,
   });
   const codeBadge = creator.page.locator(".live-badge-code");
-  await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
-    timeout: 30_000,
-  });
+  await expect(codeBadge).toHaveText(
+    /^([2-9A-HJKMNP-Z]{6}|[2-9A-HJKMNP-Z]{10})$/,
+    {
+      timeout: 30_000,
+    },
+  );
   const code = (await codeBadge.textContent()) ?? "";
 
   // Joiner: claims a slot through the write-once rule, from 80 km away.
@@ -304,9 +307,12 @@ test("the first Navigate sets the meeting point for everyone, and it stays when 
 
   const creator = await openDevice(browser, TEL_AVIV, "/", { viewport: PHONE });
   const codeBadge = creator.page.locator(".live-badge-code");
-  await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
-    timeout: 30_000,
-  });
+  await expect(codeBadge).toHaveText(
+    /^([2-9A-HJKMNP-Z]{6}|[2-9A-HJKMNP-Z]{10})$/,
+    {
+      timeout: 30_000,
+    },
+  );
   const joiner = await openDevice(
     browser,
     HAIFA,
@@ -396,7 +402,7 @@ for (const locale of ["en-US", "he-IL"] as const) {
         viewport,
       });
       await expect(page.locator(".live-badge-code")).toHaveText(
-        /^[2-9A-HJKMNP-Z]{6}$/,
+        /^([2-9A-HJKMNP-Z]{6}|[2-9A-HJKMNP-Z]{10})$/,
         { timeout: 30_000 },
       );
       const controls = page.locator(".mapboxgl-ctrl-top-right");
