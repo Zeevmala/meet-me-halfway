@@ -3,9 +3,12 @@ import * as Sentry from "@sentry/react";
 import {
   APP_CHECK_TIMEOUT_MS,
   createFirebaseServices,
+  loadRecaptchaEnterprise,
   parseEmulatorHost,
   primeAppCheck,
+  RECAPTCHA_ENTERPRISE_SCRIPT,
   readWebSocketHistory,
+  startAppCheck,
 } from "./firebase-factory";
 import type { AppConfig } from "./config";
 
@@ -34,8 +37,7 @@ vi.mock("firebase/auth", () => ({
   inMemoryPersistence: { type: "inMemory" },
 }));
 
-// A spy, not a literal: the ordering test below compares when this ran
-// against when App Check was initialized.
+// A spy, not a literal, so a case can tell whether it ran.
 const mockGetDatabase = vi.fn(() => ({ _db: true }));
 const mockConnectDatabaseEmulator = vi.fn();
 const mockForceWebSockets = vi.fn();
@@ -124,7 +126,7 @@ describe("createFirebaseServices", () => {
       ],
     });
     expect(services.auth).toEqual({ kind: "auth-persistent" });
-    expect(services.appCheck).toBeNull();
+    expect(services.appCheckConfigured).toBe(false);
   });
 
   it("passes the configured Firebase options through to initializeApp", () => {
@@ -174,70 +176,103 @@ describe("createFirebaseServices", () => {
     expect(second.app).toBe(first.app);
   });
 
-  it("skips App Check when no site key is configured", () => {
-    createFirebaseServices(config());
+  it("skips App Check when no site key is configured", async () => {
+    const services = createFirebaseServices(config());
+
+    expect(services.appCheckConfigured).toBe(false);
+    await expect(services.appCheckReady).resolves.toEqual({
+      ok: false,
+      reason: "no-appcheck",
+    });
     expect(mockInitializeAppCheck).not.toHaveBeenCalled();
   });
 
-  it("skips App Check when the site key is set but the app id is missing", () => {
+  it("skips App Check when the site key is set but the app id is missing", async () => {
     // Attestation posts to /apps/{appId}/… and can only 400 without it, so
     // half-configured must mean off, not broken for every client.
+    const loadRecaptcha = vi.fn().mockResolvedValue(true);
     const services = createFirebaseServices(
       withAppCheck(undefined, "test-site-key"),
+      loadRecaptcha,
     );
 
+    expect(services.appCheckConfigured).toBe(false);
+    await expect(services.appCheckReady).resolves.toMatchObject({
+      reason: "no-appcheck",
+    });
+    expect(loadRecaptcha).not.toHaveBeenCalled();
     expect(mockInitializeAppCheck).not.toHaveBeenCalled();
-    expect(services.appCheck).toBeNull();
   });
 
-  it("initializes App Check when both the site key and app id are present", () => {
+  it("initializes App Check once reCAPTCHA is ready, and primes its token", async () => {
     const services = createFirebaseServices(
       withAppCheck("1:123:web:abc", "test-site-key"),
+      async () => true,
     );
 
-    expect(mockInitializeAppCheck).toHaveBeenCalledTimes(1);
-    expect(services.appCheck).toEqual({ kind: "app-check" });
-  });
-
-  it("initializes App Check before it builds the Database handle", () => {
-    // Ordering, not decoration. RTDB sends the App Check token when it
-    // establishes its socket, so anything that can lead to a connection must
-    // be constructed after attestation is registered on the app. The previous
-    // object literal evaluated `db: getDatabase(app)` first, because property
-    // initialisers run in source order.
-    createFirebaseServices(withAppCheck("1:123:web:abc", "test-site-key"));
-
-    expect(mockInitializeAppCheck.mock.invocationCallOrder[0]).toBeLessThan(
-      mockGetDatabase.mock.invocationCallOrder[0],
-    );
-  });
-
-  it("primes attestation without waiting for it", async () => {
-    // The fetch is in flight when the factory returns — that is what keeps it
-    // off the first-paint path — and the promise carries the outcome.
-    const services = createFirebaseServices(
-      withAppCheck("1:123:web:abc", "test-site-key"),
-    );
-
-    expect(mockGetToken).toHaveBeenCalledTimes(1);
+    expect(services.appCheckConfigured).toBe(true);
     await expect(services.appCheckReady).resolves.toEqual({
       ok: true,
       reason: "token",
       latencyMs: expect.any(Number),
     });
+    expect(mockInitializeAppCheck).toHaveBeenCalledTimes(1);
+    expect(mockGetToken).toHaveBeenCalledTimes(1);
   });
 
-  it("continues with null appCheck when App Check init throws", () => {
+  // The SDK loads reCAPTCHA with an onload and nothing else, and Auth and the
+  // Database wait on its token: initialised on a script that never loads, the
+  // page sat on "Connecting…" for good, enforcement on or off.
+  it("does not initialize App Check before reCAPTCHA has said it is ready", async () => {
+    let ready = (_ready: boolean): void => {};
+    const services = createFirebaseServices(
+      withAppCheck("1:123:web:abc", "test-site-key"),
+      () =>
+        new Promise<boolean>((resolve) => {
+          ready = resolve;
+        }),
+    );
+
+    // The handles exist, and the page can go on; attestation has not begun.
+    expect(services.db).toEqual({ _db: true });
+    expect(services.auth).toEqual({ kind: "auth-persistent" });
+    expect(mockInitializeAppCheck).not.toHaveBeenCalled();
+
+    ready(true);
+    await services.appCheckReady;
+    expect(mockInitializeAppCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves App Check off, and says so, when reCAPTCHA does not load", async () => {
+    const services = createFirebaseServices(
+      withAppCheck("1:123:web:abc", "test-site-key"),
+      async () => false,
+    );
+
+    await expect(services.appCheckReady).resolves.toEqual({
+      ok: false,
+      reason: "blocked",
+    });
+    expect(mockInitializeAppCheck).not.toHaveBeenCalled();
+    expect(Sentry.setTag).toHaveBeenCalledWith("appcheck_outcome", "blocked");
+    expect(services.db).toEqual({ _db: true });
+  });
+
+  it("goes on unattested when App Check init throws", async () => {
     mockInitializeAppCheck.mockImplementation(() => {
-      throw new Error("reCAPTCHA script blocked");
+      throw new Error("reCAPTCHA refused");
     });
 
     const services = createFirebaseServices(
       withAppCheck("1:123:web:abc", "test-site-key"),
+      async () => true,
     );
 
+    await expect(services.appCheckReady).resolves.toEqual({
+      ok: false,
+      reason: "error",
+    });
     expect(mockInitializeAppCheck).toHaveBeenCalledTimes(1);
-    expect(services.appCheck).toBeNull();
     expect(services.db).toEqual({ _db: true });
     expect(services.auth).toEqual({ kind: "auth-persistent" });
   });
@@ -381,6 +416,114 @@ describe("primeAppCheck", () => {
 
     expect(outcome.reason).toBe("token");
     expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+});
+
+describe("startAppCheck", () => {
+  // Never rejects: a device that cannot attest goes on unattested.
+  it("reports an error rather than rejecting when the loader throws", async () => {
+    const outcome = await startAppCheck({} as never, "test-site-key", () =>
+      Promise.reject(new Error("boom")),
+    );
+
+    expect(outcome).toEqual({ ok: false, reason: "error" });
+  });
+
+  // One budget for the whole of it: a script that took most of it leaves
+  // the token only what is left.
+  it("gives the token only what the script left of the budget", async () => {
+    vi.useFakeTimers();
+    mockGetToken.mockReturnValue(new Promise(() => {}));
+    const pending = startAppCheck({} as never, "test-site-key", async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, APP_CHECK_TIMEOUT_MS - 1_000),
+      );
+      return true;
+    });
+
+    await vi.advanceTimersByTimeAsync(APP_CHECK_TIMEOUT_MS);
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "timeout" });
+    vi.useRealTimers();
+  });
+});
+
+describe("loadRecaptchaEnterprise", () => {
+  /** A window of our own: jsdom's document, and a `grecaptcha` we control. */
+  function fakeWindow(grecaptcha?: unknown) {
+    const win = { document, grecaptcha } as unknown as Window & {
+      grecaptcha?: unknown;
+    };
+    return win;
+  }
+
+  function lastScript(): HTMLScriptElement | undefined {
+    const scripts = document.head.querySelectorAll("script");
+    return scripts[scripts.length - 1];
+  }
+
+  afterEach(() => {
+    document.head.querySelectorAll("script").forEach((s) => s.remove());
+  });
+
+  it("is ready at once when reCAPTCHA is already on the page and says so", async () => {
+    const win = fakeWindow({ enterprise: { ready: (f: () => void) => f() } });
+
+    await expect(loadRecaptchaEnterprise(1_000, win)).resolves.toBe(true);
+    expect(lastScript()).toBeUndefined();
+  });
+
+  it("loads the script, and is ready once reCAPTCHA says so", async () => {
+    const win = fakeWindow();
+    const loading = loadRecaptchaEnterprise(1_000, win);
+    const script = lastScript();
+    expect(script?.src).toBe(RECAPTCHA_ENTERPRISE_SCRIPT);
+
+    win.grecaptcha = { enterprise: { ready: (f: () => void) => f() } };
+    script?.onload?.(new Event("load"));
+
+    await expect(loading).resolves.toBe(true);
+  });
+
+  it("is not ready when the script fails to load", async () => {
+    const win = fakeWindow();
+    const loading = loadRecaptchaEnterprise(1_000, win);
+
+    lastScript()?.onerror?.(new Event("error"));
+
+    await expect(loading).resolves.toBe(false);
+  });
+
+  it("is not ready when the script loads without reCAPTCHA in it", async () => {
+    const win = fakeWindow();
+    const loading = loadRecaptchaEnterprise(1_000, win);
+
+    lastScript()?.onload?.(new Event("load"));
+
+    await expect(loading).resolves.toBe(false);
+  });
+
+  // Neither loaded nor failed: the network that drops the request on the
+  // floor. The page waits only as long as the budget.
+  it("gives up at the budget when the script never answers", async () => {
+    vi.useFakeTimers();
+    const loading = loadRecaptchaEnterprise(APP_CHECK_TIMEOUT_MS, fakeWindow());
+
+    await vi.advanceTimersByTimeAsync(APP_CHECK_TIMEOUT_MS);
+
+    await expect(loading).resolves.toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("gives up at the budget when reCAPTCHA loads but is never ready", async () => {
+    vi.useFakeTimers();
+    const win = fakeWindow({ enterprise: { ready: () => {} } });
+    const loading = loadRecaptchaEnterprise(APP_CHECK_TIMEOUT_MS, win);
+
+    await vi.advanceTimersByTimeAsync(APP_CHECK_TIMEOUT_MS);
+
+    await expect(loading).resolves.toBe(false);
     vi.useRealTimers();
   });
 });

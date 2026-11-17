@@ -85,7 +85,7 @@ vi.mock("../../../hooks/useFirebase", () => ({
   useFirebase: () => ({
     app: {},
     db: mockDb,
-    appCheck: mockAppCheck,
+    appCheckConfigured: mockAppCheck !== null,
     appCheckReady: mockAppCheckReady,
   }),
 }));

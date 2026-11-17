@@ -25,7 +25,12 @@ vi.mock("firebase/auth", () => ({
 // Stable singleton — the real useFirebase memoizes its return value, and
 // useAuth's effect depends on `auth` identity. A fresh object per render
 // would re-run the effect in a loop.
-const stableFirebase = { app: {}, db: {}, auth: {}, appCheck: null };
+const stableFirebase = {
+  app: {},
+  db: {},
+  auth: {},
+  appCheckConfigured: false,
+};
 vi.mock("./useFirebase", () => ({
   useFirebase: () => stableFirebase,
 }));

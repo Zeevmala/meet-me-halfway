@@ -533,7 +533,7 @@ async function claimSlot(
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
 export function useLiveSession(uid: string): LiveSession {
-  const { db, appCheck, appCheckReady } = useFirebase();
+  const { db, appCheckConfigured, appCheckReady } = useFirebase();
 
   const [state, dispatch] = useReducer(sessionReducer, IDLE_SESSION);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
@@ -609,7 +609,7 @@ export function useLiveSession(uid: string): LiveSession {
         console.error("[session] participants listener error:", error);
         Sentry.captureException(error, {
           tags: { phase: "listen", classified: classifyJoinError(error) },
-          contexts: sessionContext(code, appCheck !== null),
+          contexts: sessionContext(code, appCheckConfigured),
         });
         dispatch({
           type: "listenerCancelled",
@@ -618,7 +618,7 @@ export function useLiveSession(uid: string): LiveSession {
         });
       },
     );
-  }, [db, uid, appCheck, liveCode]);
+  }, [db, uid, appCheckConfigured, liveCode]);
 
   // Count the claims while the session is live. A claim is never released,
   // so a session that has had five people is full for good, however few are
@@ -652,11 +652,11 @@ export function useLiveSession(uid: string): LiveSession {
         // invites into full sessions, so it is reported, not swallowed.
         Sentry.captureException(error, {
           tags: { phase: "listen-slots", classified: classifyJoinError(error) },
-          contexts: sessionContext(code, appCheck !== null),
+          contexts: sessionContext(code, appCheckConfigured),
         });
       },
     );
-  }, [db, appCheck, liveCode]);
+  }, [db, appCheckConfigured, liveCode]);
   // Keyed by code, so a count can only ever describe the live session.
   const claimedSlots =
     slotCount !== null && slotCount.code === liveCode ? slotCount.claimed : 0;
@@ -680,11 +680,11 @@ export function useLiveSession(uid: string): LiveSession {
         // pins seen so far stand, and it is reported.
         Sentry.captureException(error, {
           tags: { phase: "listen-meet", classified: classifyJoinError(error) },
-          contexts: sessionContext(code, appCheck !== null),
+          contexts: sessionContext(code, appCheckConfigured),
         });
       },
     );
-  }, [db, appCheck, liveCode]);
+  }, [db, appCheckConfigured, liveCode]);
   const peerPins =
     meetPins !== null && meetPins.code === liveCode ? meetPins.pins : NO_PINS;
 
@@ -794,12 +794,12 @@ export function useLiveSession(uid: string): LiveSession {
         console.error("[session] create failed:", thrown);
         Sentry.captureException(thrown, {
           tags: { phase: "create", classified: classifyJoinError(thrown) },
-          contexts: sessionContext(sessionCode, appCheck !== null),
+          contexts: sessionContext(sessionCode, appCheckConfigured),
         });
         return err(fail(handshake, "CREATE_FAILED", describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, fail, abandon],
+    [db, uid, appCheckConfigured, appCheckReady, fail, abandon],
   );
 
   /** Join an existing session. */
@@ -917,12 +917,12 @@ export function useLiveSession(uid: string): LiveSession {
         console.error("[session] join failed:", thrown, "→", classified);
         Sentry.captureException(thrown, {
           tags: { phase: "join", classified, attestation },
-          contexts: sessionContext(sessionCode, appCheck !== null),
+          contexts: sessionContext(sessionCode, appCheckConfigured),
         });
         return err(fail(handshake, classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, fail, abandon],
+    [db, uid, appCheckConfigured, appCheckReady, fail, abandon],
   );
 
   /**

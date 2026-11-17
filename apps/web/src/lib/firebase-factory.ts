@@ -38,18 +38,20 @@ import type { AppConfig } from "./config";
 /**
  * How the first attestation attempt of this page load ended.
  *
- * Carried as a value rather than a boolean because the three failure modes
- * need different responses and the Firebase console cannot tell them apart:
- * `timeout` means reCAPTCHA works here but is slower than our budget,
- * `error` means it is blocked or rejected on this device, and `no-appcheck`
- * means we never configured it. A verified-request percentage alone leaves
- * you guessing between them, which is how 89% unverified went undiagnosed.
+ * Carried as a value rather than a boolean because the failure modes need
+ * different responses and the Firebase console cannot tell them apart:
+ * `blocked` means the reCAPTCHA script did not load here, or was not ready in
+ * our budget, so App Check is left off for this page load; `timeout` means
+ * reCAPTCHA works here but the first token is slower than our budget;
+ * `error` means the token was refused; and `no-appcheck` means we never
+ * configured it. A verified-request percentage alone leaves you guessing
+ * between them, which is how 89% unverified went undiagnosed.
  */
 export type AttestationOutcome =
   | { readonly ok: true; readonly reason: "token"; readonly latencyMs: number }
   | {
       readonly ok: false;
-      readonly reason: "no-appcheck" | "timeout" | "error";
+      readonly reason: "no-appcheck" | "blocked" | "timeout" | "error";
     };
 
 /**
@@ -67,8 +69,11 @@ export interface FirebaseServices {
   readonly app: FirebaseApp;
   readonly db: Database;
   readonly auth: Auth;
-  /** `null` when App Check is unconfigured or its script was blocked. */
-  readonly appCheck: AppCheck | null;
+  /**
+   * Whether App Check is configured: the reCAPTCHA site key and the app id
+   * are both set. Whether it runs on this page is `appCheckReady`'s to say.
+   */
+  readonly appCheckConfigured: boolean;
   /**
    * Settles when the first attestation attempt finishes, and **never rejects**.
    *
@@ -94,29 +99,103 @@ function createApp(config: AppConfig): FirebaseApp {
 }
 
 /**
- * App Check needs **both** the reCAPTCHA site key and the Firebase appId —
- * attestation can only 400 without the app resource, so initialising with one
- * of the two produces a failure on every client rather than a degraded mode.
+ * The reCAPTCHA site key App Check runs with, or `null` when it is not to
+ * run. It needs **both** the site key and the Firebase appId — attestation can
+ * only 400 without the app resource, so initialising with one of the two
+ * produces a failure on every client rather than a degraded mode.
  */
-function createAppCheck(app: FirebaseApp, config: AppConfig): AppCheck | null {
+function appCheckSiteKey(config: AppConfig): string | null {
   const siteKey = config.recaptchaSiteKey;
   if (siteKey === null) return null;
-
   if (config.firebase.appId === undefined) {
     console.warn(
       "[firebase] VITE_RECAPTCHA_SITE_KEY is set but VITE_FIREBASE_APP_ID is missing — App Check disabled.",
     );
     return null;
   }
+  return siteKey;
+}
 
+/** The script App Check's reCAPTCHA Enterprise provider loads. */
+export const RECAPTCHA_ENTERPRISE_SCRIPT =
+  "https://www.google.com/recaptcha/enterprise.js?render=explicit";
+
+interface RecaptchaWindow {
+  readonly grecaptcha?: {
+    readonly enterprise?: { readonly ready?: (callback: () => void) => void };
+  };
+}
+
+/**
+ * Load reCAPTCHA Enterprise, and settle `true` once it says it is ready, or
+ * `false` when it fails to load or is not ready within `timeoutMs`. Never
+ * rejects.
+ *
+ * Done here rather than left to App Check. The SDK loads this script itself,
+ * with an `onload` and nothing else — no error handler, no timeout — and Auth
+ * and the Database both wait on App Check's first token before they send
+ * anything. So where the script cannot load — a network that blocks Google,
+ * a content blocker — sign-in never finished and no socket was ever opened,
+ * whether enforcement was on or off: the page sat on "Connecting…" for good.
+ * The SDK uses a `grecaptcha.enterprise` it finds already loaded, and both
+ * SDKs take up an App Check initialised after them, so App Check is
+ * initialised only once this has settled `true`.
+ */
+export function loadRecaptchaEnterprise(
+  timeoutMs: number,
+  win: Window = window,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (ready: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ready);
+    };
+    const timer = setTimeout(() => settle(false), timeoutMs);
+    const recaptcha = (): RecaptchaWindow["grecaptcha"] =>
+      (win as unknown as RecaptchaWindow).grecaptcha;
+    const whenReady = (): void => {
+      const ready = recaptcha()?.enterprise?.ready;
+      if (typeof ready !== "function") {
+        settle(false);
+        return;
+      }
+      try {
+        ready(() => settle(true));
+      } catch {
+        settle(false);
+      }
+    };
+    if (recaptcha()?.enterprise !== undefined) {
+      whenReady();
+      return;
+    }
+    try {
+      const script = win.document.createElement("script");
+      script.src = RECAPTCHA_ENTERPRISE_SCRIPT;
+      script.async = true;
+      script.onload = whenReady;
+      script.onerror = () => settle(false);
+      win.document.head.appendChild(script);
+    } catch {
+      settle(false);
+    }
+  });
+}
+
+/**
+ * Initialise App Check on a reCAPTCHA that is loaded and ready, or `null`
+ * when initialisation throws.
+ */
+function initAppCheck(app: FirebaseApp, siteKey: string): AppCheck | null {
   try {
     return initializeAppCheck(app, {
       provider: new ReCaptchaEnterpriseProvider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });
   } catch (err) {
-    // Init throws in in-app browsers that block the reCAPTCHA script.
-    // Continue without App Check — RTDB still works if the rules allow it.
     console.warn("[firebase] App Check init failed:", err);
     Sentry.captureMessage("appcheck_init_failed", {
       level: "warning",
@@ -127,12 +206,42 @@ function createAppCheck(app: FirebaseApp, config: AppConfig): AppCheck | null {
 }
 
 /**
- * Start attestation immediately and report how it went.
+ * Load reCAPTCHA, then initialise App Check and prime its first token, all
+ * within one budget. Never rejects: a device that cannot attest goes on
+ * unattested.
+ */
+export async function startAppCheck(
+  app: FirebaseApp,
+  siteKey: string,
+  loadRecaptcha: (
+    timeoutMs: number,
+  ) => Promise<boolean> = loadRecaptchaEnterprise,
+  timeoutMs: number = APP_CHECK_TIMEOUT_MS,
+): Promise<AttestationOutcome> {
+  const startedAt = Date.now();
+  try {
+    if (!(await loadRecaptcha(timeoutMs))) {
+      return report({ ok: false, reason: "blocked" });
+    }
+    const appCheck = initAppCheck(app, siteKey);
+    if (appCheck === null) return report({ ok: false, reason: "error" });
+    return await primeAppCheck(
+      appCheck,
+      Math.max(0, timeoutMs - (Date.now() - startedAt)),
+    );
+  } catch (err) {
+    console.warn("[firebase] App Check failed to start:", err);
+    return report({ ok: false, reason: "error" });
+  }
+}
+
+/**
+ * Fetch the first token and report how it went.
  *
  * Deliberately fire-and-forget rather than awaited by `createServices`: the
- * fetch overlaps module loading, i18n init, React's first render and the
- * geolocation prompt, so priming costs no first paint. Only the code that
- * would open the RTDB socket awaits the result.
+ * fetch overlaps module loading, React's first render and the start screen,
+ * so priming costs no first paint. Only the code that would open the RTDB
+ * socket awaits the result.
  *
  * Resolves rather than rejects on every path. A blocked or slow reCAPTCHA must
  * degrade to unattested traffic, never to an unhandled rejection or a hung
@@ -307,20 +416,27 @@ function createDatabase(app: FirebaseApp, config: AppConfig): Database {
   return db;
 }
 
-export function createFirebaseServices(config: AppConfig): FirebaseServices {
+export function createFirebaseServices(
+  config: AppConfig,
+  loadRecaptcha: (
+    timeoutMs: number,
+  ) => Promise<boolean> = loadRecaptchaEnterprise,
+): FirebaseServices {
   const app = createApp(config);
 
-  // Ordered on purpose, not an object literal. Properties evaluate in source
-  // order, so the previous literal built the Database handle before App Check
-  // was registered on the app — backwards, whatever the SDK does about it
-  // internally. Attestation is registered and in flight before any service
-  // handle exists.
-  const appCheck = createAppCheck(app, config);
-  const appCheckReady = primeAppCheck(appCheck);
+  // Attestation is in flight before any service handle exists. App Check
+  // itself is registered on the app only once reCAPTCHA is ready (see
+  // `loadRecaptchaEnterprise`); the Database and Auth take it up then, and
+  // anything that would open the RTDB socket awaits `appCheckReady` first.
+  const siteKey = appCheckSiteKey(config);
+  const appCheckReady =
+    siteKey === null
+      ? Promise.resolve(report({ ok: false, reason: "no-appcheck" }))
+      : startAppCheck(app, siteKey, loadRecaptcha);
 
   return {
     app,
-    appCheck,
+    appCheckConfigured: siteKey !== null,
     appCheckReady,
     db: createDatabase(app, config),
     auth: createAuth(app),
