@@ -32,6 +32,18 @@ export function isValidCode(code: string): boolean {
   return CODE_RE.test(code);
 }
 
+/**
+ * The `?code=` of a query string, normalised but not validated; `null` when
+ * there is none. Validation is the caller's: a mangled code has to fail as an
+ * invalid link. Filtered out here it read as no code at all, and the page
+ * created a new session in place of the one the link named — the joiner sat
+ * alone, believing they had joined.
+ */
+export function codeFromQuery(search: string): string | null {
+  const raw = new URLSearchParams(search).get("code");
+  return raw ? normalizeCode(raw) : null;
+}
+
 /** Uppercase + trim for user-pasted codes. */
 export function normalizeCode(raw: string): string {
   return raw.trim().toUpperCase();

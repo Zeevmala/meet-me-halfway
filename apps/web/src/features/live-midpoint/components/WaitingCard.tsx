@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { t } from "../../../strings";
 import { useShareLink } from "../hooks/useShareLink";
+import { rememberConsent } from "../lib/consent";
 import "../styles/live-midpoint.css";
 
 interface WaitingCardProps {
@@ -34,7 +35,11 @@ export default memo(function WaitingCard({
             <button
               type="button"
               className="live-btn live-btn-secondary"
-              onClick={() => window.location.assign("/")}
+              onClick={() => {
+                // This tap is the agreement the start screen would ask for.
+                rememberConsent(null);
+                window.location.assign("/");
+              }}
             >
               {t("live.startNewSession")}
             </button>

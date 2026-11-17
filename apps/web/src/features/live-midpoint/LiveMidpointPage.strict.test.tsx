@@ -98,11 +98,12 @@ afterEach(() => {
   history.replaceState(null, "", "/");
 });
 
-function renderStrict() {
+/** `urlCode` as `App` reads it from the URL, once, before the page mounts. */
+function renderStrict(urlCode: string | null = null) {
   return render(
     <StrictMode>
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={urlCode} />
       </ServicesProvider>
     </StrictMode>,
   );
@@ -128,10 +129,8 @@ describe("LiveMidpointPage under StrictMode", () => {
     expect(mockJoinSession).not.toHaveBeenCalled();
   });
 
-  it("joins the code from the URL it was opened with", async () => {
-    history.replaceState(null, "", "/?code=ABC234");
-
-    renderStrict();
+  it("joins the code it was opened with", async () => {
+    renderStrict("ABC234");
     await act(async () => {});
 
     const calls = mockJoinSession.mock.calls;

@@ -1,6 +1,16 @@
 const STORAGE_KEY = "mmhw:displayName";
 const MAX_LEN = 20;
 
+function readStored(): string | null {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && stored.trim()) return stored.slice(0, MAX_LEN);
+  } catch {
+    /* private mode / storage disabled */
+  }
+  return null;
+}
+
 function deriveFromUA(): string {
   if (typeof navigator === "undefined") return "Guest";
   const ua = navigator.userAgent;
@@ -18,12 +28,8 @@ function deriveFromUA(): string {
  * if no value is already cached. Never prompts.
  */
 export function getOrCreateDisplayName(): string {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && stored.trim()) return stored.slice(0, MAX_LEN);
-  } catch {
-    /* private mode / storage disabled */
-  }
+  const stored = readStored();
+  if (stored !== null) return stored;
   const derived = deriveFromUA().slice(0, MAX_LEN);
   try {
     localStorage.setItem(STORAGE_KEY, derived);
@@ -53,6 +59,16 @@ export function saveDisplayName(raw: string): string {
     /* private mode / storage disabled */
   }
   return value;
+}
+
+/**
+ * The name the user chose, or "" if they have not: the device label the app
+ * falls back on ("iPhone", "Windows") is not one, and offering it back in a
+ * name field would make it look like something they typed.
+ */
+export function chosenDisplayName(): string {
+  const stored = readStored();
+  return stored !== null && !isDerivedName(stored) ? stored : "";
 }
 
 /** Returns the uppercase first character of a name, or null when empty. */

@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 import { setupFirebaseMocks } from "./helpers/mock-firebase";
 import { setupMapboxMocks } from "./helpers/mock-mapbox";
+import { start } from "./helpers/start";
 
 /**
  * Two devices, the real client, the real security rules, and the headers
@@ -108,6 +109,8 @@ async function openDevice(
   await setupFirebaseMocks(page);
   await setupMapboxMocks(page);
   await page.goto(path);
+  // Start or Join: nothing below happens until the person agrees to it.
+  await start(page);
   return { context, page, cspViolations };
 }
 

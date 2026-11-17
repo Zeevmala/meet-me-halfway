@@ -19,12 +19,12 @@ import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { CLOSED_SESSION, useLiveSession } from "./hooks/useLiveSession";
 import { useOverlayInsets } from "./hooks/useOverlayInsets";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
-import { sessionSlot } from "./graph/nodes";
+import { sessionCode, sessionSlot } from "./graph/nodes";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import { deriveScreen } from "./screen";
 import type { LocationTrouble, Screen, Sheet } from "./screen";
 import type { RankedVenue } from "./lib/venue-ranking";
-import { normalizeCode } from "./lib/session-code";
+import { rememberConsent } from "./lib/consent";
 import { participantInitial } from "./lib/display-name";
 import type { ParticipantIndex } from "./lib/participant-config";
 import LiveMap from "./components/LiveMap";
@@ -90,20 +90,32 @@ const LOCATION_BANNER: Record<
   unavailable: { icon: "\u26A0", message: "live.locationUnavailable" },
 };
 
-/**
- * Read ?code= from the URL, normalised but not validated: `joinSession`
- * validates, so a mangled code fails as INVALID_CODE. Filtered out here, it
- * read as no code at all, and the page created a new session in place of the
- * one the link named — the joiner sat alone, believing they had joined.
- */
-function getCodeFromURL(): string | null {
-  const raw = new URLSearchParams(window.location.search).get("code");
-  if (!raw) return null;
-  return normalizeCode(raw);
+interface LiveMidpointPageProps {
+  /**
+   * The session the link named, or `null` to create one. Read from the URL
+   * once, by `App`, before anything here mounts: a live session writes its
+   * code to the URL, so a re-run that read it again would try to *join* the
+   * session its predecessor created.
+   */
+  urlCode: string | null;
+  /**
+   * The name typed on the start screen in this page load, "" if none. The
+   * session reads the saved name for itself; this is for the browser that
+   * would not save it.
+   */
+  initialName?: string;
 }
 
-/** Auth gate — waits for Firebase Anonymous Auth before rendering inner page. */
-export default function LiveMidpointPage() {
+/**
+ * Auth gate — waits for Firebase Anonymous Auth before rendering inner page.
+ *
+ * Mounted by `App` only once the person has agreed to start or join, so
+ * the sign-in below, and everything under it, follows that tap.
+ */
+export default function LiveMidpointPage({
+  urlCode,
+  initialName = "",
+}: LiveMidpointPageProps) {
   const auth = useAuth();
 
   if (auth.status === "loading") {
@@ -120,11 +132,25 @@ export default function LiveMidpointPage() {
     );
   }
 
-  return <LiveMidpointInner uid={auth.uid} />;
+  return (
+    <LiveMidpointInner
+      uid={auth.uid}
+      urlCode={urlCode}
+      initialName={initialName}
+    />
+  );
 }
 
 /** Inner page — only renders after auth is resolved. */
-function LiveMidpointInner({ uid }: { uid: string }) {
+function LiveMidpointInner({
+  uid,
+  urlCode,
+  initialName,
+}: {
+  uid: string;
+  urlCode: string | null;
+  initialName: string;
+}) {
   const geo = useLiveGeolocation();
   const session = useLiveSession(uid);
   const networkStatus = useNetworkStatus();
@@ -289,11 +315,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return stopGeo;
   }, [startGeo, stopGeo]);
 
-  // Read once per mount, not inside the effect: a live session writes its
-  // code to the URL, so a re-run that read it again could try to *join* a
-  // session its predecessor created.
-  const [urlCode] = useState(getCodeFromURL);
-
   // The handshake returns a Result rather than throwing. It used to throw into
   // this effect with no `.catch()`, so every failed join raised an unhandled
   // rejection on top of the Sentry event the hook already recorded. The
@@ -318,6 +339,22 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one handshake per mount
   }, []);
+
+  // The name from the start screen. Normally the session has read it from
+  // storage already and this changes nothing; where storage is blocked it is
+  // the only way the name arrives.
+  const { setOwnName } = session;
+  useEffect(() => {
+    if (initialName !== "") setOwnName(initialName);
+  }, [initialName, setOwnName]);
+
+  // The agreement given on the start screen was to a session of one's own,
+  // which had no code then. It has one now, and that is what a reload of this
+  // tab will find in the URL.
+  const liveCode = sessionCode(session.state);
+  useEffect(() => {
+    if (liveCode !== null) rememberConsent(liveCode);
+  }, [liveCode]);
 
   // Own location no longer needs piping to Firebase from here: the graph's
   // `presence` node owns that write, with the debounce, admission control,

@@ -7,6 +7,7 @@ import {
   detectInAppBrowser,
   buildOpenInBrowserLink,
 } from "../lib/in-app-browser";
+import { rememberConsent } from "../lib/consent";
 import LegalLinks from "./LegalLinks";
 
 /** What each session error says. */
@@ -159,7 +160,11 @@ export default function SessionErrorPanel({ errorCode, errorDetails }: Props) {
           <button
             type="button"
             className="live-btn live-btn-primary live-retry-btn"
-            onClick={() => window.location.assign("/")}
+            onClick={() => {
+              // This tap is the agreement the start screen would ask for.
+              rememberConsent(null);
+              window.location.assign("/");
+            }}
           >
             {t("live.startNewSession")}
           </button>

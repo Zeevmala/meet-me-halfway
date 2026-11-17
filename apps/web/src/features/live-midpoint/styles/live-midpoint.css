@@ -1254,6 +1254,122 @@
 
 /* ── Legal links footer (shown beneath WaitingCard) ── */
 
+/* ── Start screen: what the app does, before it asks for anything ── */
+
+.live-start {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* As .live-error: keep the top reachable when the card is taller than a
+     small phone. */
+  justify-content: safe center;
+  gap: 16px;
+  overflow-y: auto;
+  padding: max(24px, env(safe-area-inset-top, 24px)) 20px
+    max(24px, env(safe-area-inset-bottom, 24px));
+}
+
+.live-start-card {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px 20px 20px;
+  text-align: start;
+}
+
+.live-start-mark {
+  display: block;
+  width: 56px;
+  height: 56px;
+}
+
+.live-start-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.live-start-lead {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--live-text);
+}
+
+.live-start-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--live-text-muted);
+}
+
+.live-start-points li {
+  position: relative;
+  padding-inline-start: 16px;
+}
+
+.live-start-points li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 2px;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live-green);
+}
+
+.live-start-name {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-start-name-label {
+  font-size: 13px;
+  color: var(--live-text-muted);
+}
+
+.live-start-input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--live-border);
+  background: var(--live-glass);
+  color: var(--live-text);
+  font: inherit;
+  /* 16px: below it, iOS Safari zooms the page when the field is focused. */
+  font-size: 16px;
+}
+
+.live-start-input::placeholder {
+  color: var(--live-text-muted);
+  opacity: 0.7;
+}
+
+.live-start-input:focus-visible {
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+}
+
+.live-start-btn {
+  flex: 0 0 auto;
+  font-size: 15px;
+  min-height: 48px;
+}
+
 /* A device that joined without sharing: said plainly, under the cards. */
 .live-sheet-note {
   margin: 0;

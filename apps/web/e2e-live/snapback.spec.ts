@@ -18,6 +18,8 @@ const HAIFA = { latitude: 32.794, longitude: 34.9896 };
 const CODE = ".live-badge-code";
 const PILLS = ".live-badge-pills .live-pill";
 const WAITING = ".live-waiting-title";
+/** The start screen's button, which stands before every session. */
+const START = ".live-start-btn";
 
 async function geoContext(
   browser: Browser,
@@ -37,6 +39,7 @@ test("creator sees a joiner appear, then snap back when the joiner leaves", asyn
   const ctxA = await geoContext(browser, TEL_AVIV);
   const pageA = await ctxA.newPage();
   await pageA.goto(baseURL!);
+  await pageA.locator(START).click();
 
   // Creator boots: anonymous auth → session created → 6-char code shown.
   const codeEl = pageA.locator(CODE);
@@ -52,6 +55,7 @@ test("creator sees a joiner appear, then snap back when the joiner leaves", asyn
   const ctxB = await geoContext(browser, HAIFA);
   const pageB = await ctxB.newPage();
   await pageB.goto(`${baseURL}/?code=${code}`);
+  await pageB.locator(START).click();
   await expect(pageB.locator(CODE)).toHaveText(code, { timeout: 45_000 });
 
   // Creator now sees two pills and the midpoint replaces the waiting card.

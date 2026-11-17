@@ -84,11 +84,16 @@ const testServices = {
   requestSemaphore: {} as Services["requestSemaphore"],
 } satisfies Services;
 
-/** Render the page inside the injection boundary it now expects. */
-function renderPage() {
+/**
+ * Render the page inside the injection boundary it now expects.
+ *
+ * `urlCode` is the session the link named: `App` reads it from the URL and
+ * mounts the page only once the person has agreed to start or join.
+ */
+function renderPage(urlCode: string | null = null) {
   return render(
     <ServicesProvider services={testServices}>
-      <LiveMidpointPage />
+      <LiveMidpointPage urlCode={urlCode} />
     </ServicesProvider>,
   );
 }
@@ -138,12 +143,6 @@ vi.mock("./components/MidpointCard", () => ({
 // ── Mock VenueListCard ──
 vi.mock("./components/VenueListCard", () => ({
   default: () => <div data-testid="venue-list-card">VenueList</div>,
-}));
-
-// ── Mock session-code ──
-vi.mock("./lib/session-code", () => ({
-  normalizeCode: (c: string) => c.toUpperCase(),
-  isValidCode: (c: string) => c.length === 6,
 }));
 
 // ── Default mock values ──
@@ -263,7 +262,7 @@ describe("LiveMidpointPage", () => {
     });
     rerender(
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={null} />
       </ServicesProvider>,
     );
 
@@ -276,7 +275,7 @@ describe("LiveMidpointPage", () => {
     mockGeo.mockReturnValue({ ...defaultGeo(), status: "unavailable" });
     rerender(
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={null} />
       </ServicesProvider>,
     );
 
@@ -455,13 +454,13 @@ describe("LiveMidpointPage", () => {
   });
 
   // Dropped as "no code", a mangled ?code= started a new session in place of
-  // the one the link named. The join validates it, so it has to receive it.
-  it("hands a mangled link's code to the join rather than creating a session", () => {
-    vi.stubGlobal("location", { ...window.location, search: "?code=!!bad" });
+  // the one the link named. `App` turns one away before the page mounts; a
+  // code that reaches the page all the same is joined, never replaced.
+  it("hands the code it was given to the join rather than creating a session", () => {
     const session = defaultSession();
     mockSession.mockReturnValue(session);
 
-    renderPage();
+    renderPage("!!BAD");
 
     expect(session.joinSession).toHaveBeenCalledWith(
       "!!BAD",
@@ -511,7 +510,7 @@ describe("LiveMidpointPage", () => {
       };
       render(
         <ServicesProvider services={{ ...testServices, graphPorts: failing }}>
-          <LiveMidpointPage />
+          <LiveMidpointPage urlCode={null} />
         </ServicesProvider>,
       );
       expect(screen.queryByText("live.presenceFailed")).toBeNull();
@@ -598,13 +597,12 @@ describe("LiveMidpointPage", () => {
   // A joiner whose handshake had not finished used to look at a bare map — for
   // good, on the devices that could not connect.
   it("says it is connecting while a join is pending", () => {
-    vi.stubGlobal("location", { ...window.location, search: "?code=ABC234" });
     mockSession.mockReturnValue({
       ...defaultSession(),
       state: { kind: "joining", handshake: 1 },
     });
 
-    renderPage();
+    renderPage("ABC234");
 
     expect(screen.getByRole("status").textContent).toBe("live.connecting");
     expect(screen.queryByTestId("waiting-card")).toBeNull();
@@ -836,6 +834,53 @@ describe("LiveMidpointPage", () => {
     expect(screen.getByRole("link", { name: "live.privacy" })).toBeTruthy();
   });
 
+  // The start screen's agreement was to "a session of my own", which had no
+  // code then. A reload of this tab finds the code in the URL, and has to
+  // find the agreement under it, or the creator is asked again.
+  it("remembers the agreement under the session's code once it is live", () => {
+    window.sessionStorage.clear();
+
+    renderPage();
+
+    expect(window.sessionStorage.getItem("mmh:consent")).toBe("ABC123");
+  });
+
+  // With storage blocked the name typed on the start screen reaches the
+  // session no other way.
+  it("gives the session the name typed on the start screen", () => {
+    const session = defaultSession();
+    mockSession.mockReturnValue(session);
+
+    render(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage urlCode={null} initialName="Dana" />
+      </ServicesProvider>,
+    );
+
+    expect(session.setOwnName).toHaveBeenCalledWith("Dana");
+  });
+
+  it("leaves the session's name alone when none was typed", () => {
+    const session = defaultSession();
+    mockSession.mockReturnValue(session);
+
+    renderPage();
+
+    expect(session.setOwnName).not.toHaveBeenCalled();
+  });
+
+  it("remembers nothing while there is no session to have agreed to", () => {
+    window.sessionStorage.clear();
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      state: { kind: "creating", handshake: 1 },
+    });
+
+    renderPage();
+
+    expect(window.sessionStorage.getItem("mmh:consent")).toBeNull();
+  });
+
   it("shows connected state with multiple participants", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
@@ -887,7 +932,7 @@ describe("LiveMidpointPage", () => {
     mockServerTimeOffset.mockReturnValue(DEPARTED_THRESHOLD_MS);
     rerender(
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={null} />
       </ServicesProvider>,
     );
 
@@ -933,7 +978,7 @@ describe("LiveMidpointPage — render-path stability", () => {
     });
     rerender(
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={null} />
       </ServicesProvider>,
     );
 
@@ -966,7 +1011,7 @@ describe("LiveMidpointPage — render-path stability", () => {
     });
     rerender(
       <ServicesProvider services={testServices}>
-        <LiveMidpointPage />
+        <LiveMidpointPage urlCode={null} />
       </ServicesProvider>,
     );
 

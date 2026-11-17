@@ -3,9 +3,21 @@
     "title": "Meet Me Halfway",
     "offline": "You are offline",
     "serverUnreachable": "Can't reach the server. Retrying...",
+    "loading": "Loading...",
     "errorTitle": "Something went wrong",
     "errorMessage": "The app ran into an unexpected error. Please reload to try again.",
     "reload": "Reload"
+  },
+  "start": {
+    "createLead": "Find a fair place to meet. Start a session, send the link, and the map shows everyone and the point halfway between you.",
+    "joinLead": "You've been invited to meet halfway. Join to see everyone on the map, and the point halfway between you.",
+    "pointShare": "Your live location is shared with everyone who joins: up to five people who have the link.",
+    "pointStop": "Sharing stops, and your location is deleted, when you close this page or turn location off.",
+    "pointSession": "No account. A session ends after 24 hours.",
+    "nameLabel": "Your name, as the others will see it",
+    "namePlaceholder": "Optional",
+    "create": "Start a session",
+    "join": "Join and share my location"
   },
   "live": {
     "title": "Live Midpoint",
