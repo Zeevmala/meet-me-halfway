@@ -6,7 +6,7 @@ import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 import type { ParticipantInfo, SessionState } from "./hooks/useLiveSession";
-import type { PinEvent } from "./graph/types";
+import type { PeerTrip, PinEvent } from "./graph/types";
 import { ok, err } from "../../core/dag/result";
 import { DEPARTED_THRESHOLD_MS, SESSION_TTL_MS } from "./graph/nodes";
 
@@ -47,7 +47,9 @@ vi.mock("./hooks/useLiveGeolocation", () => ({
 const mockSession = vi.fn();
 vi.mock("./hooks/useLiveSession", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./hooks/useLiveSession")>()),
-  useLiveSession: (_uid: string) => mockSession(),
+  // The second argument says whether to read the others: recorded, so a case
+  // can tell what the page asked for.
+  useLiveSession: (_uid: string, listen: boolean) => mockSession(listen),
 }));
 
 // ── Fake graph ports ──
@@ -77,6 +79,8 @@ const testPorts: GraphPorts = {
   removePresence: mockPresenceRemove,
   writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
   removeMeet: vi.fn(),
+  writeTrip: vi.fn().mockResolvedValue(ok(undefined)),
+  removeTrip: vi.fn(),
   placesEnabled: false,
 };
 
@@ -206,8 +210,13 @@ function defaultSession() {
     participants: [] as ParticipantInfo[],
     // Own claim only. Claims are not the participants: they never shrink.
     claimedSlots: 1,
+    // The others have been read: this device shares. The hook reads them
+    // only then; the mock stands for a device that does.
+    rosterKnown: true,
     // Nobody has set a meeting point.
     peerPins: [] as PinEvent[],
+    // Nobody has published a trip.
+    peerTrips: [null, null, null, null, null] as (PeerTrip | null)[],
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
@@ -997,6 +1006,20 @@ describe("LiveMidpointPage", () => {
   });
 });
 
+describe("LiveMidpointPage — reading the others only while sharing", () => {
+  // privacy.html: "The app shows you the others only while it is sharing your
+  // own location." Nothing in this harness lets a position write land, so
+  // the graph never says it is sharing, and the page must not ask to read.
+  it("does not ask to read the others before own position has been taken", () => {
+    renderPage();
+
+    expect(mockSession).toHaveBeenCalled();
+    for (const [listen] of mockSession.mock.calls) {
+      expect(listen).toBe(false);
+    }
+  });
+});
+
 describe("LiveMidpointPage — the meeting point", () => {
   const PEER = {
     uid: "p1",
@@ -1014,7 +1037,6 @@ describe("LiveMidpointPage — the meeting point", () => {
     renderPage();
 
     expect(lastCard().pin).toBeNull();
-    expect(lastCard().onMovePin).toBeNull();
   });
 
   // Going is the decision: the destination stops moving with the others.
@@ -1076,21 +1098,49 @@ describe("LiveMidpointPage — the meeting point", () => {
     expect(lastCard().pin).toEqual({ setBy: "Dana", name: null });
   });
 
-  it("offers to move it once the live midpoint has wandered, and moves it there", () => {
+  // Nobody moves it: not a later Navigate, however far the live midpoint
+  // has wandered.
+  it("keeps it where it was set when Navigate is followed again", () => {
     mockSession.mockReturnValue({
       ...defaultSession(),
       participants: [PEER],
       peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
     });
     renderPage();
-    const move = lastCard().onMovePin;
-    if (move === null) throw new Error("no move offered");
 
-    act(() => move());
+    act(() => lastCard().onNavigate());
 
-    expect(lastCard().pin).toEqual({ setBy: null, name: null });
-    expect(lastCard().destination).not.toEqual(HAIFA);
-    expect(lastCard().onMovePin).toBeNull();
+    expect(lastCard().destination).toEqual(HAIFA);
+    expect(lastCard().pin).toEqual({ setBy: "Dana", name: null });
+    expect("onMovePin" in lastCard()).toBe(false);
+  });
+
+  // A pick is this device's alone, and with a meeting point set it would be
+  // somewhere nobody else is going: the list is not offered.
+  it("offers venues until there is a meeting point, and none after", async () => {
+    const withPlaces = {
+      ...testServices,
+      graphPorts: { ...testPorts, placesEnabled: true },
+    } satisfies Services;
+    const page = (
+      <ServicesProvider services={withPlaces}>
+        <LiveMidpointPage urlCode={null} />
+      </ServicesProvider>
+    );
+    mockSession.mockReturnValue({ ...defaultSession(), participants: [PEER] });
+    const first = render(page);
+    expect(await screen.findByTestId("venue-list-card")).toBeTruthy();
+    first.unmount();
+
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [PEER],
+      peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
+    });
+    render(page);
+    await screen.findByTestId("live-map");
+
+    expect(screen.queryByTestId("venue-list-card")).toBeNull();
   });
 
   it("draws the meeting point on the map", async () => {

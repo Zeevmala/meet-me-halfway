@@ -25,6 +25,7 @@ export type NodeId =
   | "venues"
   | "destination"
   | "routes"
+  | "trip"
   | "frame";
 
 /** `node: [its dependencies]`. */
@@ -42,8 +43,9 @@ export const EDGES: EdgeMap = {
   // A write, and a sink: nothing derives from its value. It stops — and
   // removes what it published — once the session has expired.
   presence: ["expiry"],
-  // The meeting point somebody set: the latest pin seen, held for as long as
-  // the page is open. Reads sources only.
+  // The meeting point: the copy the database holds, else the one this device
+  // settled on or proposed, held for as long as the page is open. Reads
+  // sources only.
   pin: [],
   // A write, and a sink, like presence: this device's copy of the pin, for
   // whoever arrives or comes back after the one who set it has gone.
@@ -52,7 +54,11 @@ export const EDGES: EdgeMap = {
   phase: ["slots", "liveness", "expiry", "presence"],
   venues: ["midpoint"],
   destination: ["midpoint", "venues", "pin"],
+  // Own route only; the others' come from the trips their devices publish.
   routes: ["slots", "destination"],
+  // A write, and a sink: own route, for the others to draw. Published while
+  // own position is, and removed with it.
+  trip: ["routes", "presence", "destination"],
   frame: [
     "slots",
     "presence",
@@ -65,6 +71,7 @@ export const EDGES: EdgeMap = {
     "venues",
     "destination",
     "routes",
+    "trip",
   ],
 };
 

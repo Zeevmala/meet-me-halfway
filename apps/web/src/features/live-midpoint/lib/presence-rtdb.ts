@@ -57,6 +57,21 @@ export interface MeetValue {
   readonly name: string | null;
 }
 
+/**
+ * This device's trip, for the others to draw: the destination it was routed
+ * to, how, how long, and the line as an encoded polyline (`polyline.ts`).
+ */
+export interface TripValue {
+  readonly lat: number;
+  readonly lng: number;
+  readonly profile: "driving" | "walking";
+  /** Seconds. */
+  readonly duration: number;
+  /** Metres. */
+  readonly distance: number;
+  readonly line: string;
+}
+
 export interface PresenceWriter {
   readonly write: (
     code: string,
@@ -72,6 +87,13 @@ export interface PresenceWriter {
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
   readonly removeMeet: (code: string, slot: ParticipantIndex) => void;
+  readonly writeTrip: (
+    code: string,
+    slot: ParticipantIndex,
+    value: TripValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
+  readonly removeTrip: (code: string, slot: ParticipantIndex) => void;
 }
 
 export function presencePath(code: string, slot: ParticipantIndex): string {
@@ -80,6 +102,10 @@ export function presencePath(code: string, slot: ParticipantIndex): string {
 
 export function meetPath(code: string, slot: ParticipantIndex): string {
   return `sessions/${code}/meet/${slot}`;
+}
+
+export function tripPath(code: string, slot: ParticipantIndex): string {
+  return `sessions/${code}/trips/${slot}`;
 }
 
 /** A failed write as the resource layer takes it: a rules denial is `DENIED`. */
@@ -100,9 +126,10 @@ export function createPresenceWriter(db: Database): PresenceWriter {
   // it a departed participant lingers, keeps dragging the computed midpoint,
   // and leaves their last position in the database for good.
   //
-  // Only `participants/{slot}` and `meet/{slot}` are cleared, never the
-  // `slots/{i}` claim: the claim is write-once, so releasing it would both break that rule's
-  // guarantee and let a reconnecting participant come back a different colour.
+  // Only `participants/{slot}`, `meet/{slot}` and `trips/{slot}` are cleared,
+  // never the `slots/{i}` claim: the claim is write-once, so releasing it
+  // would both break that rule's guarantee and let a reconnecting participant
+  // come back a different colour.
   const published = new Set<string>();
 
   const arm = (path: string) => {
@@ -202,5 +229,10 @@ export function createPresenceWriter(db: Database): PresenceWriter {
     },
 
     removeMeet: (code, slot) => unpublish(meetPath(code, slot)),
+
+    writeTrip: (code, slot, value, signal) =>
+      publish(tripPath(code, slot), value, signal),
+
+    removeTrip: (code, slot) => unpublish(tripPath(code, slot)),
   };
 }

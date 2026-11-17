@@ -3,12 +3,17 @@ import {
   createMeetPolicy,
   createVenuePolicy,
   createRoutePolicy,
+  createTripPolicy,
   MEET_REFRESH_MS,
+  PEER_TRIP_ADMIT_M,
   ROUTE_REFRESH_MS,
-  ROUTE_RETRY_MS,
-  routesAnswer,
+  routeAnswers,
+  TRIP_REFRESH_MS,
+  tripAnswers,
 } from "./policies";
-import type { MeetInput, RouteInput, VenueInput } from "./policies";
+import type { MeetInput, RouteInput, TripInput, VenueInput } from "./policies";
+import type { RouteInfo } from "./types";
+import { decodePolyline } from "../lib/polyline";
 import type { GraphPorts } from "./ports";
 import type { LatLng } from "../lib/geo-math";
 import { ok, err } from "../../../core/dag/result";
@@ -32,6 +37,8 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     removePresence: vi.fn(),
     writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
     removeMeet: vi.fn(),
+    writeTrip: vi.fn().mockResolvedValue(ok(undefined)),
+    removeTrip: vi.fn(),
     placesEnabled: true,
     ...overrides,
   };
@@ -42,12 +49,24 @@ function venueInput(center: LatLng): VenueInput {
 }
 
 function routeInput(
-  slots: readonly (LatLng | null)[],
+  from: LatLng,
   dest: LatLng,
   profile: "driving" | "walking" = "driving",
 ): RouteInput {
-  return { slots, dest, profile };
+  return { from, dest, profile };
 }
+
+const ROUTE: RouteInfo = {
+  geometry: {
+    type: "LineString",
+    coordinates: [
+      [TEL_AVIV.lng, TEL_AVIV.lat],
+      [JERUSALEM.lng, JERUSALEM.lat],
+    ],
+  },
+  duration: 3_600,
+  distance: 60_000,
+};
 
 describe("venue policy", () => {
   const policy = createVenuePolicy(makePorts());
@@ -98,292 +117,173 @@ describe("venue policy", () => {
   });
 });
 
-describe("route policy", () => {
+describe("route policy — own route only", () => {
   const policy = createRoutePolicy(makePorts());
-  const base = routeInput([TEL_AVIV, JERUSALEM, null, null, null], TEL_AVIV);
+  const base = routeInput(TEL_AVIV, JERUSALEM);
 
   it("does not admit movement inside the 200m threshold", () => {
-    const next = routeInput([NEARBY, JERUSALEM, null, null, null], TEL_AVIV);
-    expect(policy.admits(base, next, 0, 0)).toBe(false);
+    expect(policy.admits(base, routeInput(NEARBY, JERUSALEM), 0, 0)).toBe(
+      false,
+    );
   });
 
-  it("admits movement beyond the threshold on any slot", () => {
-    const next = routeInput([FAR, JERUSALEM, null, null, null], TEL_AVIV);
-    expect(policy.admits(base, next, 0, 0)).toBe(true);
+  it("admits own movement beyond the threshold", () => {
+    expect(policy.admits(base, routeInput(FAR, JERUSALEM), 0, 0)).toBe(true);
   });
 
   it("admits a destination move beyond the threshold", () => {
-    const next = routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR);
-    expect(policy.admits(base, next, 0, 0)).toBe(true);
+    expect(policy.admits(base, routeInput(TEL_AVIV, FAR), 0, 0)).toBe(true);
   });
 
   it("admits a travel profile change", () => {
-    const next = routeInput(
-      [TEL_AVIV, JERUSALEM, null, null, null],
-      TEL_AVIV,
-      "walking",
-    );
-    expect(policy.admits(base, next, 0, 0)).toBe(true);
-  });
-
-  // The old guard compared participant *count*, so one person leaving as
-  // another joined looked identical and the routes were never refetched.
-  it("admits a change of occupancy that keeps the count the same", () => {
-    const swapped = routeInput(
-      [TEL_AVIV, null, JERUSALEM, null, null],
-      TEL_AVIV,
-    );
-    expect(policy.admits(base, swapped, 0, 0)).toBe(true);
-    expect(policy.identity(base)).not.toBe(policy.identity(swapped));
+    expect(
+      policy.admits(base, routeInput(TEL_AVIV, JERUSALEM, "walking"), 0, 0),
+    ).toBe(true);
   });
 
   // `driving` and `walking` are not traffic-aware: asking the same question
   // every minute, as it did, got the same answer.
-  it("admits a stationary refresh only once routes age past the refresh", () => {
+  it("admits a stationary refresh only once the route ages past the refresh", () => {
     expect(policy.admits(base, base, 0, 60_000)).toBe(false);
     expect(policy.admits(base, base, 0, ROUTE_REFRESH_MS)).toBe(true);
   });
 
-  it("returns routes keyed by slot", async () => {
-    const fetchRoute = vi
-      .fn()
-      .mockResolvedValueOnce(
-        ok({
-          geometry: { type: "LineString", coordinates: [] },
-          duration: 1,
-          distance: 11,
-        }),
-      )
-      .mockResolvedValueOnce(
-        ok({
-          geometry: { type: "LineString", coordinates: [] },
-          duration: 2,
-          distance: 22,
-        }),
-      );
-    const p = createRoutePolicy(makePorts({ fetchRoute }));
-    const input = routeInput([null, TEL_AVIV, null, JERUSALEM, null], FAR);
-
-    const result = await p.run(input, new AbortController().signal);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.bySlot[0]).toBeNull();
-    expect(result.value.bySlot[1]?.distance).toBe(11);
-    expect(result.value.bySlot[3]?.distance).toBe(22);
+  it("derives an identity that separates distant starts and destinations", () => {
+    expect(policy.identity(base)).toBe(policy.identity({ ...base }));
+    expect(policy.identity(base)).not.toBe(
+      policy.identity(routeInput(FAR, JERUSALEM)),
+    );
+    expect(policy.identity(base)).not.toBe(
+      policy.identity(routeInput(TEL_AVIV, FAR)),
+    );
   });
 
-  it("tags the routes with the destination and profile they answer", async () => {
-    const p = createRoutePolicy(makePorts());
-    const input = routeInput(
-      [TEL_AVIV, null, null, null, null],
-      FAR,
-      "walking",
+  // Each device routes its own trip and publishes it. Every device used to
+  // route everyone: five people, twenty-five requests for one person's move,
+  // and every position sent to Mapbox by every device.
+  it("asks Mapbox for this device's route alone, and tags it with what it answers", async () => {
+    const fetchRoute = vi.fn().mockResolvedValue(ok(ROUTE));
+    const p = createRoutePolicy(makePorts({ fetchRoute }));
+
+    const result = await p.run(
+      routeInput(TEL_AVIV, JERUSALEM, "walking"),
+      new AbortController().signal,
     );
 
-    const result = await p.run(input, new AbortController().signal);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.dest).toEqual(FAR);
-    expect(result.value.profile).toBe("walking");
+    expect(fetchRoute).toHaveBeenCalledTimes(1);
+    expect(fetchRoute).toHaveBeenCalledWith(
+      TEL_AVIV,
+      JERUSALEM,
+      "walking",
+      expect.anything(),
+    );
+    expect(result).toEqual(
+      ok({ dest: JERUSALEM, profile: "walking", route: ROUTE }),
+    );
   });
 
-  // Regression: Promise.all meant one participant's 429 discarded every
-  // route, and setRoutes never fired at all.
-  it("keeps the surviving routes when one slot fails", async () => {
-    const fetchRoute = vi
-      .fn()
-      .mockResolvedValueOnce(err({ kind: "RATE_LIMITED", retryAfterMs: 0 }))
-      .mockResolvedValueOnce(
-        ok({
-          geometry: { type: "LineString", coordinates: [] },
-          duration: 2,
-          distance: 22,
-        }),
-      );
-    const p = createRoutePolicy(makePorts({ fetchRoute }));
-    const input = routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR);
+  it("answers with no route when Mapbox has no way there", async () => {
+    const p = createRoutePolicy(makePorts());
 
-    const result = await p.run(input, new AbortController().signal);
+    const result = await p.run(base, new AbortController().signal);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.bySlot[0]).toBeNull();
-    expect(result.value.bySlot[1]?.distance).toBe(22);
+    expect(result).toEqual(
+      ok({ dest: JERUSALEM, profile: "driving", route: null }),
+    );
   });
 
-  describe("asks only for the routes that no longer answer", () => {
-    function route(distance: number) {
-      return ok({
-        geometry: { type: "LineString" as const, coordinates: [] },
-        duration: distance / 10,
-        distance,
-      });
-    }
-    /** A policy on a clock the test moves, fetching routes it counts. */
-    function counting() {
-      let nowMs = 0;
-      let next = 0;
-      const fetchRoute = vi.fn().mockImplementation(async () => route(++next));
-      const p = createRoutePolicy(makePorts({ fetchRoute, now: () => nowMs }));
-      const run = (input: RouteInput) =>
-        p.run(input, new AbortController().signal);
-      return { fetchRoute, run, tick: (ms: number) => (nowMs += ms) };
-    }
-
-    // One person walking 200 m cost a request per participant on every
-    // device: five devices, five people, twenty-five requests for one move.
-    it("fetches again only the route of whoever moved", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, NEARBY, null, null], FAR));
-      expect(c.fetchRoute).toHaveBeenCalledTimes(3);
-
-      const moved = await c.run(
-        routeInput([TEL_AVIV, FAR, NEARBY, null, null], FAR),
-      );
-
-      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
-      expect(c.fetchRoute.mock.calls[3][0]).toEqual(FAR);
-      expect(moved.ok && moved.value.bySlot.map((r) => r?.distance)).toEqual([
-        1,
-        4,
-        3,
-        undefined,
-        undefined,
-      ]);
-    });
-
-    it("fetches every route again when the destination moves", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
-
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], NEARBY));
-
-      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
-    });
-
-    it("fetches every route again for another profile", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
-
-      await c.run(
-        routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR, "walking"),
-      );
-
-      expect(c.fetchRoute).toHaveBeenCalledTimes(4);
-    });
-
-    it("fetches a route again once it is older than the refresh", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
-
-      c.tick(ROUTE_REFRESH_MS - 1);
-      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
-      expect(c.fetchRoute).toHaveBeenCalledTimes(1);
-
-      c.tick(1);
-      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
-      expect(c.fetchRoute).toHaveBeenCalledTimes(2);
-    });
-
-    // Checked per route: a destination drifting under 200 m at a time would
-    // otherwise carry kept routes ever further from where they lead.
-    it("does not keep a route whose destination has drifted step by step", async () => {
-      const c = counting();
-      const step1 = { lat: TEL_AVIV.lat + 0.0013, lng: TEL_AVIV.lng }; // ~145 m
-      const step2 = { lat: TEL_AVIV.lat + 0.0026, lng: TEL_AVIV.lng }; // ~290 m
-      await c.run(routeInput([JERUSALEM, null, null, null, null], TEL_AVIV));
-
-      await c.run(routeInput([JERUSALEM, null, null, null, null], step1));
-      expect(c.fetchRoute).toHaveBeenCalledTimes(1);
-
-      await c.run(routeInput([JERUSALEM, null, null, null, null], step2));
-      expect(c.fetchRoute).toHaveBeenCalledTimes(2);
-    });
-
-    it("forgets the route of a slot that empties", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
-      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
-
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
-
-      expect(c.fetchRoute).toHaveBeenCalledTimes(3);
-    });
-
-    // Nothing was asked, so nothing failed.
-    it("answers with the kept routes when none needs fetching", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, null, null, null, null], FAR));
-      c.fetchRoute.mockResolvedValue(
-        err({ kind: "RATE_LIMITED", retryAfterMs: 0 }),
-      );
-
-      const again = await c.run(
-        routeInput([TEL_AVIV, null, null, null, null], FAR),
-      );
-
-      expect(again.ok).toBe(true);
-    });
-
-    // A failed route does not fail the set, so nothing else would ask again
-    // until somebody moved, or the refresh five minutes on.
-    it("asks again within a minute once a route has failed, and then only for it", async () => {
-      let nowMs = 0;
-      const fetchRoute = vi
-        .fn()
-        .mockResolvedValueOnce(route(1))
-        .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "reset" }))
-        .mockResolvedValue(route(3));
-      const p = createRoutePolicy(makePorts({ fetchRoute, now: () => nowMs }));
-      const input = routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR);
-      await p.run(input, new AbortController().signal);
-
-      expect(p.admits(input, input, 0, ROUTE_RETRY_MS - 1)).toBe(false);
-      expect(p.admits(input, input, 0, ROUTE_RETRY_MS)).toBe(true);
-
-      nowMs = ROUTE_RETRY_MS;
-      const retried = await p.run(input, new AbortController().signal);
-      expect(fetchRoute).toHaveBeenCalledTimes(3);
-      expect(fetchRoute.mock.calls[2][0]).toEqual(JERUSALEM);
-      expect(retried.ok && retried.value.bySlot[1]?.distance).toBe(3);
-      // Answered: back to the refresh.
-      expect(p.admits(input, input, 0, ROUTE_RETRY_MS)).toBe(false);
-    });
-
-    // Keeping one route is not an answer for a participant whose route failed.
-    it("does not count a kept route as an answer for a failed one", async () => {
-      const c = counting();
-      await c.run(routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR));
-      c.fetchRoute.mockResolvedValue(
-        err({ kind: "RATE_LIMITED", retryAfterMs: 0 }),
-      );
-
-      const moved = await c.run(
-        routeInput([TEL_AVIV, NEARBY, null, null, null], FAR),
-      );
-
-      expect(moved.ok).toBe(true);
-      if (!moved.ok) return;
-      expect(moved.value.bySlot[0]?.distance).toBe(1);
-      expect(moved.value.bySlot[1]).toBeNull();
-    });
-  });
-
-  // But a total wipeout is a real outage and must reach the breaker.
-  it("reports a failure when every slot fails", async () => {
+  it("reports a failure", async () => {
     const fetchRoute = vi
       .fn()
       .mockResolvedValue(err({ kind: "RATE_LIMITED", retryAfterMs: 0 }));
     const p = createRoutePolicy(makePorts({ fetchRoute }));
-    const input = routeInput([TEL_AVIV, JERUSALEM, null, null, null], FAR);
 
-    const result = await p.run(input, new AbortController().signal);
+    const result = await p.run(base, new AbortController().signal);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe("RATE_LIMITED");
+  });
+});
+
+describe("trip policy", () => {
+  const input: TripInput = {
+    code: "ABC234",
+    slot: 1,
+    dest: JERUSALEM,
+    profile: "driving",
+    route: ROUTE,
+  };
+
+  // A route asked for as Navigate is tapped may land as the page goes to the
+  // background: it is the one the others want to see.
+  it("writes at once, with no debounce", () => {
+    const policy = createTripPolicy(makePorts());
+
+    expect(policy.debounceMs).toBe(0);
+    expect(policy.maxWaitMs).toBe(0);
+  });
+
+  it("admits a new route, destination or profile, and nothing else until the refresh is due", () => {
+    const policy = createTripPolicy(makePorts());
+
+    expect(policy.admits(input, { ...input, route: { ...ROUTE } }, 0, 1)).toBe(
+      true,
+    );
+    expect(policy.admits(input, { ...input, dest: FAR }, 0, 1)).toBe(true);
+    expect(policy.admits(input, { ...input, profile: "walking" }, 0, 1)).toBe(
+      true,
+    );
+    expect(
+      policy.admits(input, { ...input, dest: { ...JERUSALEM } }, 0, 1),
+    ).toBe(false);
+  });
+
+  // The server deletes the trip whenever the connection drops; a page that
+  // reconnects has nothing new to write, so it is written again.
+  it("admits the same trip again once the refresh is due", () => {
+    const policy = createTripPolicy(makePorts());
+
+    expect(policy.admits(input, input, 0, TRIP_REFRESH_MS)).toBe(true);
+  });
+
+  it("writes the trip under the claimed slot, with its line encoded", async () => {
+    const ports = makePorts();
+    const policy = createTripPolicy(ports);
+
+    await policy.run(input, new AbortController().signal);
+
+    expect(ports.writeTrip).toHaveBeenCalledWith(
+      "ABC234",
+      1,
+      {
+        lat: JERUSALEM.lat,
+        lng: JERUSALEM.lng,
+        profile: "driving",
+        duration: 3_600,
+        distance: 60_000,
+        line: expect.any(String) as string,
+      },
+      expect.anything(),
+    );
+    const written = vi.mocked(ports.writeTrip).mock.calls[0]?.[2];
+    expect(decodePolyline(written?.line ?? "")).toEqual(
+      ROUTE.geometry.coordinates,
+    );
+  });
+
+  it("reports a failed write", async () => {
+    const policy = createTripPolicy(
+      makePorts({
+        writeTrip: vi
+          .fn()
+          .mockResolvedValue(err({ kind: "DENIED", detail: "denied" })),
+      }),
+    );
+
+    const result = await policy.run(input, new AbortController().signal);
+
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -459,25 +359,35 @@ describe("meet policy", () => {
   });
 });
 
-describe("routesAnswer", () => {
-  const set = {
-    dest: TEL_AVIV,
-    profile: "driving" as const,
-    bySlot: [null, null, null, null, null],
-  };
+describe("routeAnswers", () => {
+  const own = { dest: TEL_AVIV, profile: "driving" as const, route: null };
 
   it("holds while the destination stays inside the route threshold", () => {
-    expect(routesAnswer(set, TEL_AVIV, "driving")).toBe(true);
-    expect(routesAnswer(set, NEARBY, "driving")).toBe(true);
+    expect(routeAnswers(own, TEL_AVIV, "driving")).toBe(true);
+    expect(routeAnswers(own, NEARBY, "driving")).toBe(true);
   });
 
-  // Picking a venue moves the destination; the routes to the old one would
-  // list times and distances to somewhere nobody is going.
+  // Picking a venue moves the destination; the route to the old one would
+  // list a time and distance to somewhere nobody is going.
   it("lapses once the destination moves beyond it", () => {
-    expect(routesAnswer(set, FAR, "driving")).toBe(false);
+    expect(routeAnswers(own, FAR, "driving")).toBe(false);
   });
 
   it("lapses when the travel profile changes", () => {
-    expect(routesAnswer(set, TEL_AVIV, "walking")).toBe(false);
+    expect(routeAnswers(own, TEL_AVIV, "walking")).toBe(false);
+  });
+});
+
+describe("tripAnswers", () => {
+  // Each device asks again once its own destination moves 200 m, and the
+  // live midpoint each computes is the same one a moment apart.
+  it("holds for a trip to the same destination as this device sees it", () => {
+    expect(tripAnswers(TEL_AVIV, TEL_AVIV)).toBe(true);
+    expect(tripAnswers(TEL_AVIV, NEARBY)).toBe(true);
+  });
+
+  it("lapses for a trip to somewhere else", () => {
+    expect(PEER_TRIP_ADMIT_M).toBeLessThan(1_000);
+    expect(tripAnswers(TEL_AVIV, FAR)).toBe(false);
   });
 });

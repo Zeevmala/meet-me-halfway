@@ -187,6 +187,25 @@ describe("createResource", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  // What a write published was deleted outside the resource — a position
+  // turned off — and the same value offered again is a value the server no
+  // longer holds. Admitted against the deleted one, it went unwritten.
+  it("sends the same input again once told to forget the last one", async () => {
+    const run = vi.fn().mockResolvedValue(ok("v1"));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    r.request(null);
+    r.forget();
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("collapses a duplicate request already in flight", async () => {
     let release: (v: Result<string, ResourceError>) => void = () => {};
     const run = vi.fn().mockImplementation(

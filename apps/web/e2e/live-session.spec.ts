@@ -300,7 +300,7 @@ async function wazeDestination(page: Page): Promise<string | null> {
  * as it opens the navigation app — the other's midpoint and Navigate buttons
  * went too, a second later, for "Waiting for others to join".
  */
-test("the first Navigate sets the meeting point for everyone, and it stays when that person leaves", async ({
+test("the first Navigate fixes the meeting point for everyone, nobody moves it, and it stays when that person leaves", async ({
   browser,
 }) => {
   test.setTimeout(120_000);
@@ -324,6 +324,11 @@ test("the first Navigate sets the meeting point for everyone, and it stays when 
       timeout: 45_000,
     });
     await expect(page.locator(".live-nav-hint")).toBeVisible();
+    // Each device routes its own trip and publishes it: the other person's
+    // time is the one their device published, read back from the database.
+    await expect(
+      page.locator(".live-eta-row:not(.live-eta-row--own) .live-eta-time"),
+    ).toHaveText(/\d/, { timeout: 30_000 });
   }
   const midpoint = await wazeDestination(creator.page);
 
@@ -337,21 +342,27 @@ test("the first Navigate sets the meeting point for everyone, and it stays when 
   await (await navigation).close();
 
   // Both are told, and both are going to the same place.
-  await expect(creator.page.locator(".live-trip-pin")).toHaveText("Set by you");
-  await expect(joiner.page.locator(".live-trip-pin")).toHaveText(/^Set by /, {
-    timeout: 15_000,
-  });
+  await expect(creator.page.locator(".live-trip-pin")).toHaveText(
+    "Fixed for everyone when you started navigating",
+  );
+  await expect(joiner.page.locator(".live-trip-pin")).toHaveText(
+    /^Fixed for everyone when .+ started navigating$/,
+    { timeout: 15_000 },
+  );
   expect(await wazeDestination(joiner.page)).toBe(midpoint);
 
-  // The joiner sets off. The midpoint moves; the meeting point does not.
+  // The joiner sets off. The midpoint moves; the meeting point does not, and
+  // nothing offers to move it.
+  const ownDistance = joiner.page.locator(".live-eta-row--own .live-eta-dist");
+  const before = (await ownDistance.textContent()) ?? "";
   await joiner.context.setGeolocation({ latitude: 32.6, longitude: 34.93 });
-  await expect
-    .poll(() => joiner.page.locator(".live-trip-move").count(), {
-      message: "the drift is offered as a new meeting point",
-      timeout: 15_000,
-    })
-    .toBe(1);
+  // The move has been taken in: the joiner's own way there is measured from
+  // where it is now.
+  await expect(ownDistance).not.toHaveText(before, { timeout: 20_000 });
   expect(await wazeDestination(joiner.page)).toBe(midpoint);
+  await expect(joiner.page.getByRole("button", { name: /move/i })).toHaveCount(
+    0,
+  );
 
   // The creator's page goes: its socket closes, and the server deletes its
   // position and its copy of the meeting point. The joiner keeps both the

@@ -28,6 +28,7 @@ function inputs(overrides: Partial<ScreenInputs> = {}): ScreenInputs {
     destination: MIDPOINT,
     pinned: false,
     claimedSlots: 2,
+    rosterKnown: true,
     othersSeen: 1,
     ...overrides,
   };
@@ -201,6 +202,54 @@ describe("deriveScreen — a meeting point", () => {
     expect(
       deriveScreen(inputs({ phase: "waiting", pinned: false })),
     ).toMatchObject({ sheet: { kind: "waiting", code: CODE } });
+  });
+});
+
+describe("deriveScreen — before the others have been read", () => {
+  // The others are read only once this device shares its own position. A
+  // joiner still finding its location knows nobody yet, and "Waiting for
+  // others to join" would tell them the person who invited them is not there.
+  it("says it is locating, not waiting, while someone else holds a slot", () => {
+    expect(
+      deriveScreen(
+        inputs({
+          phase: "waiting",
+          ownPosition: null,
+          destination: null,
+          rosterKnown: false,
+          claimedSlots: 2,
+          othersSeen: 0,
+        }),
+      ),
+    ).toMatchObject({ kind: "map", sheet: { kind: "locating" } });
+  });
+
+  it("waits, with the code to share, while this device holds the only slot", () => {
+    expect(
+      deriveScreen(
+        inputs({
+          phase: "waiting",
+          ownPosition: null,
+          destination: null,
+          rosterKnown: false,
+          claimedSlots: 1,
+          othersSeen: 0,
+        }),
+      ),
+    ).toMatchObject({ sheet: { kind: "waiting", code: CODE, full: false } });
+  });
+
+  it("counts no device as unseen before anyone could have been seen", () => {
+    expect(
+      deriveScreen(
+        inputs({
+          phase: "waiting",
+          rosterKnown: false,
+          claimedSlots: 4,
+          othersSeen: 0,
+        }),
+      ),
+    ).toMatchObject({ unseenDevices: 0 });
   });
 });
 

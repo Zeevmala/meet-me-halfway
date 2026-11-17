@@ -668,12 +668,10 @@ describe("meet — the meeting point, for the people in the session", () => {
 
   beforeEach(async () => {
     await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+    await as(JOINERS[1]).ref(`sessions/${CODE}/slots/2`).set(JOINERS[1]);
   });
 
   it("lets a slot holder publish it under its own slot", async () => {
-    await assertSucceeds(
-      as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0)),
-    );
     await assertSucceeds(
       as(JOINERS[0])
         .ref(`sessions/${CODE}/meet/1`)
@@ -684,26 +682,76 @@ describe("meet — the meeting point, for the people in the session", () => {
   // A copy of what someone else set: how a meeting point outlives whoever
   // set it leaving.
   it("lets a holder publish a copy of a meeting point someone else set", async () => {
+    const set = pin(0, { byName: "Dana", name: "Cafe Nord" });
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(set);
+
     await assertSucceeds(
-      as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(pin(0)),
+      as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(set),
     );
+  });
+
+  // Nobody moves it. Every copy has to be the one already published, field
+  // for field: a second Navigate, a stale device's own pin, or a modified
+  // client's are all refused while anyone else holds a copy.
+  it("refuses a copy that differs from one already published in any field", async () => {
+    const set = pin(0, { byName: "Dana", name: "Cafe Nord" });
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(set);
+    const ref = as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`);
+
+    for (const differs of [
+      { ...set, at: set.at + 1 },
+      { ...set, by: 1 },
+      { ...set, lat: set.lat + 0.001 },
+      { ...set, lng: set.lng + 0.001 },
+      { ...set, byName: "Noa" },
+      { ...set, name: "Bar Two" },
+      { at: set.at, by: set.by, lat: set.lat, lng: set.lng },
+    ]) {
+      await assertFails(ref.set(differs));
+    }
+    await assertSucceeds(ref.set(set));
+  });
+
+  // Two devices hold copies; neither can change its own, since the other's
+  // still stands. The rules cannot hold a pin against the last device to
+  // hold one — there is nothing left to compare with — so that device could
+  // replace it, and anyone joining after would read the replacement.
+  it("refuses to change a copy while another device holds one", async () => {
+    const set = pin(0);
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(set);
+    await as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(set);
+    const moved = { ...set, lat: set.lat + 0.01 };
+
+    await assertFails(as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(moved));
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(moved));
+
+    await as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).remove();
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(moved));
   });
 
   it("refuses one under a slot it does not hold", async () => {
     await assertFails(as(CREATOR).ref(`sessions/${CODE}/meet/1`).set(pin(0)));
     await assertFails(
-      as(JOINERS[1]).ref(`sessions/${CODE}/meet/2`).set(pin(2)),
+      as(JOINERS[2]).ref(`sessions/${CODE}/meet/3`).set(pin(3)),
     );
     await assertFails(
-      as(JOINERS[1]).ref(`sessions/${CODE}/meet/5`).set(pin(4)),
+      as(JOINERS[2]).ref(`sessions/${CODE}/meet/5`).set(pin(4)),
     );
   });
 
-  // Where the group is meeting is as much theirs as where they are.
-  it("lets every slot holder read it, and nobody else", async () => {
+  // Where the group is meeting is as much theirs as where they are — and
+  // seen, like the trips, only by those who share their own position.
+  it("lets every slot holder who shares read it, and nobody else", async () => {
     await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0));
+    await as(CREATOR)
+      .ref(`sessions/${CODE}/participants/0`)
+      .set(position(CREATOR));
 
     await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/meet`).get());
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/meet`).get());
+    await as(JOINERS[0])
+      .ref(`sessions/${CODE}/participants/1`)
+      .set(position(JOINERS[0]));
     await assertSucceeds(as(JOINERS[0]).ref(`sessions/${CODE}/meet`).get());
     await assertFails(as(SIXTH).ref(`sessions/${CODE}/meet`).get());
     await assertFails(as(SIXTH).ref(`sessions/${CODE}/meet/0`).get());
@@ -714,6 +762,30 @@ describe("meet — the meeting point, for the people in the session", () => {
         .ref(`sessions/${CODE}/meet`)
         .get(),
     );
+  });
+
+  // Held to it for as long as it listens: RTDB cancels the listener of a
+  // reader whose own position is deleted, so a device cannot publish a
+  // position, start listening, and then take the position down and go on
+  // watching unseen. The client attaches again after a cancellation
+  // (`useGatedListener`), since a reconnect is refused the same way until
+  // the heartbeat writes the position back.
+  it("cuts off a reader the moment its own position is deleted", async () => {
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0));
+    const reader = as(CREATOR);
+    await reader.ref(`sessions/${CODE}/participants/0`).set(position(CREATOR));
+    let answer = (): void => {};
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const cancelled = new Promise<Error>((resolve) => {
+      reader.ref(`sessions/${CODE}/meet`).on("value", () => answer(), resolve);
+    });
+    await answered;
+
+    await reader.ref(`sessions/${CODE}/participants/0`).remove();
+
+    expect((await cancelled).message).toMatch(/permission_denied/);
   });
 
   it("refuses one that is not a meeting point", async () => {
@@ -743,8 +815,7 @@ describe("meet — the meeting point, for the people in the session", () => {
     }
   });
 
-  // Of all the copies, the latest `at` stands. A time far ahead would hold
-  // a meeting point against everyone else's for as long as it lasted.
+  // A time far ahead is no time a device could have read off the server.
   it("refuses one set further ahead than clocks disagree by", async () => {
     const ref = as(CREATOR).ref(`sessions/${CODE}/meet/0`);
 
@@ -768,8 +839,9 @@ describe("meet — the meeting point, for the people in the session", () => {
   });
 
   it("lets the holder clear its own, and nobody clear another's", async () => {
-    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0));
-    await as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(pin(0));
+    const set = pin(0);
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(set);
+    await as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(set);
 
     await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/meet/0`).remove());
     await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/meet/0`).remove());
@@ -796,6 +868,109 @@ describe("meet — the meeting point, for the people in the session", () => {
 
     await assertFails(ref.set(pin(0)));
     await assertSucceeds(ref.remove());
+  });
+});
+
+describe("trips — each person's way there, for the people in the session", () => {
+  /** A trip as a device publishes it: its own route to the destination. */
+  const TRIP = {
+    lat: 32.0,
+    lng: 34.9,
+    profile: "driving",
+    duration: 1_800,
+    distance: 24_000,
+    // Google's published example of the encoding.
+    line: "_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+  };
+
+  beforeEach(async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+  });
+
+  it("lets a slot holder publish its trip under its own slot", async () => {
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/trips/0`).set(TRIP));
+    await assertSucceeds(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/trips/1`)
+        .set({ ...TRIP, profile: "walking" }),
+    );
+  });
+
+  it("refuses one under a slot it does not hold", async () => {
+    await assertFails(as(CREATOR).ref(`sessions/${CODE}/trips/1`).set(TRIP));
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/trips/2`).set(TRIP));
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/trips/5`).set(TRIP));
+  });
+
+  it("refuses one that is not a trip", async () => {
+    const ref = as(CREATOR).ref(`sessions/${CODE}/trips/0`);
+    const noLine: Record<string, unknown> = { ...TRIP };
+    delete noLine.line;
+    for (const bad of [
+      noLine,
+      { ...TRIP, lat: 91 },
+      { ...TRIP, lng: "east" },
+      { ...TRIP, profile: "flying" },
+      { ...TRIP, duration: -1 },
+      { ...TRIP, duration: 1e8 },
+      { ...TRIP, distance: "far" },
+      { ...TRIP, line: "a" },
+      { ...TRIP, line: "has spaces" },
+      { ...TRIP, line: "?".repeat(20_001) },
+      { ...TRIP, line: 7 },
+      { ...TRIP, ts: Date.now() },
+    ]) {
+      await assertFails(ref.set(bad));
+    }
+  });
+
+  // Seen only by those who share their own position: whoever does not
+  // share sees nobody, and nobody's way.
+  it("lets every slot holder who shares read them, and nobody else", async () => {
+    await as(CREATOR).ref(`sessions/${CODE}/trips/0`).set(TRIP);
+    await as(CREATOR)
+      .ref(`sessions/${CODE}/participants/0`)
+      .set(position(CREATOR));
+
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/trips`).get());
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/trips`).get());
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/trips`).get());
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/trips/0`).get());
+    await assertFails(
+      testEnv
+        .unauthenticatedContext()
+        .database()
+        .ref(`sessions/${CODE}/trips`)
+        .get(),
+    );
+  });
+
+  // Like a position: nothing new once the 24 hours are up, but a trip can
+  // still be taken down — by the client, or by its onDisconnect.
+  it("refuses a new one in an expired session, and still lets the holder clear it", async () => {
+    await testEnv.clearDatabase();
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .database()
+        .ref(`sessions/${CODE}`)
+        .set({
+          created: Date.now() - 25 * 60 * 60 * 1000,
+          creatorUid: CREATOR,
+          slots: { 0: CREATOR },
+          trips: { 0: TRIP },
+        });
+    });
+    const ref = as(CREATOR).ref(`sessions/${CODE}/trips/0`);
+
+    await assertFails(ref.set(TRIP));
+    await assertSucceeds(ref.remove());
+  });
+
+  it("lets the holder clear its own, and nobody clear another's", async () => {
+    await as(CREATOR).ref(`sessions/${CODE}/trips/0`).set(TRIP);
+
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/trips/0`).remove());
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/trips/0`).remove());
   });
 });
 

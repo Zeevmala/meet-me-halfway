@@ -11,13 +11,13 @@ import type { LatLng } from "../lib/geo-math";
 import type { PlaceResult } from "../lib/venue-ranking";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
-import { classifyThrown } from "../../../core/dag/errors";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
-import type { PinEvent, RouteInfo, RouteSet, TravelProfile } from "./types";
+import type { OwnRoute, PinEvent, RouteInfo, TravelProfile } from "./types";
 import { samePin } from "./nodes";
+import { encodeRouteLine } from "../lib/polyline";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -36,13 +36,6 @@ const VENUE_TTL_MS = 5 * 60_000;
  * movement asks again by itself. This only bounds how old an answer gets.
  */
 export const ROUTE_REFRESH_MS = 5 * 60_000;
-
-/**
- * How soon routes are asked for again after some of them failed. One
- * participant's failed route does not fail the set — the others stand — so
- * nothing else would ask again until somebody moved, or the refresh.
- */
-export const ROUTE_RETRY_MS = 60_000;
 
 const METERS_PER_DEG_LAT = 111_320;
 
@@ -277,66 +270,62 @@ export function createMeetPolicy(
 }
 
 export interface RouteInput {
-  /** Slot-keyed positions; `null` is a vacant slot. */
-  readonly slots: readonly (LatLng | null)[];
+  /** This device's own position. */
+  readonly from: LatLng;
   readonly dest: LatLng;
   readonly profile: TravelProfile;
 }
 
-function occupancyKey(slots: readonly (LatLng | null)[]): string {
-  return slots.map((slot) => (slot === null ? "-" : "x")).join("");
-}
-
-function anySlotMoved(
-  previous: readonly (LatLng | null)[],
-  next: readonly (LatLng | null)[],
-  thresholdM: number,
-): boolean {
-  for (let i = 0; i < next.length; i++) {
-    const a = previous[i];
-    const b = next[i];
-    if (a == null || b == null) continue;
-    if (haversineDistance(a, b) >= thresholdM) return true;
-  }
-  return false;
-}
-
 /**
- * Whether a route set still answers the current destination and profile.
+ * Whether own route still answers the current destination and profile.
  *
  * Within the same radius that decides when to fetch again: a destination that
- * drifted less than that is the one these routes were fetched for, and one
- * that moved further — a venue picked, the midpoint shifted — is not, so its
- * routes and distances would describe somewhere else.
+ * drifted less than that is the one this route was fetched for, and one that
+ * moved further — a venue picked, the midpoint shifted — is not, so its time
+ * and distance would describe somewhere else.
  */
-export function routesAnswer(
-  set: RouteSet,
+export function routeAnswers(
+  own: OwnRoute,
   dest: LatLng,
   profile: TravelProfile,
 ): boolean {
   return (
-    set.profile === profile && haversineDistance(set.dest, dest) < ROUTE_ADMIT_M
+    own.profile === profile && haversineDistance(own.dest, dest) < ROUTE_ADMIT_M
   );
 }
 
-/** A route as it was fetched: from where, to where, for which profile, when. */
-interface CachedRoute {
-  readonly from: LatLng;
-  readonly to: LatLng;
-  readonly profile: TravelProfile;
-  readonly route: RouteInfo | null;
-  readonly atMs: number;
+/**
+ * How far another device's destination may be from this one's for its trip
+ * to be shown here. Each device asks for its route again once its own
+ * destination has moved 200 m, and the live midpoint each computes is the
+ * same one a moment apart, so a trip published for the same destination can
+ * be up to that far from this device's view of it — twice the radius keeps it
+ * from flickering out at the edge. A meeting point is one place for everyone,
+ * so with one set this is moot.
+ */
+export const PEER_TRIP_ADMIT_M = 2 * ROUTE_ADMIT_M;
+
+/** Whether another participant's trip goes where this device is going. */
+export function tripAnswers(dest: LatLng, tripDest: LatLng): boolean {
+  return haversineDistance(dest, tripDest) < PEER_TRIP_ADMIT_M;
 }
 
+/**
+ * This device's route, and only this device's.
+ *
+ * Every device used to route every participant: one person walking 200 m
+ * cost a request per participant on every device — five people, five devices:
+ * twenty-five requests for one person's move, against a limit of 300 a
+ * minute that every device of every session shares, and each device sent
+ * Mapbox all five positions. Now each asks for its own trip and publishes it
+ * (`createTripPolicy`); the others draw it from the database.
+ *
+ * Asked again once this device or its destination has moved 200 m, or the
+ * profile changed, or `ROUTE_REFRESH_MS` has passed.
+ */
 export function createRoutePolicy(
   ports: GraphPorts,
-): ResourcePolicy<RouteInput, RouteSet> {
-  // By slot: the route each participant was last given. Held here rather than
-  // read off the resource's last value, which keeps no start points and is
-  // replaced whole by every answer.
-  let cache: readonly (CachedRoute | null)[] = [];
-  // Whether the last answer left a participant without a route it asked for.
-  let missing = false;
+): ResourcePolicy<RouteInput, OwnRoute> {
   return {
     id: "routes",
     debounceMs: 3_000,
@@ -355,102 +344,95 @@ export function createRoutePolicy(
     },
     admits: (previous, next, previousAtMs, nowMs) =>
       previous.profile !== next.profile ||
-      // Compare occupancy, not participant count: one person leaving as
-      // another joins keeps the count equal but is a different set of routes.
-      occupancyKey(previous.slots) !== occupancyKey(next.slots) ||
       haversineDistance(previous.dest, next.dest) >= ROUTE_ADMIT_M ||
-      anySlotMoved(previous.slots, next.slots, ROUTE_ADMIT_M) ||
-      nowMs - previousAtMs >= (missing ? ROUTE_RETRY_MS : ROUTE_REFRESH_MS),
+      haversineDistance(previous.from, next.from) >= ROUTE_ADMIT_M ||
+      nowMs - previousAtMs >= ROUTE_REFRESH_MS,
     identity: (input) =>
       `r:${input.profile}:${cellKey(input.dest, ROUTE_ADMIT_M)}:` +
-      occupancyKey(input.slots),
-
-    /**
-     * One request per participant whose route no longer answers, settled
-     * independently; every other route is the one already fetched.
-     *
-     * Any dispatch used to refetch everyone's route. One person walking 200 m
-     * cost a request per participant on every device — five people, five
-     * devices: twenty-five requests for one person's move, against a limit
-     * of 300 a minute that every device shares. A route still answers while
-     * its participant and the destination are each within 200 m of where it
-     * was asked from and to, for the same profile, and it is younger than
-     * `ROUTE_REFRESH_MS`. The destination is checked per route, not per set:
-     * a midpoint drifting less than 200 m at a time would otherwise carry
-     * routes ever further from where they lead.
-     *
-     * `Promise.all` used to mean a single 429 discarded every participant's
-     * route and left the previous ones on screen with no indication they were
-     * stale. Here a failed slot is simply `null` while its neighbours stay
-     * fresh; only a total wipeout is reported as a node failure, so a genuine
-     * outage still trips the breaker but one bad leg does not.
-     */
-    run: async (input, signal): Promise<Result<RouteSet, ResourceError>> => {
-      const nowMs = ports.now();
-      const bySlot: (RouteInfo | null)[] = input.slots.map(() => null);
-      const kept: (CachedRoute | null)[] = input.slots.map(() => null);
-      const targets: { slot: number; position: LatLng }[] = [];
-      let reused = 0;
-
-      input.slots.forEach((position, slot) => {
-        if (position === null) return;
-        const entry = cache[slot] ?? null;
-        if (
-          entry !== null &&
-          entry.profile === input.profile &&
-          haversineDistance(entry.from, position) < ROUTE_ADMIT_M &&
-          haversineDistance(entry.to, input.dest) < ROUTE_ADMIT_M &&
-          nowMs - entry.atMs < ROUTE_REFRESH_MS
-        ) {
-          bySlot[slot] = entry.route;
-          kept[slot] = entry;
-          reused++;
-        } else {
-          targets.push({ slot, position });
-        }
-      });
-
-      const settled = await Promise.allSettled(
-        targets.map((target) =>
-          ports.fetchRoute(target.position, input.dest, input.profile, signal),
-        ),
+      cellKey(input.from, ROUTE_ADMIT_M),
+    run: async (input, signal): Promise<Result<OwnRoute, ResourceError>> => {
+      const result = await ports.fetchRoute(
+        input.from,
+        input.dest,
+        input.profile,
+        signal,
       );
+      return result.ok
+        ? ok({ dest: input.dest, profile: input.profile, route: result.value })
+        : err(result.error);
+    },
+  };
+}
 
-      let successes = 0;
-      let firstError: ResourceError | null = null;
+export interface TripInput {
+  readonly code: string;
+  /** The claimed slot — the RTDB key this trip lands on. */
+  readonly slot: ParticipantIndex;
+  readonly dest: LatLng;
+  readonly profile: TravelProfile;
+  readonly route: RouteInfo;
+}
 
-      for (let i = 0; i < settled.length; i++) {
-        const outcome = settled[i];
-        const target = targets[i];
-        if (outcome === undefined || target === undefined) continue;
-        if (outcome.status === "fulfilled") {
-          if (outcome.value.ok) {
-            bySlot[target.slot] = outcome.value.value;
-            kept[target.slot] = {
-              from: target.position,
-              to: input.dest,
-              profile: input.profile,
-              route: outcome.value.value,
-              atMs: nowMs,
-            };
-            successes++;
-          } else if (firstError === null) {
-            firstError = outcome.value.error;
-          }
-        } else if (firstError === null) {
-          firstError = classifyThrown(outcome.reason);
-        }
-      }
+/**
+ * How often an unchanged trip is written again: for the same reason, and at
+ * the same pace, as the meeting point's copy (`MEET_REFRESH_MS`) — the server
+ * deletes it whenever the connection drops, and nothing else would put it
+ * back.
+ */
+export const TRIP_REFRESH_MS = MEET_REFRESH_MS;
 
-      // Answers are answers, whoever is still waiting for them. A slot that
-      // is empty now, or failed, keeps nothing — and a failure asks again
-      // within a minute, for that route alone.
-      cache = kept;
-      missing = successes < targets.length;
-      if (successes === 0 && reused === 0 && firstError !== null) {
-        return err(firstError);
-      }
-      return ok({ dest: input.dest, profile: input.profile, bySlot });
+/**
+ * This device's trip, for the others to draw: where it goes, how, how long,
+ * and the line, encoded (`lib/polyline.ts`).
+ *
+ * No debounce: it changes only when own route does, which is already
+ * debounced, and the page may be on its way to the background — a route
+ * asked for as Navigate is tapped is the one the others want to see.
+ */
+export function createTripPolicy(
+  ports: GraphPorts,
+): ResourcePolicy<TripInput, null> {
+  return {
+    id: "trip",
+    debounceMs: 0,
+    maxWaitMs: 0,
+    timeoutMs: 10_000,
+    staleAfterMs: 0,
+    retryAttempts: 3,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 5,
+      baseOpenMs: 30_000,
+      maxOpenMs: 60_000,
+      multiplier: 2,
+    },
+    admits: (previous, next, previousAtMs, nowMs) =>
+      previous.code !== next.code ||
+      previous.slot !== next.slot ||
+      previous.route !== next.route ||
+      previous.profile !== next.profile ||
+      previous.dest.lat !== next.dest.lat ||
+      previous.dest.lng !== next.dest.lng ||
+      nowMs - previousAtMs >= TRIP_REFRESH_MS,
+    identity: (input) =>
+      `t:${input.code}:${input.slot}:${input.profile}:` +
+      `${input.dest.lat},${input.dest.lng}:` +
+      `${input.route.duration}:${input.route.distance}`,
+    run: async (input, signal) => {
+      const result = await ports.writeTrip(
+        input.code,
+        input.slot,
+        {
+          lat: input.dest.lat,
+          lng: input.dest.lng,
+          profile: input.profile,
+          duration: input.route.duration,
+          distance: input.route.distance,
+          line: encodeRouteLine(input.route.geometry),
+        },
+        signal,
+      );
+      return result.ok ? ok(null) : err(result.error);
     },
   };
 }

@@ -67,6 +67,8 @@ export function createServices(config: AppConfig): Services {
     removePresence: presence.remove,
     writeMeet: presence.writeMeet,
     removeMeet: presence.removeMeet,
+    writeTrip: presence.writeTrip,
+    removeTrip: presence.removeTrip,
     placesEnabled: config.places !== null,
   };
 

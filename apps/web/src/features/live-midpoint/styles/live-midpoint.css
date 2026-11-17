@@ -608,6 +608,13 @@
   font-weight: 600;
 }
 
+/* Another travel mode than the toggle's, said in words beside the name. */
+.live-eta-mode {
+  flex: none;
+  font-size: 11px;
+  color: var(--live-text-muted);
+}
+
 .live-eta-time {
   flex: none;
   font-size: 16px;
@@ -656,27 +663,6 @@
 .live-trip-pin {
   font-size: 12px;
   color: var(--live-text-muted);
-}
-
-.live-trip-move {
-  display: block;
-  margin-block-start: 6px;
-  padding: 4px 0;
-  min-height: 44px;
-  background: none;
-  border: none;
-  color: var(--live-green);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: start;
-  cursor: pointer;
-}
-
-.live-trip-move:focus-visible {
-  outline: 2px solid var(--live-blue);
-  outline-offset: 2px;
-  border-radius: 6px;
 }
 
 .live-nav-hint {

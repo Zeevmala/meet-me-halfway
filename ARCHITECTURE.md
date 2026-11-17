@@ -40,8 +40,9 @@ SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
                          │    and delete)│                │   routes ──► frame
                          ├──► expiry ────┴────────────────┘
                          │   (clock)
-  ui.Navigate / Move ────┼──► pin ─────────────────────────────► destination
-  meet listener ─────────┘   (latest seen) ──► meet (RTDB write, and delete)
+  ui.Navigate ───────────┼──► pin ─────────────────────────────► destination
+  meet listener ─────────┤   (held copy wins) ──► meet (RTDB write, and delete)
+  trips listener ────────┘   routes ──► trip (own route: RTDB write, and delete)
 ```
 
 `useLiveGeolocation`, `useLiveSession`, `useAuth` and `useNetworkStatus` are
@@ -70,14 +71,15 @@ the edges declared, it is a failing test that names both nodes.
 | `expiry` | pure | session, server clock | `expired` + `flipAtMs` | — |
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
 | `presence` | effectful | a live session, not expired, + own position | RTDB write; deletes what it wrote once that stops | report failed |
-| `pin` | fold | own pin, every device's published copy | the latest `PinEvent` seen, kept after its copies are gone | — |
+| `pin` | fold | own proposal, every device's published copy | the copy the database holds, else the one settled on, else the proposal; kept after its copies are gone | — |
 | `meet` | effectful | `pin`, while `presence` publishes | RTDB write of this device's copy; deleted with own position | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
 | `phase` | pure | session, `expiry`, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `midpoint` | raw `PlaceResult[]`, ranked against the live midpoint, the pick pinned in | last answer while young, else says it failed |
 | `destination` | pure | `pin`, `midpoint`, `venues`, the pick | the pin, else the pick, else the midpoint | — |
-| `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
-| `frame` | pure | all of the above | `GraphSnapshot` | — |
+| `routes` | effectful | own position, `destination`, own profile | `OwnRoute`: this device's route, tagged with the destination and profile it answers | degrade to last-good |
+| `trip` | effectful | own route, while `presence` publishes | RTDB write of this device's trip; deleted with own position | report failed |
+| `frame` | pure | all of the above, and the others' trips | `GraphSnapshot`: own route and each other's trip that goes where this device is going, by slot | — |
 
 ### The meeting point is a fold, published by everyone
 
@@ -88,29 +90,44 @@ the pin, the other person's Navigate target moved a kilometre for every two
 the first one drove, and their Navigate buttons went a second after the first
 one left for Waze.
 
-A **pin** is the decision, kept. The first Navigate sets one at the current
-destination, and anyone can move it to the current midpoint once the two have
-drifted `PIN_DRIFT_M` (200 m) apart; picking a venue while one is set moves it
-there. `PinEvent` is `{ at, by, byName, position, name }`, and `at` is the
-server's clock as the setter knew it — a tap is stamped later than every pin
-that device has seen, so a clock running behind cannot lose a user's decision.
+A **pin** is the decision, kept, and never moved. The first Navigate fixes
+it at the current destination — the calculated midpoint, or a venue this device
+had picked — and nothing moves it after that: there is no control to, the
+venue list is not offered once it is set, and the database refuses a copy that
+disagrees with a copy already published. `PinEvent` is
+`{ at, by, byName, position, name }`; `at` is the server's clock as the setter
+knew it.
 
 Where it lives decides what it costs. A session-level node would outlive
 everybody, and the session record is never deleted: a coordinate between the
 participants, kept for good, which the privacy policy does not allow. So every
-device publishes its **copy** of the latest pin it knows in its own entry,
+device publishes its **copy** of the pin in its own entry,
 `sessions/{code}/meet/{slot}`, written by the `meet` node alongside its
 position and deleted with it — by the node when it stops publishing, and by
 the server's `onDisconnect` (armed and re-armed exactly as for presence) when
 the connection drops. A pin therefore outlives any one person leaving, and
 nothing of it outlives the people in the session.
 
-The `pin` node is a **fold**, `latestPin(current, [ownPin, ...peerPins])`:
-the latest `at` wins, an exact tie goes to the lower slot, and what has been
-seen is kept after its copies are gone. That last part is load-bearing: the
-device that set the pin is usually the first to leave, and a device left on
-its own has nobody else's copy to read. The register resets only if the
-session code changes.
+**The database referees.** Each copy's rule compares it, field for field, with
+every other slot's copy, so all the copies that exist at any moment agree. Two
+people tapping Navigate in the same second both propose a pin; whichever write
+the server takes first stands, and the other is refused. The `pin` node is a
+**fold**, `settlePin(kept, proposed, held)`: a copy the database holds wins,
+then the pin this device already settled on, then its own proposal. Preferring
+the earlier `at`, or a device's own tap, would leave two devices showing two
+meeting points whenever the later tap reached the server first; preferring the
+database's copy, the device whose proposal lost adopts the winner, and its own
+copy — now the winner's — is accepted. Copies that disagree are seen together
+only in a snapshot caught between writes, or from a modified client; the
+earliest `at`, then the lower slot, decides, the same on every device.
+
+What was settled on is kept after its copies are gone — the device that set
+the pin is usually the first to leave, and a device left on its own has nobody
+else's copy to read. The limit, stated in the rules test: the database cannot
+hold a pin against the last device holding a copy, since nothing is left to
+compare with; while any other device holds one, nobody can change it. The
+register resets only if the session code changes, and a proposal is only ever
+for the session it was made in.
 
 `meet` writes with no debounce. The tap that sets a pin is the tap that opens
 the navigation app, and a write held back three seconds, as position's is,
@@ -272,6 +289,35 @@ the join already reports it as not found, and that copy says the session may
 have expired. The check that stood there compared `created` with the device's
 clock, so it fired only when that clock ran fast.
 
+### The others are read only while this device shares
+
+Whoever does not share sees nobody, so nobody can watch unseen. The graph's
+`sharing` is true once own position is published **and the server has taken
+it** — the first write's answer, not the first fix — and the participants,
+meeting-point and trips listeners are attached only while it is. They detach,
+and what they read is dropped, the moment it goes false: location turned off,
+the session lost, expired or closed. Before that, a device that is finding its
+location knows nobody, which is not the same as nobody being there: with
+someone else holding a slot the sheet says "Finding your location", not
+"Waiting for others to join" (`rosterKnown`).
+
+The rules hold `meet` and `trips` to the same: readable by a slot holder whose
+own `participants/{slot}` exists. RTDB holds an attached listener to such a
+rule — measured against the emulator, it cancels the listener of a reader
+whose position is deleted — so a device cannot publish a position, start
+listening, take the position down and go on watching. It cancels a reader that
+is still sharing too, after a reconnect: the server deleted its position when
+the connection dropped, and the SDK restores its listens before its writes.
+So a cancelled listener is attached again, after 1, 2, 4, 8 and then every
+15 s, until it answers (`useGatedListener`); the presence heartbeat puts the
+position back within ten seconds. The participants listener ends the session
+as `lost` only once refusals have persisted 30 s.
+
+`participants` itself is still readable by any slot holder: a client from
+before this release attaches that listener as soon as it holds a slot, before
+its first fix, and a rule requiring its own position would refuse it for good.
+Requiring it is the next release's contract step (CLAUDE.md, "In flight").
+
 ---
 
 ## What the page shows
@@ -319,9 +365,10 @@ Every effectful node is one `createResource` instance. The policy record
 | | debounce | maxWait | admit | timeout | retry | breaker | TTL | degrade |
 |---|---|---|---|---|---|---|---|---|
 | `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | last-good, else `failed` |
-| `routes` | 3 s | 9 s | 200 m, per route | 10 s | 2 | 5 fails / 60 s | 5 min (60 s after a failed route) | last-good |
+| `routes` | 3 s | 9 s | 200 m, own position or destination | 10 s | 2 | 5 fails / 60 s | 5 min | last-good |
 | `presence` | 3 s | 3 s | 10 m | 10 s | 3 | 5 fails / 60 s | — | report failed |
 | `meet` | 0 | 0 | a new pin | 10 s | 3 | 5 fails / 60 s | 30 s rewrite | report failed |
+| `trip` | 0 | 0 | a new route | 10 s | 3 | 5 fails / 60 s | 30 s rewrite | report failed |
 
 `presence` is a **write**, and still one `createResource`: everything the
 combinator provides is what the hand-rolled throttle in `useLiveSession` was
@@ -489,7 +536,7 @@ tests.
 | `midpoint` | O(N) | O(1) |
 | `venues` rank | O(V log V) | O(V) |
 | `destination` | O(V) | O(1) |
-| `routes` | O(N) requests | **O(N·C)** |
+| `routes` | O(1) requests per device (own trip) | **O(C)** + O(N) published trips |
 | `frame` | O(N + V) | O(N + V) |
 
 **The binding constraint is route geometry, not compute.** The entire
@@ -515,33 +562,38 @@ write-once keys under `sessions/{code}/slots`, and nothing else may be created
 there. The semaphore caps simultaneity at 4, which is the browser's per-host
 budget rather than the API's.
 
-Mapbox Directions is the binding cost, and it is paid per **device**, not per
-session: every device routes every participant. This paragraph used to count
-one device ("5 participants × 1 request / 3 s is ~100 req/min against a
-300/min free tier"); the limit is per access token, shared by every device of
-every session. Measured with Playwright against the e2e build (requests
-counted at the browser, one participant driving 50 km/h for two minutes):
+Mapbox Directions is the binding cost, and its limit is per access token,
+shared by every device of every session. Each device now asks for **its own
+route only** and publishes it (`trips/{slot}`, written by the `trip` node);
+every device used to route every participant, sending Mapbox every position
+from every device. Measured with Playwright against the e2e build (requests
+counted at the browser across all devices, one participant driving 50 km/h
+for two minutes):
 
-| | before | after |
-|---|---|---|
-| two devices standing still, 135 s | 12 requests | 4 (the first routes only) |
-| two devices, one driving | 14.9 / min | 11.5 / min |
-| three devices, one driving | 31.3 / min | 16.4 / min |
-| three devices, one driving, meeting point set | — | 10.5 / min |
+| | every route on every device | kept per route | own trip only |
+|---|---|---|---|
+| two devices standing still, 135 s | 12 requests | 4 (the first routes only) | — |
+| two devices, one driving | 14.9 / min | 11.5 / min | — |
+| three devices, one driving | 31.3 / min | 16.4 / min | 5.0 / min |
+| three devices, one driving, meeting point set | — | 10.5 / min | 3.5 / min |
 
-Two changes made the difference. A route is kept per participant and asked for
-again only when that participant or the destination has moved 200 m
-(`createRoutePolicy`); any dispatch used to refetch everyone. And the refresh
-went from 60 s to 5 min: `driving` and `walking` are not traffic-aware, so
-the minute's refresh asked the same question for the same answer. What remains
-before a meeting point is set is the live midpoint moving under everyone, which
-refetches every route; once one is set, only a mover's route is asked for.
+A route is asked for again only when its device or its destination has moved
+200 m, or after 5 min: `driving` and `walking` are not traffic-aware, so a
+shorter refresh asks the same question for the same answer. Before a meeting
+point is set, the live midpoint moving under everyone makes the still devices
+ask again now and then; once one is set, only a mover asks — 3.5 a minute is
+the driver's own route, every 200 m. Five people all driving at 50 km/h come to
+about four requests a minute each, some twenty for the session, where routing
+everyone cost about a hundred (an estimate from the same arithmetic, not a
+measurement).
 
-The worst case left is five devices with everyone driving: each device asks
-for each mover's route every 200 m, about 100 requests a minute for one
-session. Routing only one's own trip and publishing its time would make the
-cost linear in participants; it needs a schema change, and the others' route
-lines would go.
+The others' lines are not lost with their requests: each trip carries its
+line, a precision-5 encoded polyline of the simplified route Mapbox returned
+(`lib/polyline.ts`), simplified further only if it would pass the rules'
+20,000 characters. A peer's trip is shown while it goes within 400 m of where
+this device is going (`tripAnswers`): each device asks again once its own
+destination moves 200 m, and the live midpoint each computes is the same one a
+moment apart.
 
 **Heartbeat.** `presence` is offered on every tick, but a tick needs an event,
 and a participant standing still produces none: with GPS quiet and nobody
@@ -569,7 +621,7 @@ in module state on first import.
 
 ```bash
 cd apps/web
-npm test                              # 830+ tests
+npm test                              # 870+ tests
 npx eslint src/ --max-warnings=0      # exhaustive-deps and the custom syntax rules are CI-fatal
 npm run tsc
 ```

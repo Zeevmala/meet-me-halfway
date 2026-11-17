@@ -65,10 +65,10 @@
           }
         },
         "meet": {
-          ".read": "auth != null && data.parent().child('created').val() > now - 86400000 && (data.parent().child('slots/0').val() === auth.uid || data.parent().child('slots/1').val() === auth.uid || data.parent().child('slots/2').val() === auth.uid || data.parent().child('slots/3').val() === auth.uid || data.parent().child('slots/4').val() === auth.uid)",
+          ".read": "auth != null && data.parent().child('created').val() > now - 86400000 && ((data.parent().child('slots/0').val() === auth.uid && data.parent().child('participants/0').exists()) || (data.parent().child('slots/1').val() === auth.uid && data.parent().child('participants/1').exists()) || (data.parent().child('slots/2').val() === auth.uid && data.parent().child('participants/2').exists()) || (data.parent().child('slots/3').val() === auth.uid && data.parent().child('participants/3').exists()) || (data.parent().child('slots/4').val() === auth.uid && data.parent().child('participants/4').exists()))",
           "$slot": {
             ".write": "auth != null && root.child('sessions').child($code).child('slots').child($slot).val() === auth.uid && (!newData.exists() || root.child('sessions').child($code).child('created').val() > now - 86400000)",
-            ".validate": "newData.hasChildren(['at', 'by', 'lat', 'lng'])",
+            ".validate": "newData.hasChildren(['at', 'by', 'lat', 'lng']) && (!newData.parent().child('0').exists() || (newData.parent().child('0').child('at').val() === newData.child('at').val() && newData.parent().child('0').child('by').val() === newData.child('by').val() && newData.parent().child('0').child('lat').val() === newData.child('lat').val() && newData.parent().child('0').child('lng').val() === newData.child('lng').val() && newData.parent().child('0').child('byName').val() === newData.child('byName').val() && newData.parent().child('0').child('name').val() === newData.child('name').val())) && (!newData.parent().child('1').exists() || (newData.parent().child('1').child('at').val() === newData.child('at').val() && newData.parent().child('1').child('by').val() === newData.child('by').val() && newData.parent().child('1').child('lat').val() === newData.child('lat').val() && newData.parent().child('1').child('lng').val() === newData.child('lng').val() && newData.parent().child('1').child('byName').val() === newData.child('byName').val() && newData.parent().child('1').child('name').val() === newData.child('name').val())) && (!newData.parent().child('2').exists() || (newData.parent().child('2').child('at').val() === newData.child('at').val() && newData.parent().child('2').child('by').val() === newData.child('by').val() && newData.parent().child('2').child('lat').val() === newData.child('lat').val() && newData.parent().child('2').child('lng').val() === newData.child('lng').val() && newData.parent().child('2').child('byName').val() === newData.child('byName').val() && newData.parent().child('2').child('name').val() === newData.child('name').val())) && (!newData.parent().child('3').exists() || (newData.parent().child('3').child('at').val() === newData.child('at').val() && newData.parent().child('3').child('by').val() === newData.child('by').val() && newData.parent().child('3').child('lat').val() === newData.child('lat').val() && newData.parent().child('3').child('lng').val() === newData.child('lng').val() && newData.parent().child('3').child('byName').val() === newData.child('byName').val() && newData.parent().child('3').child('name').val() === newData.child('name').val())) && (!newData.parent().child('4').exists() || (newData.parent().child('4').child('at').val() === newData.child('at').val() && newData.parent().child('4').child('by').val() === newData.child('by').val() && newData.parent().child('4').child('lat').val() === newData.child('lat').val() && newData.parent().child('4').child('lng').val() === newData.child('lng').val() && newData.parent().child('4').child('byName').val() === newData.child('byName').val() && newData.parent().child('4').child('name').val() === newData.child('name').val()))",
             "at": {
               ".validate": "newData.isNumber() && newData.val() >= root.child('sessions').child($code).child('created').val() && newData.val() <= now + 60000"
             },
@@ -86,6 +86,32 @@
             },
             "name": {
               ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "$other": { ".validate": false }
+          }
+        },
+        "trips": {
+          ".read": "auth != null && data.parent().child('created').val() > now - 86400000 && ((data.parent().child('slots/0').val() === auth.uid && data.parent().child('participants/0').exists()) || (data.parent().child('slots/1').val() === auth.uid && data.parent().child('participants/1').exists()) || (data.parent().child('slots/2').val() === auth.uid && data.parent().child('participants/2').exists()) || (data.parent().child('slots/3').val() === auth.uid && data.parent().child('participants/3').exists()) || (data.parent().child('slots/4').val() === auth.uid && data.parent().child('participants/4').exists()))",
+          "$slot": {
+            ".write": "auth != null && root.child('sessions').child($code).child('slots').child($slot).val() === auth.uid && (!newData.exists() || root.child('sessions').child($code).child('created').val() > now - 86400000)",
+            ".validate": "newData.hasChildren(['lat', 'lng', 'profile', 'duration', 'distance', 'line'])",
+            "lat": {
+              ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+            },
+            "lng": {
+              ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+            },
+            "profile": {
+              ".validate": "newData.val() === 'driving' || newData.val() === 'walking'"
+            },
+            "duration": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < 10000000"
+            },
+            "distance": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < 100000000"
+            },
+            "line": {
+              ".validate": "newData.isString() && newData.val().length >= 2 && newData.val().length <= 20000 && newData.val().matches(/^[?-~]+$/)"
             },
             "$other": { ".validate": false }
           }

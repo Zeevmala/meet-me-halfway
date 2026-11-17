@@ -6,8 +6,8 @@ import {
   deriveMidpoint,
   deriveDestination,
   derivePhase,
-  latestPin,
   samePin,
+  settlePin,
   sessionCode,
   sessionSlot,
   DEPARTED_THRESHOLD_MS,
@@ -69,8 +69,8 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownAccuracy: 5,
     participants: [],
     selectedPlace: null,
-    ownPin: null,
     peerPins: [],
+    peerTrips: [null, null, null, null, null],
     travelProfile: "driving",
     ownUid: "own-uid",
     ownName: "Me",
@@ -361,7 +361,7 @@ describe("deriveDestination — a pin", () => {
   });
 });
 
-describe("latestPin", () => {
+describe("settlePin", () => {
   const first: PinEvent = {
     at: 1_000,
     by: 0,
@@ -372,62 +372,55 @@ describe("latestPin", () => {
   const second: PinEvent = {
     at: 2_000,
     by: 2,
-    byName: null,
+    byName: "Dana",
     position: HAIFA,
     name: null,
   };
 
   it("is nothing until somebody sets one", () => {
-    expect(latestPin(null, [null])).toBeNull();
-    expect(latestPin(null, [])).toBeNull();
+    expect(settlePin(null, null, [])).toBeNull();
   });
 
-  it("takes the pin with the latest time, in whatever order they arrive", () => {
-    expect(latestPin(null, [first, second])).toBe(second);
-    expect(latestPin(null, [second, first])).toBe(second);
+  it("takes this device's proposal while the database holds none", () => {
+    expect(settlePin(null, first, [])).toBe(first);
+  });
+
+  // The race the rules referee: two people tap Navigate in the same second,
+  // and the later tap reaches the server first. Preferring the earlier `at`,
+  // or one's own tap, left two devices with two meeting points.
+  it("takes the copy the database holds over this device's own proposal", () => {
+    expect(settlePin(null, first, [second])).toBe(second);
+    expect(settlePin(first, first, [second])).toBe(second);
+  });
+
+  it("never moves once settled, whatever is proposed after", () => {
+    expect(settlePin(second, first, [])).toBe(second);
   });
 
   // The device that set it is usually the first to go: it went to navigate,
-  // and its entry went with it. What was seen is kept.
-  it("keeps the pin it has once its candidates are gone", () => {
-    const held = latestPin(null, [second]);
-
-    expect(latestPin(held, [])).toBe(second);
-    expect(latestPin(held, [null])).toBe(second);
-  });
-
-  it("ignores an older pin arriving late", () => {
-    expect(latestPin(second, [first])).toBe(second);
+  // and its copy went with it. What was settled on is kept.
+  it("keeps the pin it has once every copy is gone", () => {
+    expect(settlePin(second, null, [])).toBe(second);
   });
 
   // Copies of the same pin arrive from every device that holds one. A fresh
   // object each time; it must not count as news.
-  it("keeps its reference when a copy of the same pin arrives", () => {
+  it("keeps its reference when copies of the same pin arrive", () => {
     const copy: PinEvent = { ...second, position: { ...second.position } };
 
-    expect(latestPin(second, [copy])).toBe(second);
+    expect(settlePin(second, null, [copy, { ...copy }])).toBe(second);
   });
 
-  // Two pins in the same millisecond: every device must settle on the same
-  // one, whichever it heard first.
-  it("breaks an exact tie the same way on every device", () => {
-    const a: PinEvent = {
-      at: 3_000,
-      by: 1,
-      byName: null,
-      position: TEL_AVIV,
-      name: null,
-    };
-    const b: PinEvent = {
-      at: 3_000,
-      by: 3,
-      byName: null,
-      position: HAIFA,
-      name: null,
-    };
+  // Copies that disagree are seen together only between two writes, or from
+  // a client the rules refused nothing to. Every device must settle on the
+  // same one, whichever order it read them in.
+  it("chooses between disagreeing copies the same way on every device", () => {
+    const a: PinEvent = { ...first, at: 3_000, by: 1 };
+    const b: PinEvent = { ...second, at: 3_000, by: 3 };
 
-    expect(latestPin(a, [b])).toBe(a);
-    expect(latestPin(b, [a])).toBe(a);
+    expect(settlePin(null, null, [a, b])).toBe(a);
+    expect(settlePin(null, null, [b, a])).toBe(a);
+    expect(settlePin(null, null, [second, first])).toBe(first);
   });
 });
 

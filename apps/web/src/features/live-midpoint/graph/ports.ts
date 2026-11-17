@@ -15,7 +15,7 @@ import type { Result } from "../../../core/dag/result";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { MeetValue, PresenceValue } from "../lib/presence-rtdb";
+import type { MeetValue, PresenceValue, TripValue } from "../lib/presence-rtdb";
 import type { RouteInfo, TravelProfile } from "./types";
 
 export interface GraphPorts {
@@ -70,5 +70,12 @@ export interface GraphPorts {
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
   readonly removeMeet: (code: string, slot: ParticipantIndex) => void;
+  readonly writeTrip: (
+    code: string,
+    slot: ParticipantIndex,
+    value: TripValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
+  readonly removeTrip: (code: string, slot: ParticipantIndex) => void;
   readonly placesEnabled: boolean;
 }

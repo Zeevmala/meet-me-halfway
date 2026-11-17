@@ -7,7 +7,13 @@ import {
 } from "./nodes";
 import { PRESENCE_HEARTBEAT_MS } from "./policies";
 import type { GraphPorts } from "./ports";
-import type { ParticipantSource, RouteInfo, SessionLifecycle } from "./types";
+import type {
+  ParticipantSource,
+  PeerTrip,
+  RouteInfo,
+  SessionLifecycle,
+} from "./types";
+import { encodePolyline } from "../lib/polyline";
 import { geographicCentroid } from "../lib/geo-math";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
@@ -36,6 +42,29 @@ function route(distance: number): RouteInfo {
     duration: distance / 10,
     distance,
   };
+}
+
+/**
+ * By slot: `slot`'s trip, as its device would publish it, to `dest`. The
+ * line is a real encoded one: the runtime decodes it to draw it.
+ */
+function tripsFor(
+  slot: ParticipantIndex,
+  dest: LatLng,
+  profile: "driving" | "walking" = "walking",
+): (PeerTrip | null)[] {
+  const trips: (PeerTrip | null)[] = [null, null, null, null, null];
+  trips[slot] = {
+    dest,
+    profile,
+    duration: 900,
+    distance: 9_000,
+    line: encodePolyline([
+      [JERUSALEM.lng, JERUSALEM.lat],
+      [dest.lng, dest.lat],
+    ]),
+  };
+  return trips;
 }
 
 /**
@@ -103,6 +132,8 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     removePresence: vi.fn(),
     writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
     removeMeet: vi.fn(),
+    writeTrip: vi.fn().mockResolvedValue(ok(undefined)),
+    removeTrip: vi.fn(),
     placesEnabled: true,
     ...overrides,
   };
@@ -245,7 +276,10 @@ describe("createRuntime", () => {
     expect(r.getSnapshot().venues).toEqual([]);
   });
 
-  it("routes every occupied slot to the midpoint by default", async () => {
+  // Each device routes its own trip and publishes it; everyone else's comes
+  // from what their devices published. Every device used to route everyone:
+  // five people, twenty-five requests to Mapbox for one person's move.
+  it("routes this device alone, and shows the trips the others publish", async () => {
     const h = createHarness();
     const r = createRuntime(h.ports, {
       session: { ...LIVE, slot: 2 },
@@ -255,12 +289,96 @@ describe("createRuntime", () => {
 
     await h.advance(10_000);
 
-    expect(h.ports.fetchRoute).toHaveBeenCalledTimes(2);
+    expect(h.ports.fetchRoute).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.ports.fetchRoute).mock.calls[0]?.[0]).toEqual(TEL_AVIV);
+    expect(r.getSnapshot().routes[2]).not.toBeNull();
+    expect(r.getSnapshot().routes[4]).toBeNull();
+
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    r.setSources({ peerTrips: tripsFor(4, midpoint) });
+
     const snapshot = r.getSnapshot();
-    expect(snapshot.routes[2]).not.toBeNull();
-    expect(snapshot.routes[4]).not.toBeNull();
+    expect(snapshot.routes[4]).toMatchObject({
+      duration: 900,
+      distance: 9_000,
+      geometry: { type: "LineString" },
+    });
+    // Decoded from the published line, to its metre precision.
+    const [start, end] = snapshot.routes[4]?.geometry.coordinates ?? [];
+    expect(start).toEqual([JERUSALEM.lng, JERUSALEM.lat]);
+    expect(end?.[0]).toBeCloseTo(midpoint.lng, 5);
+    expect(end?.[1]).toBeCloseTo(midpoint.lat, 5);
+    expect(snapshot.routeProfiles[4]).toBe("walking");
+    expect(snapshot.routeProfiles[2]).toBe("driving");
     expect(snapshot.routes[0]).toBeNull();
     expect(snapshot.routes[1]).toBeNull();
+    expect(h.ports.fetchRoute).toHaveBeenCalledTimes(1);
+  });
+
+  // The midpoint each device computes is the same one a moment apart, and
+  // each asks for its route again once its destination moves 200 m.
+  it("shows a trip only while it goes where this device is going", async () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownPosition: TEL_AVIV,
+      participants: [peer(1, JERUSALEM)],
+    });
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+
+    r.setSources({
+      peerTrips: tripsFor(1, { lat: midpoint.lat + 0.002, lng: midpoint.lng }),
+    });
+    expect(r.getSnapshot().routes[1]).not.toBeNull();
+
+    r.setSources({
+      peerTrips: tripsFor(1, { lat: midpoint.lat + 0.02, lng: midpoint.lng }),
+    });
+    expect(r.getSnapshot().routes[1]).toBeNull();
+    r.dispose();
+  });
+
+  it("keeps a peer's route, and the snapshot, while the same trip arrives again", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownPosition: TEL_AVIV,
+      participants: [peer(1, JERUSALEM)],
+    });
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    r.setSources({ peerTrips: tripsFor(1, midpoint) });
+    const before = r.getSnapshot();
+
+    r.setSources({ peerTrips: tripsFor(1, midpoint) });
+
+    expect(r.getSnapshot()).toBe(before);
+    r.dispose();
+  });
+
+  // The line is another device's: the rules check its alphabet, not that it
+  // decodes. A trip whose line does not decode is no route.
+  it("draws no route from a trip whose line does not decode", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownPosition: TEL_AVIV,
+      participants: [peer(1, JERUSALEM)],
+    });
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    const trips = tripsFor(1, midpoint);
+    const broken = trips[1];
+    if (!broken) throw new Error("no trip");
+    trips[1] = { ...broken, line: "~~~~" };
+
+    r.setSources({ peerTrips: trips });
+
+    expect(r.getSnapshot().routes[1]).toBeNull();
+    expect(r.getSnapshot().routeProfiles[1]).toBeNull();
+    r.dispose();
   });
 
   // Regression: every tick re-offers every node its input, and each offer
@@ -1052,6 +1170,9 @@ describe("createRuntime — departed peers and stale routes", () => {
     const r = createRuntime(h.ports);
     r.setSources(session([peer(1, JERUSALEM, h.now())]));
     await h.advance(10_000);
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    r.setSources({ peerTrips: tripsFor(1, midpoint) });
     expect(r.getSnapshot().routes.filter(Boolean)).toHaveLength(2);
 
     r.setSources({ participants: [] });
@@ -1202,54 +1323,77 @@ describe("createRuntime — the meeting point", () => {
     r.dispose();
   });
 
-  it("takes the newest pin, and ignores an older one arriving late", () => {
+  // Two people tap Navigate in the same second, and the other's pin reaches
+  // the server first: the rules refuse this device's copy, and it takes
+  // theirs rather than keeping its own.
+  it("takes the copy the database holds over its own proposal", () => {
     const h = createHarness();
     const r = meeting(h);
-    r.setSources({
-      peerPins: [
-        { at: 2_000, by: 1, byName: null, position: HAIFA, name: null },
-      ],
-    });
+    r.setMeetingPoint(JERUSALEM, null);
+    expect(r.getSnapshot().destination).toEqual(JERUSALEM);
 
     r.setSources({
       peerPins: [
-        { at: 1_000, by: 1, byName: null, position: JERUSALEM, name: null },
+        { at: 9_000, by: 1, byName: "Dana", position: HAIFA, name: null },
       ],
     });
 
+    expect(r.getSnapshot().pin).toMatchObject({ by: 1, position: HAIFA });
     expect(r.getSnapshot().destination).toEqual(HAIFA);
     r.dispose();
   });
 
-  // Clocks disagree. A tap on a device whose clock runs behind the one that
-  // set the current pin must still move it.
-  it("sets a pin later than the one it replaces, whatever this clock says", () => {
+  // Nobody moves it: not a second Navigate, not a later pin from anyone.
+  it("never moves the meeting point once there is one", () => {
     const h = createHarness();
     const r = meeting(h);
     r.setSources({
       peerPins: [
-        { at: 50_000, by: 1, byName: null, position: HAIFA, name: null },
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
       ],
     });
+    const before = r.getSnapshot().pin;
 
-    r.setMeetingPoint(JERUSALEM, null);
+    r.setMeetingPoint(JERUSALEM, "Elsewhere");
+    r.setSources({ peerPins: [] });
 
-    expect(r.getSnapshot().pin?.at).toBe(50_001);
-    expect(r.getSnapshot().destination).toEqual(JERUSALEM);
+    expect(r.getSnapshot().pin).toBe(before);
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
     r.dispose();
   });
 
-  it("signs a pin with this device's name, and with none when it has none", () => {
+  // Written as the others will read it back: their copies must be this one
+  // exactly, or the rules refuse them.
+  it("signs a pin with this device's name as the others will read it", () => {
+    const named = meeting(createHarness());
+    named.setSources({ ownName: "  Dana  " });
+    named.setMeetingPoint(HAIFA, `  ${"x".repeat(100)} `);
+    expect(named.getSnapshot().pin).toMatchObject({
+      byName: "Dana",
+      name: "x".repeat(80),
+    });
+    named.dispose();
+
+    const unnamed = meeting(createHarness());
+    unnamed.setSources({ ownName: "  " });
+    unnamed.setMeetingPoint(HAIFA, "   ");
+    expect(unnamed.getSnapshot().pin).toMatchObject({
+      byName: null,
+      name: null,
+    });
+    unnamed.dispose();
+  });
+
+  // A proposal is for the session it was made in.
+  it("does not carry a proposal into another session", () => {
     const h = createHarness();
     const r = meeting(h);
-    r.setSources({ ownName: "Dana" });
-
     r.setMeetingPoint(HAIFA, null);
-    expect(r.getSnapshot().pin?.byName).toBe("Dana");
+    expect(r.getSnapshot().pin).not.toBeNull();
 
-    r.setSources({ ownName: "  " });
-    r.setMeetingPoint(JERUSALEM, null);
-    expect(r.getSnapshot().pin?.byName).toBeNull();
+    r.setSources({ session: { ...LIVE, code: "XYZ789" } });
+
+    expect(r.getSnapshot().pin).toBeNull();
     r.dispose();
   });
 
@@ -1438,6 +1582,169 @@ describe("createRuntime — who has been seen sharing", () => {
     r.setSources({ participants: [peer(2, { lat: 31.78, lng: 35.22 })] });
 
     expect(r.getSnapshot().seenSharing).toBe(before);
+    r.dispose();
+  });
+});
+
+describe("createRuntime — own trip", () => {
+  function trip(h: ReturnType<typeof createHarness>) {
+    return createRuntime(h.ports, {
+      session: LIVE,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 10,
+      participants: [peer(1, JERUSALEM)],
+    });
+  }
+
+  // The others draw this device's way from what it publishes: nobody routes
+  // anybody else any more.
+  it("publishes its own route for the others, under its own slot", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = trip(h);
+    expect(h.ports.writeTrip).not.toHaveBeenCalled();
+
+    await h.advance(10_000);
+
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    expect(h.ports.writeTrip).toHaveBeenCalledWith(
+      "ABC234",
+      0,
+      expect.objectContaining({
+        lat: midpoint.lat,
+        lng: midpoint.lng,
+        profile: "driving",
+        duration: 100,
+        distance: 1000,
+      }),
+      expect.anything(),
+    );
+    r.dispose();
+  });
+
+  it("publishes nothing while it has no route", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports, {
+      session: LIVE,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 10,
+    });
+
+    await h.advance(60_000);
+
+    expect(h.ports.writeTrip).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Whoever stops sharing stops sharing all of it.
+  it("removes its trip with its position", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = trip(h);
+    await h.advance(10_000);
+
+    r.setSources({ ownPosition: null });
+
+    expect(h.ports.removeTrip).toHaveBeenCalledWith("ABC234", 0);
+    r.dispose();
+  });
+
+  it("removes its trip when the runtime is disposed", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = trip(h);
+    await h.advance(10_000);
+
+    r.dispose();
+
+    expect(h.ports.removeTrip).toHaveBeenCalledWith("ABC234", 0);
+  });
+});
+
+describe("createRuntime — sharing", () => {
+  const SHARING = {
+    session: LIVE,
+    ownUid: "own-uid",
+    ownPosition: TEL_AVIV,
+    ownAccuracy: 10,
+  };
+
+  /** Presence writes that land only when the test says so. */
+  function heldWrites(h: ReturnType<typeof createHarness>) {
+    const held: { land?: () => void } = {};
+    vi.mocked(h.ports.writePresence).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          held.land = () => resolve(ok(undefined));
+        }),
+    );
+    return held;
+  }
+
+  // The others are read only while this is true, and a read the rules may
+  // one day gate on own position must not beat the write that publishes it.
+  it("is not sharing until the server has taken own position", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const held = heldWrites(h);
+    const r = createRuntime(h.ports, SHARING);
+    expect(r.getSnapshot().sharing).toBe(false);
+
+    await h.advance(5_000);
+    expect(h.ports.writePresence).toHaveBeenCalled();
+    expect(r.getSnapshot().sharing).toBe(false);
+
+    held.land?.();
+    await h.flush();
+    expect(r.getSnapshot().sharing).toBe(true);
+    r.dispose();
+  });
+
+  it("is not sharing while the server refuses own position", async () => {
+    const h = createHarness({
+      placesEnabled: false,
+      writePresence: vi
+        .fn()
+        .mockResolvedValue(err({ kind: "DENIED", detail: "denied" })),
+    });
+    const r = createRuntime(h.ports, SHARING);
+
+    await h.advance(30_000);
+
+    expect(r.getSnapshot().sharing).toBe(false);
+    r.dispose();
+  });
+
+  // Turning location off is turning sharing off, and with it the others.
+  // Turned on again, the answer to the earlier write does not count.
+  it("stops when location is turned off, and waits for the next write to start again", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports, SHARING);
+    await h.advance(5_000);
+    expect(r.getSnapshot().sharing).toBe(true);
+
+    r.setSources({ ownPosition: null });
+    expect(r.getSnapshot().sharing).toBe(false);
+
+    const held = heldWrites(h);
+    r.setSources({ ownPosition: TEL_AVIV });
+    expect(r.getSnapshot().sharing).toBe(false);
+    await h.advance(12_000);
+    expect(r.getSnapshot().sharing).toBe(false);
+
+    held.land?.();
+    await h.flush();
+    expect(r.getSnapshot().sharing).toBe(true);
+    r.dispose();
+  });
+
+  it("stops when the session closes", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports, SHARING);
+    await h.advance(5_000);
+
+    r.setSources({ session: { kind: "closed" } });
+
+    expect(r.getSnapshot().sharing).toBe(false);
     r.dispose();
   });
 });

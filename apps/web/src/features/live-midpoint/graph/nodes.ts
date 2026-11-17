@@ -20,14 +20,6 @@ import type {
   SlotVector,
 } from "./types";
 
-/**
- * How far the live midpoint has to drift from the meeting point before the
- * map shows it again and the card offers to move the meeting point there.
- * Nearer than this the two are the same place to anyone driving to it — the
- * same radius within which routes are not fetched again.
- */
-export const PIN_DRIFT_M = 200;
-
 /** A participant whose last write is older than this is shown as stale. */
 export const STALE_THRESHOLD_MS = 30_000;
 
@@ -317,13 +309,16 @@ export function samePin(a: PinEvent | null, b: PinEvent | null): boolean {
 }
 
 /**
- * Whether `a` was set after `b`. Later `at` wins; an exact tie, which
- * needs two devices to pin in the same millisecond, goes to the lower slot,
- * then the lower coordinates — any rule will do, so long as every device
- * applies the same one and so settles on the same pin.
+ * Which of two copies of the meeting point to take when they disagree: the
+ * earlier `at`, then the lower slot, then the lower coordinates.
+ *
+ * The rules let only agreeing copies stand side by side, so two different
+ * ones are seen together only in a snapshot caught between writes, or from a
+ * modified client. Any order will do, so long as every device applies the
+ * same one and so settles on the same pin.
  */
-function setAfter(a: PinEvent, b: PinEvent): boolean {
-  if (a.at !== b.at) return a.at > b.at;
+function heldBefore(a: PinEvent, b: PinEvent): boolean {
+  if (a.at !== b.at) return a.at < b.at;
   if (a.by !== b.by) return a.by < b.by;
   if (a.position.lat !== b.position.lat) {
     return a.position.lat < b.position.lat;
@@ -332,26 +327,35 @@ function setAfter(a: PinEvent, b: PinEvent): boolean {
 }
 
 /**
- * The meeting point: the latest pin among the one already known and every
- * candidate.
+ * The meeting point: the one the database holds, else the one this device
+ * already settled on, else the one it has just proposed.
  *
- * A fold rather than a function of the current sources alone, because the
- * pins seen are not all still there to see. The device that set one is
- * usually the first to leave — it went to navigate — and its entry goes with
- * it; the others go on publishing their copies, but a device that is left on
- * its own has nobody else's to read. What it has seen, it keeps.
+ * Set once and never moved. The database referees: a copy that disagrees
+ * with a copy already there is refused (`infra/database.rules.json`), so the
+ * first pin to land is the one every device ends up with. A device whose own
+ * proposal lost that race — two people tapping Navigate in the same second —
+ * takes the one that won rather than keeping its own; preferring the earlier
+ * `at`, or its own tap, would leave two devices showing two meeting points
+ * whenever the later tap reached the server first.
  *
- * Returns `current` itself when nothing newer arrived, so an unchanged
- * meeting point keeps its reference.
+ * A fold, because the copies are not all still there to read. The device
+ * that set the pin is usually the first to leave — it went to navigate — and
+ * its copy goes with it; the others go on publishing theirs, but a device
+ * left on its own has nobody else's to read. What it has settled on, it
+ * keeps, and publishes again.
+ *
+ * Returns `kept` itself when nothing changed, so an unchanged meeting point
+ * keeps its reference.
  */
-export function latestPin(
-  current: PinEvent | null,
-  candidates: readonly (PinEvent | null)[],
+export function settlePin(
+  kept: PinEvent | null,
+  proposed: PinEvent | null,
+  held: readonly PinEvent[],
 ): PinEvent | null {
-  let latest = current;
-  for (const candidate of candidates) {
-    if (candidate === null || samePin(candidate, latest)) continue;
-    if (latest === null || setAfter(candidate, latest)) latest = candidate;
+  let first: PinEvent | null = null;
+  for (const copy of held) {
+    if (first === null || heldBefore(copy, first)) first = copy;
   }
-  return latest;
+  if (first !== null) return samePin(first, kept) ? kept : first;
+  return kept ?? proposed;
 }

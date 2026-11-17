@@ -46,6 +46,7 @@ const otherRoute: RouteInfo = {
 interface OtherParticipant {
   index: ParticipantIndex;
   route: RouteInfo | null;
+  profile: "driving" | "walking" | null;
   position: LatLng;
   stale: boolean;
   name: string | null;
@@ -62,6 +63,7 @@ function renderCard(
       {
         index: 1 as ParticipantIndex,
         route: null,
+        profile: null,
         position: otherPosition,
         stale: false,
         name: null,
@@ -108,6 +110,7 @@ describe("MidpointCard", () => {
         {
           index: 1 as ParticipantIndex,
           route: null,
+          profile: null,
           position: otherPosition,
           stale: false,
           name: "Alexandra",
@@ -126,6 +129,7 @@ describe("MidpointCard", () => {
         {
           index: 1 as ParticipantIndex,
           route: null,
+          profile: null,
           position: otherPosition,
           stale: true,
           name: null,
@@ -199,6 +203,7 @@ describe("MidpointCard", () => {
         {
           index: 1 as ParticipantIndex,
           route: otherRoute,
+          profile: "driving",
           position: otherPosition,
           stale: false,
           name: null,
@@ -254,6 +259,7 @@ describe("MidpointCard", () => {
         {
           index: 1 as ParticipantIndex,
           route: otherRoute,
+          profile: "driving",
           position: otherPosition,
           stale: false,
           name: null,
@@ -269,6 +275,7 @@ describe("MidpointCard", () => {
         {
           index: 1 as ParticipantIndex,
           route: { ...otherRoute, duration: ownRoute.duration - 30 },
+          profile: "driving",
           position: otherPosition,
           stale: false,
           name: null,
@@ -321,10 +328,10 @@ describe("MidpointCard", () => {
 });
 
 describe("MidpointCard — the meeting point", () => {
-  it("says, before anyone goes, that navigating sets the meeting point", () => {
+  it("says, before anyone goes, that navigating fixes the meeting point", () => {
     renderCard();
 
-    expect(screen.getByText("live.navigateSetsPoint")).toBeTruthy();
+    expect(screen.getByText("live.navigateFixesPoint")).toBeTruthy();
   });
 
   // Going is the decision: the page fixes the destination for everyone as a
@@ -342,19 +349,19 @@ describe("MidpointCard — the meeting point", () => {
     expect(onNavigate).toHaveBeenCalledTimes(2);
   });
 
-  it("titles the card as the meeting point, and says who set it", () => {
+  it("titles the card as the meeting point, and says whose Navigate fixed it", () => {
     renderCard({ pin: { setBy: "Dana", name: null } });
 
     expect(screen.getByText("live.meetingPoint")).toBeTruthy();
-    expect(screen.getByText('live.pinSetBy:{"name":"Dana"}')).toBeTruthy();
+    expect(screen.getByText('live.pinFixedBy:{"name":"Dana"}')).toBeTruthy();
     expect(screen.queryByText("live.midpoint")).toBeNull();
-    expect(screen.queryByText("live.navigateSetsPoint")).toBeNull();
+    expect(screen.queryByText("live.navigateFixesPoint")).toBeNull();
   });
 
-  it("says when it was this device that set it", () => {
+  it("says when it was this device that fixed it", () => {
     renderCard({ pin: { setBy: null, name: null } });
 
-    expect(screen.getByText("live.pinSetByYou")).toBeTruthy();
+    expect(screen.getByText("live.pinFixedByYou")).toBeTruthy();
   });
 
   // Set on a venue, it is the venue everyone sees, whatever this device has
@@ -369,29 +376,12 @@ describe("MidpointCard — the meeting point", () => {
     expect(screen.queryByText('live.meetAt:{"name":"Bar Two"}')).toBeNull();
   });
 
-  it("offers to move it to the current midpoint only when told it can", () => {
-    const onMovePin = vi.fn();
-    const { rerender } = renderCard({ pin: { setBy: "Dana", name: null } });
-    expect(screen.queryByRole("button", { name: "live.movePin" })).toBeNull();
+  // Nobody moves it: there is nothing on the card to move it with.
+  it("offers no way to move it", () => {
+    renderCard({ pin: { setBy: "Dana", name: null } });
 
-    rerender(
-      <MidpointCard
-        ownIndex={0}
-        ownPosition={ownPosition}
-        ownRoute={null}
-        otherParticipants={[]}
-        destination={destination}
-        travelProfile="driving"
-        onProfileChange={vi.fn()}
-        selectedVenueName={null}
-        routesStale={false}
-        pin={{ setBy: "Dana", name: null }}
-        onMovePin={onMovePin}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "live.movePin" }));
-
-    expect(onMovePin).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /move/i })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(2); // the mode toggle
   });
 
   // The others went to navigate; the meeting point did not go with them.
@@ -400,5 +390,62 @@ describe("MidpointCard — the meeting point", () => {
 
     expect(screen.getByText("live.nobodyElse")).toBeTruthy();
     expect(rows()).toHaveLength(1);
+  });
+});
+
+describe("MidpointCard — each person's travel mode", () => {
+  // Each device routes its own trip in its own mode. A time in another mode
+  // than the toggle's says so, or "25 min" reads as this device's mode.
+  it("names another person's mode when it is not this device's", () => {
+    renderCard({
+      travelProfile: "driving",
+      otherParticipants: [
+        {
+          index: 1,
+          route: otherRoute,
+          profile: "walking",
+          position: otherPosition,
+          stale: false,
+          name: "Dana",
+        },
+        {
+          index: 2,
+          route: otherRoute,
+          profile: "driving",
+          position: otherPosition,
+          stale: false,
+          name: "Noa",
+        },
+      ],
+    });
+
+    const [own, dana, noa] = rows();
+    expect(dana?.textContent).toContain("live.modeWalking");
+    expect(noa?.textContent).not.toContain("live.modeDriving");
+    expect(own?.textContent).not.toContain("live.mode");
+  });
+
+  it("says nothing of a mode it has no route for", () => {
+    renderCard({
+      travelProfile: "driving",
+      otherParticipants: [
+        {
+          index: 1,
+          route: null,
+          profile: null,
+          position: otherPosition,
+          stale: false,
+          name: "Dana",
+        },
+      ],
+    });
+
+    expect(screen.queryByText(/live\.mode/)).toBeNull();
+  });
+
+  it("labels the toggle as this device's own mode", () => {
+    renderCard();
+
+    expect(screen.getByRole("group", { name: "live.travelMode" })).toBeTruthy();
   });
 });

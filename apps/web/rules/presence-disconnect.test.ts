@@ -159,3 +159,37 @@ it("removes the copy of the meeting point on every dropped connection too", asyn
   await eventually(async () => (await stored(meet)) === null, "second drop");
   goOnline(db);
 });
+
+// So is each device's trip: its route starts where the device is.
+it("removes the trip on every dropped connection too", async () => {
+  const writer = createPresenceWriter(db);
+  const live = new AbortController().signal;
+  const trip = `sessions/${CODE}/trips/1`;
+  const value = {
+    lat: 32.0,
+    lng: 34.9,
+    profile: "driving" as const,
+    duration: 1_800,
+    distance: 24_000,
+    line: "_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+  };
+
+  await writer.writeTrip(CODE, 1, value, live);
+  await eventually(async () => (await stored(trip)) !== null, "first write");
+  expect(await stored(trip)).toEqual(value);
+
+  goOffline(db);
+  await eventually(async () => (await stored(trip)) === null, "first drop");
+
+  goOnline(db);
+  await connected(true);
+  await writer.writeTrip(CODE, 1, { ...value, duration: 1_700 }, live);
+  await eventually(
+    async () => (await stored(trip)) !== null,
+    "write after reconnect",
+  );
+
+  goOffline(db);
+  await eventually(async () => (await stored(trip)) === null, "second drop");
+  goOnline(db);
+});

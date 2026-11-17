@@ -105,8 +105,9 @@
           open it.
         </li>
         <li>
-          Mapbox receives everyone's location to draw the map and the routes. If venue
-          search is on, Google receives the midpoint.
+          Mapbox receives your location and the meeting point, to work out your route,
+          and the area on screen, to draw the map. If venue search is on, Google
+          receives the midpoint.
         </li>
         <li>
           If error reporting is on, locations and session codes are removed from
@@ -135,10 +136,17 @@
         </li>
         <li>
           once somebody in the session has set the <strong>meeting point</strong>
-          &mdash; tapping Navigate sets it, and anyone can move it &mdash; your copy of
-          it: the place, when it was set, and the name of whoever set it. Every device
-          in the session keeps a copy, so the meeting point is still there for the
-          others after the person who set it has left.
+          &mdash; the first person to tap Navigate fixes it, for everyone, and nobody
+          can move it after that &mdash; your copy of it: the place, when it was set,
+          and the name of whoever set it. Every device in the session keeps a copy, so
+          the meeting point is still there for the others after the person who set it
+          has left.
+        </li>
+        <li>
+          <strong>your route</strong> to where everyone is going: the line your device
+          was given by Mapbox, how long it takes, how far it is, and whether you are
+          driving or walking. Your device works out only your own route, and the
+          others see it from this copy.
         </li>
       </ul>
       <p>
@@ -151,11 +159,14 @@
         <li>
           <strong>Everyone who has joined the session.</strong> Anyone who has the link
           can join while there is room &mdash; five people at most, in the order they
-          arrive &mdash; and everyone who has joined sees the live location, display
-          name and random ID of everyone sharing. Opening the link shows what joining
-          means; nothing is shared, and you are not signed in, until you tap Join.
-          Share the link only with people you want to see your location, and remember
-          that they can pass it on.
+          arrive &mdash; and everyone who has joined can see the live location, display
+          name, random ID and route of everyone sharing. The app shows you the others
+          only while it is sharing your own location, and the database lets a device
+          read the others' routes and the meeting point only while that device's own
+          location is there. Opening the link shows what joining means; nothing is
+          shared, and you are not signed in, until you tap Join. Share the link only
+          with people you want to see your location, and remember that they can pass
+          it on.
         </li>
         <li>
           <strong>Anyone who has the session link, without joining,</strong> such as
@@ -175,8 +186,8 @@
       <h2>How long it is kept</h2>
       <ul>
         <li>
-          <strong>Your location, display name and copy of the meeting point</strong>
-          are kept until you stop sharing. Closing the page or turning off location
+          <strong>Your location, display name, route and copy of the meeting
+          point</strong> are kept until you stop sharing. Closing the page or turning off location
           permission deletes them.
           If the page closes abruptly or your connection drops, the database deletes
           them as soon as it notices the connection has gone. If your connection comes
@@ -222,10 +233,12 @@
               looking at.
             </li>
             <li>
-              To show everyone's route, your device asks Mapbox for a route from each
-              person in the session to the meeting point &mdash; the midpoint, or the
-              venue you picked. Mapbox therefore receives every participant's precise
-              location, from every participant's device.
+              To show your route, your device asks Mapbox for a route from where you
+              are to where everyone is going &mdash; the meeting point, the midpoint,
+              or the venue you picked. Mapbox therefore receives your precise location
+              from your device. It does not receive the others' locations from your
+              device: each device asks for its own route, and shares it with the
+              session.
             </li>
             <li>
               Mapbox's map software keeps a random identifier in your browser, replaces

@@ -6,16 +6,35 @@ import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
 export type TravelProfile = "driving" | "walking";
 
 /**
- * Routes as computed for one destination and travel profile.
+ * This device's own route, tagged with what it answers — the destination and
+ * profile it was asked for — so the graph can tell when it no longer does.
  *
- * Tagged with what they answer so the graph can tell when they no longer do:
- * a route set for a previous venue, or kept after its participant left, used
- * to stay on the map and in the distances until something replaced it.
+ * Each device routes only its own trip and publishes it for the others
+ * (`PeerTrip`). Every device used to route everyone: five people meant
+ * twenty-five requests to Mapbox for each move, each device sending all five
+ * positions, against one rate limit that every device of every session
+ * shares.
  */
-export interface RouteSet {
+export interface OwnRoute {
   readonly dest: LatLng;
   readonly profile: TravelProfile;
-  readonly bySlot: readonly (RouteInfo | null)[];
+  /** `null` when there is no way there by this profile. */
+  readonly route: RouteInfo | null;
+}
+
+/**
+ * Another participant's trip, as their device published it
+ * (`sessions/{code}/trips/{slot}`): to where, how, how long, and the line,
+ * still encoded (`lib/polyline.ts`).
+ */
+export interface PeerTrip {
+  readonly dest: LatLng;
+  readonly profile: TravelProfile;
+  /** Seconds. */
+  readonly duration: number;
+  /** Metres. */
+  readonly distance: number;
+  readonly line: string;
 }
 
 export interface RouteInfo {
@@ -78,22 +97,22 @@ export type SessionLifecycle =
   | { readonly kind: "closed" };
 
 /**
- * A meeting point somebody in the session set.
+ * The meeting point: the midpoint where it was when somebody first tapped
+ * Navigate, fixed for everyone.
  *
  * The midpoint is live: it moves whenever anyone does, and it is gone the
  * moment the second-to-last person stops sharing — which is what tapping
  * Navigate does on a phone, as the page goes to the background. So a
  * destination the group had settled on drifted under them, and vanished for
- * whoever was left. A pin is the decision, kept: the first Navigate sets one,
- * and anyone can move it.
+ * whoever was left. A pin is the decision, kept. Nobody can move it: the
+ * rules refuse a copy that disagrees with one already published.
  *
- * Every device publishes the latest pin it knows in its own entry
+ * Every device publishes its copy in its own entry
  * (`sessions/{code}/meet/{slot}`), which is deleted with its position, so a
  * pin outlives any one person leaving and nothing of it outlives the session.
- * Of all the pins a device has seen, the latest `at` wins.
  */
 export interface PinEvent {
-  /** Server-clock ms at which it was set. The latest pin is the meeting point. */
+  /** Server-clock ms at which it was set, as the setter's device knew it. */
   readonly at: number;
   /** The slot of whoever set it. */
   readonly by: ParticipantIndex;
@@ -161,14 +180,18 @@ export interface GraphSources {
    * destination until it is cleared, even once a search no longer returns it.
    */
   readonly selectedPlace: PlaceResult | null;
-  /** The meeting point this device set last, if it set one. */
-  readonly ownPin: PinEvent | null;
   /**
-   * The meeting point each participant's device last published, its own
-   * entry included: what the others have seen, kept by them as long as they
-   * are here.
+   * The copies of the meeting point the database holds, this device's own
+   * included: what the others have seen, kept by them as long as they are
+   * here. They agree — the rules refuse one that does not.
    */
   readonly peerPins: readonly PinEvent[];
+  /**
+   * By slot: the trip each participant's device last published, `null` where
+   * there is none. Own slot's entry is not read: own route is fetched here.
+   */
+  readonly peerTrips: readonly (PeerTrip | null)[];
+  /** This device's travel mode; each person chooses their own. */
   readonly travelProfile: TravelProfile;
   readonly ownUid: string | null;
   readonly ownName: string;
@@ -260,6 +283,8 @@ export interface MapParticipant {
 export interface OtherParticipantView {
   readonly index: ParticipantIndex;
   readonly route: RouteInfo | null;
+  /** The travel mode their route is for: each person chooses their own. */
+  readonly profile: TravelProfile | null;
   readonly position: LatLng;
   readonly stale: boolean;
   readonly name: string | null;

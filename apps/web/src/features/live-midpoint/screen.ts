@@ -50,10 +50,10 @@ export type Screen =
       /** A slot is free, so an invite can be accepted. */
       readonly canInvite: boolean;
       /**
-       * Other devices that hold a slot and publish no position: joined and
-       * still waiting for a fix, joined and gone, or joined to watch. A slot
-       * is what lets a device read everyone's position, and nothing on the
-       * map shows one that does not share its own — so the page says so.
+       * Other devices that hold a slot and have never been on the map here:
+       * joined and still waiting for a fix, or joined without sharing.
+       * Nothing on the map shows one that does not share — so the page says
+       * so.
        */
       readonly unseenDevices: number;
     };
@@ -69,6 +69,12 @@ export interface ScreenInputs {
   /** Somebody set a meeting point, so there is somewhere to go alone too. */
   readonly pinned: boolean;
   readonly claimedSlots: number;
+  /**
+   * Whether the others have been read: this device shares, and the
+   * participants listener has answered. Until then nobody else is known to
+   * be here, which is not the same as nobody being here.
+   */
+  readonly rosterKnown: boolean;
   /**
    * Other participants this page has seen on the map at some point, here or
    * gone; own is not counted. Somebody who shared and then left — to
@@ -123,9 +129,15 @@ function deriveSheet(
       // Nobody else is here, but the meeting point is: whoever tapped
       // Navigate first is usually the first to leave the page, and the
       // others' way there went with them.
-      return inputs.pinned
-        ? meetingOrLocating(inputs)
-        : { kind: "waiting", code, full };
+      if (inputs.pinned) return meetingOrLocating(inputs);
+      // Nobody else is known yet, because this device is not reading them:
+      // the others are shown only once it shares. With someone else holding
+      // a slot, what is missing is this device's own location on the map —
+      // "Waiting for others to join" would tell a joiner nobody is there.
+      if (!inputs.rosterKnown && inputs.claimedSlots > 1) {
+        return { kind: "locating" };
+      }
+      return { kind: "waiting", code, full };
     case "connected":
     case "some_stale":
       if (code === null) return NO_SHEET;
@@ -150,11 +162,11 @@ function deriveSheet(
  * going after the others leave, that was every meeting.
  *
  * Zero until the claims have been counted (`claimedSlots` is 0 until the
- * live session answers), and never negative: the two listeners it is fed by
- * do not arrive together.
+ * live session answers) and the others have been read, and never negative:
+ * the listeners it is fed by do not arrive together.
  */
 function unseenDevices(inputs: ScreenInputs, code: string | null): number {
-  if (code === null) return 0;
+  if (code === null || !inputs.rosterKnown) return 0;
   return Math.max(0, inputs.claimedSlots - 1 - inputs.othersSeen);
 }
 

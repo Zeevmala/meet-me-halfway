@@ -21,9 +21,10 @@
 - **Multi-Participant** — Up to 5 participants per session with color-coded markers (green, blue, orange, purple, pink)
 - **Live Location Streaming** — All participants stream GPS coords via Firebase RTDB in real-time
 - **Geographic Centroid** — Cartesian mean on unit sphere updates live as any participant moves
-- **N-Participant Routing** — Mapbox Directions API shows driving or walking routes for all participants to the meeting point
+- **Everyone's route, each routed once** — every phone asks Mapbox for its own driving or walking route only, and shares it with the session, so everyone sees everyone's way there and time
 - **Dark Map UI** — Mapbox GL JS 3.x dark basemap with glass-morphism cards, accuracy circles, and smooth transitions
-- **A meeting point that stays put** — the first Navigate fixes it for everyone, and it stays when that person leaves the page; anyone can move it
+- **A meeting point that stays put** — the calculated midpoint, fixed for everyone by the first Navigate; nobody can move it after that, and it stays when that person leaves the page
+- **Share to see** — a phone sees the others only while it shares its own location
 - **Navigation Links** — One-tap Waze / Google Maps deep links to the meeting point
 - **Session Codes** — short codes in a link, shared by WhatsApp, the system share sheet or copy; nothing is shared until the person who opens it taps Join
 - **Stale Detection** — Per-participant offline detection (> 30s) triggers dimmed marker + warning banner
@@ -32,7 +33,7 @@
 - **English interface** — one typed string table; a key that is not in it fails the typecheck
 - **PWA** — Installable, offline fallback, service worker caching
 - **Declared execution graph** — the derived pipeline runs as a DAG with cycle detection, per-node circuit breakers, retry and last-known-good degradation ([ARCHITECTURE.md](ARCHITECTURE.md))
-- **830+ unit tests, security-rules tests against the database emulator, and two-device e2e under the production CSP** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
+- **870+ unit tests, security-rules tests against the database emulator, and two-device e2e under the production CSP** — geo-math, slot allocation, session codes, auth (retry), live session (throttle/stale/expiry), venue ranking, GPS errors, graph runtime, resource policies, page lifecycle
 
 ---
 
@@ -112,7 +113,7 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 | Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
 | Copy | English only — typed string table (`src/strings`) |
 | Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
-| Tests | Vitest + React Testing Library (830+), rules tests on the RTDB emulator, Playwright e2e |
+| Tests | Vitest + React Testing Library (870+), rules tests on the RTDB emulator, Playwright e2e |
 
 ---
 
@@ -192,8 +193,8 @@ meet-me-halfway/
 3. **Join** — Up to 4 others open the shared link and tap Join
 4. **Stream** — All locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
 5. **Midpoint** — Client computes geographic centroid in real-time
-6. **Routes** — Mapbox Directions API fetches driving/walking routes for all participants
-7. **Navigate** — the first tap on Waze or Google Maps fixes the meeting point for everyone, and it stays when that person leaves
+6. **Routes** — each phone fetches its own driving or walking route from the Mapbox Directions API and publishes it; the others draw it
+7. **Navigate** — the first tap on Waze or Google Maps fixes the meeting point for everyone; nobody can move it, and it stays when that person leaves
 
 ---
 
@@ -201,7 +202,7 @@ meet-me-halfway/
 
 ```bash
 cd apps/web
-npx vitest run     # 344 unit + integration tests
+npx vitest run     # 870+ unit + integration tests
 npm run tsc        # TypeScript strict mode check
 ```
 

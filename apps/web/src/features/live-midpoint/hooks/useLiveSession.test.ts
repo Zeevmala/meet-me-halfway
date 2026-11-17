@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import {
   IDLE_SESSION,
   parsePins,
+  parseTrips,
   sessionReducer,
   useLiveSession,
 } from "./useLiveSession";
@@ -12,6 +13,7 @@ import type {
   SessionState,
 } from "./useLiveSession";
 import { sessionCode, sessionSlot } from "../graph/nodes";
+import { RELISTEN_BASE_MS, RELISTEN_MAX_MS } from "./useGatedListener";
 import type { Result } from "../../../core/dag/result";
 
 // ── Mock Sentry: what the hook reports is part of its contract ──
@@ -41,6 +43,9 @@ const mockSlotsUnsub = vi.fn();
 let meetCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let meetErrorCallback: ((err: Error) => void) | null = null;
 const mockMeetUnsub = vi.fn();
+// …and so do the trips.
+let tripsCallback: ((snap: { val: () => unknown }) => void) | null = null;
+const mockTripsUnsub = vi.fn();
 
 vi.mock("firebase/database", () => ({
   onValue: (
@@ -57,6 +62,10 @@ vi.mock("firebase/database", () => ({
       meetCallback = onSnap;
       meetErrorCallback = onErr;
       return mockMeetUnsub;
+    }
+    if (ref.path?.endsWith("/trips")) {
+      tripsCallback = onSnap;
+      return mockTripsUnsub;
     }
     onValueCallback = onSnap;
     onValueErrorCallback = onErr;
@@ -181,6 +190,7 @@ beforeEach(() => {
   slotsErrorCallback = null;
   meetCallback = null;
   meetErrorCallback = null;
+  tripsCallback = null;
   mockSet.mockResolvedValue(undefined);
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
@@ -204,7 +214,7 @@ beforeEach(() => {
 
 describe("useLiveSession", () => {
   it("starts idle with no code or index", () => {
-    const { result } = renderHook(() => useLiveSession(TEST_UID));
+    const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
     expect(result.current.state).toBe(IDLE_SESSION);
     expect(sessionCode(result.current.state)).toBeNull();
@@ -217,7 +227,7 @@ describe("useLiveSession", () => {
     // As three sequential writes, a failure between them left `created`
     // without its slot 0: a session whose code nobody could use.
     it("creates the session in one atomic, server-stamped write", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -252,7 +262,7 @@ describe("useLiveSession", () => {
     it("exposes no code, so nothing to share, until the create has landed", async () => {
       const update = deferredUpdate();
       mockUpdate.mockImplementation(update.write);
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let pending!: Promise<Result<string, SessionFailure>>;
       act(() => {
@@ -285,7 +295,7 @@ describe("useLiveSession", () => {
       mockUpdate
         .mockRejectedValueOnce(new Error("Permission denied"))
         .mockImplementationOnce(update.write);
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let pending!: Promise<Result<string, SessionFailure>>;
       act(() => {
@@ -307,7 +317,7 @@ describe("useLiveSession", () => {
       const update = deferredUpdate();
       mockUpdate.mockImplementation(update.write);
       const controller = new AbortController();
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let pending!: Promise<Result<string, SessionFailure>>;
       act(() => {
@@ -336,7 +346,7 @@ describe("useLiveSession", () => {
     });
 
     it("sets ownIndex to 0 and phase to 'waiting'", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -348,7 +358,7 @@ describe("useLiveSession", () => {
     });
 
     it("returns the generated session code", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let code: Result<string, SessionFailure> | undefined;
       await act(async () => {
@@ -359,7 +369,7 @@ describe("useLiveSession", () => {
     });
 
     it("updates URL with session code", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -376,7 +386,7 @@ describe("useLiveSession", () => {
     // Retry reloaded into a join of a session that was never created.
     it("leaves the URL alone when the create fails", async () => {
       mockUpdate.mockRejectedValue(new Error("Permission denied"));
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -393,7 +403,7 @@ describe("useLiveSession", () => {
         .mockReturnValueOnce("ABC234")
         .mockReturnValueOnce("XYZ789");
       refuseCreatesUnder((path) => path === "sessions/ABC234");
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let created: Result<string, SessionFailure> | undefined;
       await act(async () => {
@@ -416,7 +426,7 @@ describe("useLiveSession", () => {
 
     it("gives up after three taken codes", async () => {
       refuseCreatesUnder(() => true);
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -436,7 +446,7 @@ describe("useLiveSession", () => {
         mockUpdate
           .mockRejectedValueOnce({ code: "unavailable" })
           .mockResolvedValue(undefined);
-        const { result } = renderHook(() => useLiveSession(TEST_UID));
+        const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
         let created: Result<string, SessionFailure> | undefined;
         await act(async () => {
@@ -457,7 +467,7 @@ describe("useLiveSession", () => {
     });
 
     it("starts listening for participants after create", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -472,7 +482,7 @@ describe("useLiveSession", () => {
     it("sets phase to error if RTDB write fails", async () => {
       mockUpdate.mockRejectedValue(new Error("Permission denied"));
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         try {
@@ -492,7 +502,7 @@ describe("useLiveSession", () => {
     it("does not attach the participants listener when the create write fails", async () => {
       mockUpdate.mockRejectedValue(new Error("Permission denied"));
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         try {
@@ -514,7 +524,7 @@ describe("useLiveSession", () => {
     // through to creating a session instead — the joiner sat alone, believing
     // they had joined.
     it("refuses a code the app could not have generated, before reading anything", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let joined: Result<string, SessionFailure> | undefined;
       await act(async () => {
@@ -541,7 +551,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
       });
@@ -561,7 +571,7 @@ describe("useLiveSession", () => {
     it("sets phase to error if session doesn't exist", async () => {
       mockSession(null);
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -574,7 +584,7 @@ describe("useLiveSession", () => {
     it("sets phase to error if session has no creatorUid", async () => {
       mockSession({ created: Date.now() });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -593,7 +603,7 @@ describe("useLiveSession", () => {
       // the shared catch and told the user their browser was blocking storage.
       denySessionReads({ deviceMayRead: true });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -610,7 +620,7 @@ describe("useLiveSession", () => {
     it("blames the device, not the session, when it may read nothing at all", async () => {
       denySessionReads({ deviceMayRead: false });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -640,7 +650,7 @@ describe("useLiveSession", () => {
         }),
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -666,7 +676,7 @@ describe("useLiveSession", () => {
         );
       });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -693,7 +703,7 @@ describe("useLiveSession", () => {
         );
       });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -718,7 +728,7 @@ describe("useLiveSession", () => {
         },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -734,7 +744,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -754,7 +764,7 @@ describe("useLiveSession", () => {
       const creatorUid = "creator-uid";
       mockSession({ created: Date.now(), creatorUid }, { "0": creatorUid });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -776,7 +786,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -794,7 +804,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -813,7 +823,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -830,7 +840,7 @@ describe("useLiveSession", () => {
     it("refuses a session with no `created` stamp", async () => {
       mockSession({ creatorUid: "creator-uid" }, { "0": "creator-uid" });
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -842,7 +852,7 @@ describe("useLiveSession", () => {
     });
 
     it("reads `created` back after a create, since the server stamped it", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -865,7 +875,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -880,7 +890,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid", "1": TEST_UID },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -910,7 +920,7 @@ describe("useLiveSession", () => {
       // so classifyJoinError returns the catch-all JOIN_FAILED.
       mockGet.mockRejectedValue(new Error("Something went wrong"));
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -924,7 +934,7 @@ describe("useLiveSession", () => {
       mockAppCheck = { _appCheck: true };
       mockGet.mockRejectedValue(new Error("Something went wrong"));
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -947,7 +957,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let joined = false;
       await act(async () => {
@@ -977,7 +987,7 @@ describe("useLiveSession", () => {
         { "0": "creator-uid" },
       );
 
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.joinSession("XYZ789", live());
@@ -990,7 +1000,7 @@ describe("useLiveSession", () => {
 
   describe("listenForParticipants", () => {
     it("sets participants when other users appear", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1027,7 +1037,7 @@ describe("useLiveSession", () => {
     });
 
     it("handles multiple participants", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1074,7 +1084,7 @@ describe("useLiveSession", () => {
     });
 
     it("clears participants when data is null", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1111,29 +1121,57 @@ describe("useLiveSession", () => {
       expect(result.current.participants).toEqual([]);
     });
 
-    it("sets phase to error on connection error", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
+    // A reconnect is refused for a moment once the rules read own position:
+    // the server deleted it as the connection dropped, and the SDK restores
+    // its listens before its writes. Given up at the first refusal, the
+    // listener stayed dead for the rest of the page's life.
+    it("attaches again after a refusal, and loses the session only once refusals persist", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
       await act(async () => {
         await result.current.createSession(live());
       });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        act(() => {
+          onValueErrorCallback?.(new Error("Permission denied"));
+        });
+        expect(result.current.state.kind).toBe("live");
+        expect(mockCaptureException).not.toHaveBeenCalled();
 
-      act(() => {
-        onValueErrorCallback?.(new Error("Permission denied"));
-      });
+        act(() => {
+          vi.advanceTimersByTime(RELISTEN_BASE_MS);
+        });
+        expect(mockOnValueUnsub).toHaveBeenCalledTimes(1);
+        act(() => {
+          onValueCallback?.({ val: () => null });
+        });
+        expect(result.current.rosterKnown).toBe(true);
 
-      // Lost, not failed: the session exists, keeps its code and slot, and
-      // the listener the server cancelled is detached with the state.
-      expect(result.current.state).toMatchObject({
-        kind: "lost",
-        code: "ABC234",
-        slot: 0,
-      });
-      expect(mockOnValueUnsub).toHaveBeenCalled();
+        // Refused, and refused again, for longer than any reconnect takes.
+        for (let i = 0; i < 8 && result.current.state.kind === "live"; i++) {
+          act(() => {
+            onValueErrorCallback?.(new Error("Permission denied"));
+          });
+          act(() => {
+            vi.advanceTimersByTime(RELISTEN_MAX_MS);
+          });
+        }
+
+        // Lost, not failed: the session exists, keeps its code and slot, and
+        // the listener is detached with the state.
+        expect(result.current.state).toMatchObject({
+          kind: "lost",
+          code: "ABC234",
+          slot: 0,
+        });
+        expect(mockCaptureException).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("only own uid in participants means no others found", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1157,7 +1195,7 @@ describe("useLiveSession", () => {
     // join; the people present do not. Invites went by the people present,
     // and kept offering sessions that had had five.
     it("counts the claims, not the people present", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1185,7 +1223,7 @@ describe("useLiveSession", () => {
     });
 
     it("is 0, with nothing listening, until the session is live", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
       expect(result.current.claimedSlots).toBe(0);
       expect(slotsCallback).toBeNull();
 
@@ -1204,7 +1242,7 @@ describe("useLiveSession", () => {
     // RTDB hands back an object keyed 0..4 as an array once enough of the
     // keys are present.
     it("reads the array form RTDB returns for dense integer keys", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1217,7 +1255,7 @@ describe("useLiveSession", () => {
     });
 
     it("counts only the five slots, each held by a uid", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1236,7 +1274,7 @@ describe("useLiveSession", () => {
     // alone would quietly bring back invites into full sessions, so it is
     // reported.
     it("keeps the count and the session, and reports it, when the claims stop being readable", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1260,7 +1298,7 @@ describe("useLiveSession", () => {
     });
 
     it("detaches with the session, and describes no session once it is gone", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1277,11 +1315,100 @@ describe("useLiveSession", () => {
     });
   });
 
+  // Whoever does not share sees nobody, so nobody can watch unseen: the
+  // others' positions, the meeting point's copies and the trips are read only
+  // while this device's own position is published. The claims are not
+  // positions, and are read regardless.
+  describe("reading the others only while sharing", () => {
+    const PARTNER = {
+      uid: PARTNER_UID,
+      lat: 31.76,
+      lng: 35.21,
+      accuracy: 15,
+      ts: 1_000,
+    };
+
+    it("listens to nobody's position while this device does not share", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID, false));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      expect(result.current.state.kind).toBe("live");
+      expect(onValueCallback).toBeNull();
+      expect(meetCallback).toBeNull();
+      expect(tripsCallback).toBeNull();
+      expect(slotsCallback).not.toBeNull();
+      expect(result.current.participants).toEqual([]);
+      expect(result.current.rosterKnown).toBe(false);
+    });
+
+    it("reads them once it shares, and lets go of what it read when it stops", async () => {
+      const { result, rerender } = renderHook(
+        ({ listen }: { listen: boolean }) => useLiveSession(TEST_UID, listen),
+        { initialProps: { listen: false } },
+      );
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      rerender({ listen: true });
+      expect(result.current.rosterKnown).toBe(false);
+      act(() => {
+        onValueCallback?.({ val: () => ({ "1": PARTNER }) });
+        tripsCallback?.({
+          val: () => ({
+            "1": {
+              lat: 32.0,
+              lng: 34.9,
+              profile: "walking",
+              duration: 600,
+              distance: 4_000,
+              line: "_p~iF~ps|U_ulLnnqC",
+            },
+          }),
+        });
+      });
+      expect(result.current.rosterKnown).toBe(true);
+      expect(result.current.participants).toHaveLength(1);
+      expect(result.current.peerTrips[1]).toMatchObject({ profile: "walking" });
+
+      rerender({ listen: false });
+
+      expect(mockOnValueUnsub).toHaveBeenCalledTimes(1);
+      expect(mockMeetUnsub).toHaveBeenCalledTimes(1);
+      expect(mockTripsUnsub).toHaveBeenCalledTimes(1);
+      expect(mockSlotsUnsub).not.toHaveBeenCalled();
+      expect(result.current.participants).toEqual([]);
+      expect(result.current.peerTrips.every((trip) => trip === null)).toBe(
+        true,
+      );
+      expect(result.current.rosterKnown).toBe(false);
+    });
+
+    // "Nobody else is here" is not the same as "nobody else has been read".
+    it("knows the roster only once the participants listener has answered", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      expect(result.current.rosterKnown).toBe(false);
+
+      act(() => {
+        onValueCallback?.({ val: () => null });
+      });
+
+      expect(result.current.rosterKnown).toBe(true);
+      expect(result.current.participants).toEqual([]);
+    });
+  });
+
   describe("peerPins", () => {
     const PIN = { at: 1_000, by: 1, lat: 32.79, lng: 34.99 };
 
     it("is empty, with nothing listening, until the session is live", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
       expect(result.current.peerPins).toEqual([]);
       expect(meetCallback).toBeNull();
 
@@ -1307,7 +1434,7 @@ describe("useLiveSession", () => {
     // A copy whose pin stands is still a pin to the graph, however many
     // devices hold it.
     it("reports every device's copy, its own included", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1319,32 +1446,47 @@ describe("useLiveSession", () => {
       expect(result.current.peerPins).toHaveLength(2);
     });
 
-    it("keeps the pins seen, and reports it, when the meeting point stops being readable", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
-
+    it("keeps the pins seen while refused, attaches again, and reports only refusals that persist", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
       await act(async () => {
         await result.current.createSession(live());
       });
       act(() => {
         meetCallback?.({ val: () => ({ "1": PIN }) });
       });
-      const refusal = new Error("Permission denied");
-      act(() => {
-        meetErrorCallback?.(refusal);
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const refusal = new Error("Permission denied");
+        act(() => {
+          meetErrorCallback?.(refusal);
+        });
+        expect(mockCaptureException).not.toHaveBeenCalled();
 
-      expect(result.current.state.kind).toBe("live");
-      expect(result.current.peerPins).toHaveLength(1);
-      expect(mockCaptureException).toHaveBeenCalledWith(
-        refusal,
-        expect.objectContaining({
-          tags: expect.objectContaining({ phase: "listen-meet" }),
-        }),
-      );
+        for (let i = 0; i < 3; i++) {
+          act(() => {
+            vi.advanceTimersByTime(RELISTEN_MAX_MS);
+          });
+          act(() => {
+            meetErrorCallback?.(refusal);
+          });
+        }
+
+        expect(result.current.state.kind).toBe("live");
+        expect(result.current.peerPins).toHaveLength(1);
+        expect(mockCaptureException).toHaveBeenCalledTimes(1);
+        expect(mockCaptureException).toHaveBeenCalledWith(
+          refusal,
+          expect.objectContaining({
+            tags: expect.objectContaining({ phase: "listen-meet" }),
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("detaches with the session, and describes no session once it is gone", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1363,7 +1505,7 @@ describe("useLiveSession", () => {
 
   describe("close", () => {
     it("closes the session and detaches the participants listener", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1382,7 +1524,7 @@ describe("useLiveSession", () => {
     // it. The hook deleting it too is the seam a retrying write slipped
     // through, putting back a position that had just been removed.
     it("never deletes own position itself", async () => {
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1399,7 +1541,9 @@ describe("useLiveSession", () => {
     });
 
     it("detaches the listener when the hook unmounts", async () => {
-      const { result, unmount } = renderHook(() => useLiveSession(TEST_UID));
+      const { result, unmount } = renderHook(() =>
+        useLiveSession(TEST_UID, true),
+      );
 
       await act(async () => {
         await result.current.createSession(live());
@@ -1424,7 +1568,7 @@ describe("useLiveSession", () => {
           }),
       );
       const controller = new AbortController();
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let pending!: Promise<Result<string, SessionFailure>>;
       act(() => {
@@ -1465,7 +1609,7 @@ describe("useLiveSession", () => {
       mockGenerateCode
         .mockReturnValueOnce("ABC234")
         .mockReturnValueOnce("XYZ789");
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let first!: Promise<Result<string, SessionFailure>>;
       act(() => {
@@ -1496,7 +1640,7 @@ describe("useLiveSession", () => {
     it("reports an aborted create without recording a UI error", async () => {
       const controller = new AbortController();
       controller.abort();
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let outcome: Awaited<
         ReturnType<typeof result.current.createSession>
@@ -1517,7 +1661,7 @@ describe("useLiveSession", () => {
     it("reports an aborted join without recording a UI error", async () => {
       const controller = new AbortController();
       controller.abort();
-      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      const { result } = renderHook(() => useLiveSession(TEST_UID, true));
 
       let outcome: Awaited<
         ReturnType<typeof result.current.joinSession>
@@ -1726,5 +1870,54 @@ describe("sessionReducer", () => {
     ]) {
       expect(sessionReducer(closed, after)).toBe(closed);
     }
+  });
+});
+
+describe("parseTrips", () => {
+  const TRIP = {
+    lat: 32.0,
+    lng: 34.9,
+    profile: "driving",
+    duration: 1_200,
+    distance: 15_000,
+    line: "_p~iF~ps|U_ulLnnqC",
+  };
+
+  it("reads each device's trip into its slot", () => {
+    const trips = parseTrips({
+      "1": TRIP,
+      "4": { ...TRIP, profile: "walking" },
+    });
+
+    expect(trips).toHaveLength(5);
+    expect(trips[1]).toEqual({
+      dest: { lat: 32.0, lng: 34.9 },
+      profile: "driving",
+      duration: 1_200,
+      distance: 15_000,
+      line: "_p~iF~ps|U_ulLnnqC",
+    });
+    expect(trips[4]?.profile).toBe("walking");
+    expect(trips[0]).toBeNull();
+  });
+
+  // A snapshot is untrusted input: the rules check every field, but a
+  // snapshot is not the rules.
+  it("drops an entry that is not a well-formed trip", () => {
+    const trips = parseTrips({
+      "0": { ...TRIP, profile: "flying" },
+      "1": { ...TRIP, duration: Number.NaN },
+      "2": { ...TRIP, distance: -1 },
+      "3": { ...TRIP, line: 42 },
+      "4": { ...TRIP, lat: 91 },
+      "7": TRIP,
+    });
+
+    expect(trips.every((trip) => trip === null)).toBe(true);
+  });
+
+  it("is a slot of nulls for nothing at all", () => {
+    expect(parseTrips(null)).toEqual([null, null, null, null, null]);
+    expect(parseTrips("trips")).toEqual([null, null, null, null, null]);
   });
 });

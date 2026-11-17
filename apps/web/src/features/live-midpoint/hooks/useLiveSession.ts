@@ -18,13 +18,14 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { PinEvent } from "../graph/types";
+import type { PeerTrip, PinEvent } from "../graph/types";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
 import { backoffDelayMs } from "../../../core/dag/backoff";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { classifyJoinError, describeError } from "../lib/error-classification";
 import { detectInAppBrowser } from "../lib/in-app-browser";
+import { useGatedListener } from "./useGatedListener";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
@@ -220,11 +221,24 @@ export interface LiveSession {
    */
   readonly claimedSlots: number;
   /**
-   * The meeting point as each participant's device last published it
-   * (`sessions/{code}/meet`), this device's own copy included; empty while
-   * no session is live. Which one stands is the graph's to decide.
+   * Whether `participants` is what the database says: the participants
+   * listener is attached for the live session and has answered. False while
+   * this device is not sharing — it is not listening then — so that "nobody
+   * else is here" is never said for "nobody else has been read".
+   */
+  readonly rosterKnown: boolean;
+  /**
+   * The copies of the meeting point the database holds
+   * (`sessions/{code}/meet`), this device's own included; empty while no
+   * session is live or this device is not sharing. Which one stands is the
+   * graph's to decide.
    */
   readonly peerPins: readonly PinEvent[];
+  /**
+   * By slot, the trip each device published (`sessions/{code}/trips`); all
+   * `null` while no session is live or this device is not sharing.
+   */
+  readonly peerTrips: readonly (PeerTrip | null)[];
   /**
    * Both return a Result rather than throwing.
    *
@@ -370,6 +384,10 @@ async function readCreated(db: Database, code: string): Promise<number> {
 type SlotMap = Partial<Record<string, string>>;
 
 const NO_PINS: readonly PinEvent[] = Object.freeze([]);
+const NO_TRIPS: readonly (PeerTrip | null)[] = Object.freeze(
+  new Array<PeerTrip | null>(MAX_PARTICIPANTS).fill(null),
+);
+const NO_PARTICIPANTS: ParticipantInfo[] = [];
 
 function isSlot(value: unknown): value is ParticipantIndex {
   return (
@@ -419,6 +437,44 @@ export function parsePins(raw: unknown): readonly PinEvent[] {
   }
   if (pins.length === 0) return NO_PINS;
   return pins.sort((a, b) => a.slot - b.slot).map(({ pin }) => pin);
+}
+
+/**
+ * `sessions/{code}/trips` as the graph takes it: by slot, `null` where there
+ * is none. Untrusted input, like the pins: an entry that is not a well-formed
+ * trip is dropped. The line is checked when it is decoded, by the graph.
+ */
+export function parseTrips(raw: unknown): readonly (PeerTrip | null)[] {
+  if (raw === null || typeof raw !== "object") return NO_TRIPS;
+  const trips = NO_TRIPS.slice();
+  let any = false;
+  for (const [key, value] of Object.entries(raw)) {
+    const slot = Number(key);
+    if (!isSlot(slot) || value === null || typeof value !== "object") continue;
+    const { lat, lng, profile, duration, distance, line } = value as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof lat !== "number" ||
+      typeof lng !== "number" ||
+      !(Math.abs(lat) <= 90) ||
+      !(Math.abs(lng) <= 180) ||
+      (profile !== "driving" && profile !== "walking") ||
+      typeof duration !== "number" ||
+      !Number.isFinite(duration) ||
+      duration < 0 ||
+      typeof distance !== "number" ||
+      !Number.isFinite(distance) ||
+      distance < 0 ||
+      typeof line !== "string"
+    ) {
+      continue;
+    }
+    trips[slot] = { dest: { lat, lng }, profile, duration, distance, line };
+    any = true;
+  }
+  return any ? trips : NO_TRIPS;
 }
 
 /** The slot `uid` holds in `slots`, if any. */
@@ -532,11 +588,27 @@ async function claimSlot(
  *
  * @param uid  Firebase Anonymous Auth uid (from useAuth)
  */
-export function useLiveSession(uid: string): LiveSession {
+/**
+ * @param listen Whether to read the others: true while this device's own
+ *   position is published (`GraphSnapshot.sharing`). Whoever does not share
+ *   sees nobody, so nobody can watch unseen.
+ */
+export function useLiveSession(uid: string, listen: boolean): LiveSession {
   const { db, appCheckConfigured, appCheckReady } = useFirebase();
 
   const [state, dispatch] = useReducer(sessionReducer, IDLE_SESSION);
-  const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
+  const [roster, setRoster] = useState<{
+    readonly code: string;
+    readonly participants: ParticipantInfo[];
+  } | null>(null);
+  const [meetPins, setMeetPins] = useState<{
+    readonly code: string;
+    readonly pins: readonly PinEvent[];
+  } | null>(null);
+  const [trips, setTrips] = useState<{
+    readonly code: string;
+    readonly trips: readonly (PeerTrip | null)[];
+  } | null>(null);
   const [slotCount, setSlotCount] = useState<{
     readonly code: string;
     readonly claimed: number;
@@ -558,67 +630,93 @@ export function useLiveSession(uid: string): LiveSession {
     history.replaceState(null, "", url.toString());
   }, [liveCode]);
 
-  // Listen for every participant while the session is live. Attached only
-  // then: the participants are readable by slot holders of a live session and
-  // nobody else, so a listener attached before the claim is refused. The
-  // effect's cleanup is what detaches it — on `lost`, `closed` or unmount —
-  // so no handshake can leave one behind.
+  // Listen for every participant while the session is live and this device
+  // shares its own position. Attached only then: the participants are
+  // readable by slot holders of a live session and nobody else, so a
+  // listener attached before the claim is refused; and a device that shares
+  // nothing is shown nothing. Detached — on `lost`, `closed`, sharing
+  // stopped, or unmount — by the effect inside, so no handshake can leave one
+  // behind.
+  useGatedListener(
+    db,
+    listen && liveCode !== null ? `sessions/${liveCode}/participants` : null,
+    (raw) => {
+      if (liveCode === null) return;
+      const code = liveCode;
+      const data = raw as Record<string, ParticipantData> | null;
+      if (!data) {
+        setRoster({ code, participants: NO_PARTICIPANTS });
+        return;
+      }
+
+      // Keyed by slot, so there is no allocation to do here at all: the key
+      // *is* the index, arbitrated by the database when the slot was claimed.
+      // The registry this replaces derived an index from whatever snapshot
+      // each client happened to hold.
+      const others: ParticipantInfo[] = [];
+      for (const [slotKey, participant] of Object.entries(data)) {
+        if (participant.uid === uid) continue;
+        const slot = Number(slotKey);
+        // The rules cannot produce a key outside 0..4, but a snapshot is
+        // still untrusted input to this process.
+        if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_PARTICIPANTS) {
+          continue;
+        }
+        others.push({
+          uid: participant.uid,
+          position: { lat: participant.lat, lng: participant.lng },
+          accuracy: participant.accuracy,
+          lastSeen: participant.ts,
+          index: slot as ParticipantIndex,
+          name: sanitizeName(participant.name),
+        });
+      }
+
+      others.sort((a, b) => a.index - b.index);
+      // Whether this means waiting, connected or some_stale is the graph's to
+      // decide.
+      setRoster({ code, participants: others });
+    },
+    (error, unanswered) => {
+      if (liveCode === null) return false;
+      // Refused for a moment, it is attached again: once the rules read own
+      // position for this, as they do for the trips and the meeting point, a
+      // reconnect is refused until the heartbeat writes the position back.
+      // Refused for long, the server has stopped letting this client read —
+      // a rules deploy, a revoked token, App Check turning it away — and the
+      // session is lost.
+      if (!unanswered.becamePersistent) {
+        Sentry.addBreadcrumb({
+          category: "session",
+          level: "warning",
+          message: "participants listener refused; attaching again",
+          data: { attempts: unanswered.attempts },
+        });
+        return true;
+      }
+      console.error("[session] participants listener error:", error);
+      Sentry.captureException(error, {
+        tags: { phase: "listen", classified: classifyJoinError(error) },
+        contexts: sessionContext(liveCode, appCheckConfigured),
+      });
+      dispatch({
+        type: "listenerCancelled",
+        code: liveCode,
+        details: describeError(error),
+      });
+      return false;
+    },
+  );
+  // What was read while sharing goes once this device stops sharing: what it
+  // is shown is what it may read.
   useEffect(() => {
-    if (liveCode === null) return;
-    const code = liveCode;
-    return onValue(
-      ref(db, `sessions/${code}/participants`),
-      (snap) => {
-        const data = snap.val() as Record<string, ParticipantData> | null;
-        if (!data) {
-          setParticipants([]);
-          return;
-        }
-
-        // Keyed by slot, so there is no allocation to do here at all: the
-        // key *is* the index, arbitrated by the database when the slot was
-        // claimed. The registry this replaces derived an index from whatever
-        // snapshot each client happened to hold.
-        const others: ParticipantInfo[] = [];
-        for (const [slotKey, participant] of Object.entries(data)) {
-          if (participant.uid === uid) continue;
-          const slot = Number(slotKey);
-          // The rules cannot produce a key outside 0..4, but a snapshot is
-          // still untrusted input to this process.
-          if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_PARTICIPANTS) {
-            continue;
-          }
-          others.push({
-            uid: participant.uid,
-            position: { lat: participant.lat, lng: participant.lng },
-            accuracy: participant.accuracy,
-            lastSeen: participant.ts,
-            index: slot as ParticipantIndex,
-            name: sanitizeName(participant.name),
-          });
-        }
-
-        others.sort((a, b) => a.index - b.index);
-        // Whether this means waiting, connected or some_stale is the graph's
-        // to decide.
-        setParticipants(others);
-      },
-      (error) => {
-        // RTDB cancels a listener only when it stops letting this client
-        // read: a rules deploy, a revoked token, App Check turning it away.
-        console.error("[session] participants listener error:", error);
-        Sentry.captureException(error, {
-          tags: { phase: "listen", classified: classifyJoinError(error) },
-          contexts: sessionContext(code, appCheckConfigured),
-        });
-        dispatch({
-          type: "listenerCancelled",
-          code,
-          details: describeError(error),
-        });
-      },
-    );
-  }, [db, uid, appCheckConfigured, liveCode]);
+    if (listen) return;
+    setRoster(null);
+    setMeetPins(null);
+    setTrips(null);
+  }, [listen]);
+  const rosterKnown = listen && roster !== null && roster.code === liveCode;
+  const participants = rosterKnown ? roster.participants : NO_PARTICIPANTS;
 
   // Count the claims while the session is live. A claim is never released,
   // so a session that has had five people is full for good, however few are
@@ -661,32 +759,55 @@ export function useLiveSession(uid: string): LiveSession {
   const claimedSlots =
     slotCount !== null && slotCount.code === liveCode ? slotCount.claimed : 0;
 
-  // The meeting point as every device in the session last published it.
-  // Readable, like the positions, by the slot holders of a live session.
-  const [meetPins, setMeetPins] = useState<{
-    readonly code: string;
-    readonly pins: readonly PinEvent[];
-  } | null>(null);
-  useEffect(() => {
-    if (liveCode === null) return;
-    const code = liveCode;
-    return onValue(
-      ref(db, `sessions/${code}/meet`),
-      (snap) => setMeetPins({ code, pins: parsePins(snap.val()) }),
-      (error) => {
-        // Refused when this client may no longer read the session, which
-        // the participants listener reports as `lost` — or by rules that do
-        // not know `meet` yet, a client ahead of its rules. Either way the
-        // pins seen so far stand, and it is reported.
+  // The meeting point as every device in the session publishes it, and each
+  // one's trip. Readable by the slot holders of a live session who share
+  // their own position, and read only while this device does. Refused for a
+  // moment after a reconnect — the rules read own position, which the server
+  // deleted as the connection dropped — and attached again until it answers;
+  // reported only once that has gone on for long, or the rules do not know
+  // the node: a client ahead of its rules.
+  useGatedListener(
+    db,
+    listen && liveCode !== null ? `sessions/${liveCode}/meet` : null,
+    (raw) => {
+      if (liveCode !== null)
+        setMeetPins({ code: liveCode, pins: parsePins(raw) });
+    },
+    (error, unanswered) => {
+      if (unanswered.becamePersistent && liveCode !== null) {
         Sentry.captureException(error, {
           tags: { phase: "listen-meet", classified: classifyJoinError(error) },
-          contexts: sessionContext(code, appCheckConfigured),
+          contexts: sessionContext(liveCode, appCheckConfigured),
         });
-      },
-    );
-  }, [db, appCheckConfigured, liveCode]);
+      }
+      return true;
+    },
+  );
+  useGatedListener(
+    db,
+    listen && liveCode !== null ? `sessions/${liveCode}/trips` : null,
+    (raw) => {
+      if (liveCode !== null)
+        setTrips({ code: liveCode, trips: parseTrips(raw) });
+    },
+    (error, unanswered) => {
+      if (unanswered.becamePersistent && liveCode !== null) {
+        Sentry.captureException(error, {
+          tags: { phase: "listen-trips", classified: classifyJoinError(error) },
+          contexts: sessionContext(liveCode, appCheckConfigured),
+        });
+      }
+      return true;
+    },
+  );
   const peerPins =
-    meetPins !== null && meetPins.code === liveCode ? meetPins.pins : NO_PINS;
+    listen && meetPins !== null && meetPins.code === liveCode
+      ? meetPins.pins
+      : NO_PINS;
+  const peerTrips =
+    listen && trips !== null && trips.code === liveCode
+      ? trips.trips
+      : NO_TRIPS;
 
   /** Record a handshake failure once, in the shape the UI and caller need. */
   const fail = useCallback(
@@ -945,8 +1066,10 @@ export function useLiveSession(uid: string): LiveSession {
     state,
     ownName,
     participants,
+    rosterKnown,
     claimedSlots,
     peerPins,
+    peerTrips,
     createSession,
     joinSession,
     setOwnName,

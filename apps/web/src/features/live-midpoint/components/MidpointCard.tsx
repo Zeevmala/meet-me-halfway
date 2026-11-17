@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { t } from "../../../strings";
+import type { StringKey } from "../../../strings";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
@@ -12,6 +13,8 @@ import "../styles/live-midpoint.css";
 interface OtherParticipant {
   index: ParticipantIndex;
   route: RouteInfo | null;
+  /** The travel mode their route is for: each person chooses their own. */
+  profile: TravelProfile | null;
   position: LatLng;
   stale: boolean;
   name: string | null;
@@ -35,15 +38,10 @@ interface MidpointCardProps {
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
   /**
-   * The meeting point somebody set, if anyone has: who set it (`null` for
-   * this device), and the venue's name when it was set on one.
+   * The meeting point, once somebody's Navigate has fixed it: who that was
+   * (`null` for this device), and the venue's name when it was set on one.
    */
   pin?: { readonly setBy: string | null; readonly name: string | null } | null;
-  /**
-   * Move the meeting point to the live midpoint, offered once the two have
-   * drifted apart; `null` while there is nothing to move it to.
-   */
-  onMovePin?: (() => void) | null;
   /**
    * Called as a Navigate link is followed. Going is the decision: the page
    * fixes the meeting point for everyone here, if nobody has yet.
@@ -57,8 +55,15 @@ interface Row {
   readonly own: boolean;
   readonly stale: boolean;
   readonly route: RouteInfo | null;
+  /** Shown when it is not this device's: rows without one share the toggle's. */
+  readonly mode: TravelProfile | null;
   readonly position: LatLng;
 }
+
+const MODE_TAG = {
+  driving: "live.modeDriving",
+  walking: "live.modeWalking",
+} as const satisfies Record<TravelProfile, StringKey>;
 
 /**
  * The trip, compact: where, how, everyone's arrival time, and the way to go.
@@ -81,7 +86,6 @@ export default memo(function MidpointCard({
   selectedVenueName,
   routesStale,
   pin = null,
-  onMovePin = null,
   onNavigate,
 }: MidpointCardProps) {
   const rows: Row[] = [
@@ -91,6 +95,7 @@ export default memo(function MidpointCard({
       own: true,
       stale: false,
       route: ownRoute,
+      mode: null,
       position: ownPosition,
     },
     ...otherParticipants.map((p) => ({
@@ -99,6 +104,12 @@ export default memo(function MidpointCard({
       own: false,
       stale: p.stale,
       route: p.route,
+      // Each person routes their own way. A time in another mode than the
+      // toggle's says so, or "25 min" would read as this device's mode.
+      mode:
+        p.route !== null && p.profile !== null && p.profile !== travelProfile
+          ? p.profile
+          : null,
       position: p.position,
     })),
   ];
@@ -129,8 +140,8 @@ export default memo(function MidpointCard({
           {pin !== null && (
             <span className="live-trip-pin">
               {pin.setBy === null
-                ? t("live.pinSetByYou")
-                : t("live.pinSetBy", { name: pin.setBy })}
+                ? t("live.pinFixedByYou")
+                : t("live.pinFixedBy", { name: pin.setBy })}
             </span>
           )}
           {spread !== null && (
@@ -176,6 +187,9 @@ export default memo(function MidpointCard({
               aria-hidden="true"
             />
             <span className="live-eta-name">{row.name}</span>
+            {row.mode !== null && (
+              <span className="live-eta-mode">{t(MODE_TAG[row.mode])}</span>
+            )}
             {row.stale && (
               <span className="live-eta-tag">{t("live.staleTag")}</span>
             )}
@@ -203,12 +217,6 @@ export default memo(function MidpointCard({
 
       {otherParticipants.length === 0 && (
         <div className="live-eta-hint">{t("live.nobodyElse")}</div>
-      )}
-
-      {onMovePin !== null && (
-        <button type="button" className="live-trip-move" onClick={onMovePin}>
-          {t("live.movePin")}
-        </button>
       )}
 
       {routesStale && (
@@ -243,9 +251,9 @@ export default memo(function MidpointCard({
       </div>
 
       {/* Said before it happens: the tap that opens the navigation app also
-          fixes the destination for everyone here. */}
+          fixes the destination for everyone here, for good. */}
       {pin === null && (
-        <p className="live-nav-hint">{t("live.navigateSetsPoint")}</p>
+        <p className="live-nav-hint">{t("live.navigateFixesPoint")}</p>
       )}
     </div>
   );

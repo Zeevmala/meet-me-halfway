@@ -10,8 +10,7 @@ import { t } from "../../../strings";
 import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
-import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
-import { PIN_DRIFT_M } from "../graph/nodes";
+import { accuracyCircleGeoJSON } from "../lib/geo-math";
 import { fitSignature, hasSettled, sameMembers } from "../lib/fit-bounds";
 import type { FitSignature } from "../lib/fit-bounds";
 import type { Insets } from "../lib/camera-insets";
@@ -74,9 +73,9 @@ interface LiveMapProps {
   venues: readonly RankedVenue[];
   selectedVenue: RankedVenue | null;
   /**
-   * The meeting point somebody set, if anyone has: the destination glyph
-   * stands on it, and the live midpoint is drawn beside it, muted, only once
-   * it has wandered somewhere else.
+   * The meeting point, once somebody's Navigate has fixed it: the
+   * destination glyph stands on it, and the live midpoint is not drawn —
+   * nobody can move the meeting point there, so it is not offered.
    */
   pinned?: LatLng | null;
   /**
@@ -485,18 +484,6 @@ function LiveMap({
           muted={pinned === null && selectedVenue !== null}
         />
       )}
-      {mapInstance &&
-        pinned !== null &&
-        midpoint !== null &&
-        haversineDistance(pinned, midpoint) >= PIN_DRIFT_M && (
-          <LiveMidpointMarker
-            key="live-midpoint"
-            map={mapInstance}
-            lat={midpoint.lat}
-            lng={midpoint.lng}
-            muted
-          />
-        )}
       {mapInstance &&
         venues.map((v) => (
           <VenueMarker

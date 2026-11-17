@@ -92,6 +92,15 @@ export interface Resource<I, O> {
    * cancels the dispatch waiting to fire and abandons the one in flight.
    */
   readonly request: (input: I | null) => void;
+  /**
+   * Forget the last input dispatched, so that the next one is sent whatever
+   * it is. For a write whose effect was undone outside the resource — what
+   * it published, deleted — the same value offered again is not "no change"
+   * but a value the server no longer holds: admitted against the deleted
+   * one, a position turned off and on again went unwritten until the
+   * heartbeat.
+   */
+  readonly forget: () => void;
   readonly getState: () => ResourceState<O>;
   readonly subscribe: (listener: () => void) => () => void;
   readonly dispose: () => void;
@@ -430,6 +439,9 @@ export function createResource<I, O>(
 
   return {
     request,
+    forget: () => {
+      acceptedInput = null;
+    },
     getState: () => state,
     subscribe: (listener) => {
       listeners.add(listener);
