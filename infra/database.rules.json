@@ -64,6 +64,32 @@
             "$other": { ".validate": false }
           }
         },
+        "meet": {
+          ".read": "auth != null && data.parent().child('created').val() > now - 86400000 && (data.parent().child('slots/0').val() === auth.uid || data.parent().child('slots/1').val() === auth.uid || data.parent().child('slots/2').val() === auth.uid || data.parent().child('slots/3').val() === auth.uid || data.parent().child('slots/4').val() === auth.uid)",
+          "$slot": {
+            ".write": "auth != null && root.child('sessions').child($code).child('slots').child($slot).val() === auth.uid && (!newData.exists() || root.child('sessions').child($code).child('created').val() > now - 86400000)",
+            ".validate": "newData.hasChildren(['at', 'by', 'lat', 'lng'])",
+            "at": {
+              ".validate": "newData.isNumber() && newData.val() >= root.child('sessions').child($code).child('created').val() && newData.val() <= now + 60000"
+            },
+            "by": {
+              ".validate": "newData.isNumber() && (newData.val() === 0 || newData.val() === 1 || newData.val() === 2 || newData.val() === 3 || newData.val() === 4)"
+            },
+            "lat": {
+              ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+            },
+            "lng": {
+              ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+            },
+            "byName": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 30"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "$other": { ".validate": false }
+          }
+        },
         "$other": { ".validate": false }
       }
     }

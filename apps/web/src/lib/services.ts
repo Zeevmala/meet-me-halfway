@@ -65,6 +65,8 @@ export function createServices(config: AppConfig): Services {
     writePresence: presence.write,
     // The node that writes own position is the one that deletes it.
     removePresence: presence.remove,
+    writeMeet: presence.writeMeet,
+    removeMeet: presence.removeMeet,
     placesEnabled: config.places !== null,
   };
 

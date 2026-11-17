@@ -18,6 +18,7 @@ import {
 } from "../lib/display-name";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
+import type { PinEvent } from "../graph/types";
 import { ok, err } from "../../../core/dag/result";
 import type { Result } from "../../../core/dag/result";
 import { backoffDelayMs } from "../../../core/dag/backoff";
@@ -219,6 +220,12 @@ export interface LiveSession {
    */
   readonly claimedSlots: number;
   /**
+   * The meeting point as each participant's device last published it
+   * (`sessions/{code}/meet`), this device's own copy included; empty while
+   * no session is live. Which one stands is the graph's to decide.
+   */
+  readonly peerPins: readonly PinEvent[];
+  /**
    * Both return a Result rather than throwing.
    *
    * They used to throw, and the page called them from an effect with no
@@ -361,6 +368,58 @@ async function readCreated(db: Database, code: string): Promise<number> {
 
 /** `sessions/{code}/slots` as RTDB stores it: slot key → holder uid. */
 type SlotMap = Partial<Record<string, string>>;
+
+const NO_PINS: readonly PinEvent[] = Object.freeze([]);
+
+function isSlot(value: unknown): value is ParticipantIndex {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value < MAX_PARTICIPANTS
+  );
+}
+
+/**
+ * `sessions/{code}/meet` as the graph takes it: one pin per entry, sorted by
+ * slot. A snapshot is untrusted input to this process — the rules hold every
+ * field to its type and range, but a snapshot is not the rules — so an entry
+ * that is not a well-formed pin is dropped rather than trusted.
+ */
+export function parsePins(raw: unknown): readonly PinEvent[] {
+  if (raw === null || typeof raw !== "object") return NO_PINS;
+  const pins: { slot: number; pin: PinEvent }[] = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const slot = Number(key);
+    if (!isSlot(slot) || value === null || typeof value !== "object") continue;
+    const { at, by, byName, lat, lng, name } = value as Record<string, unknown>;
+    if (
+      typeof at !== "number" ||
+      !Number.isFinite(at) ||
+      !isSlot(by) ||
+      typeof lat !== "number" ||
+      typeof lng !== "number" ||
+      // A range test alone lets NaN through: every comparison with it is
+      // false.
+      !(Math.abs(lat) <= 90) ||
+      !(Math.abs(lng) <= 180)
+    ) {
+      continue;
+    }
+    pins.push({
+      slot,
+      pin: {
+        at,
+        by,
+        byName: sanitizeName(byName),
+        position: { lat, lng },
+        name: typeof name === "string" && name.trim() !== "" ? name : null,
+      },
+    });
+  }
+  if (pins.length === 0) return NO_PINS;
+  return pins.sort((a, b) => a.slot - b.slot).map(({ pin }) => pin);
+}
 
 /** The slot `uid` holds in `slots`, if any. */
 function heldBy(slots: SlotMap, uid: string): ParticipantIndex | null {
@@ -601,6 +660,33 @@ export function useLiveSession(uid: string): LiveSession {
   // Keyed by code, so a count can only ever describe the live session.
   const claimedSlots =
     slotCount !== null && slotCount.code === liveCode ? slotCount.claimed : 0;
+
+  // The meeting point as every device in the session last published it.
+  // Readable, like the positions, by the slot holders of a live session.
+  const [meetPins, setMeetPins] = useState<{
+    readonly code: string;
+    readonly pins: readonly PinEvent[];
+  } | null>(null);
+  useEffect(() => {
+    if (liveCode === null) return;
+    const code = liveCode;
+    return onValue(
+      ref(db, `sessions/${code}/meet`),
+      (snap) => setMeetPins({ code, pins: parsePins(snap.val()) }),
+      (error) => {
+        // Refused when this client may no longer read the session, which
+        // the participants listener reports as `lost` — or by rules that do
+        // not know `meet` yet, a client ahead of its rules. Either way the
+        // pins seen so far stand, and it is reported.
+        Sentry.captureException(error, {
+          tags: { phase: "listen-meet", classified: classifyJoinError(error) },
+          contexts: sessionContext(code, appCheck !== null),
+        });
+      },
+    );
+  }, [db, appCheck, liveCode]);
+  const peerPins =
+    meetPins !== null && meetPins.code === liveCode ? meetPins.pins : NO_PINS;
 
   /** Record a handshake failure once, in the shape the UI and caller need. */
   const fail = useCallback(
@@ -860,6 +946,7 @@ export function useLiveSession(uid: string): LiveSession {
     ownName,
     participants,
     claimedSlots,
+    peerPins,
     createSession,
     joinSession,
     setOwnName,

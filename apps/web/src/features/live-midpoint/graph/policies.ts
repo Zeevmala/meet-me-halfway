@@ -16,7 +16,8 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
-import type { RouteInfo, RouteSet, TravelProfile } from "./types";
+import type { PinEvent, RouteInfo, RouteSet, TravelProfile } from "./types";
+import { samePin } from "./nodes";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -180,6 +181,77 @@ export function createPresencePolicy(
           lng: input.position.lng,
           accuracy: input.accuracy,
           name: input.name,
+        },
+        signal,
+      );
+      return result.ok ? ok(null) : err(result.error);
+    },
+  };
+}
+
+export interface MeetInput {
+  readonly code: string;
+  /** The claimed slot — the RTDB key this copy lands on. */
+  readonly slot: ParticipantIndex;
+  readonly pin: PinEvent;
+}
+
+/**
+ * How often an unchanged copy of the meeting point is written again.
+ *
+ * Nothing else would write it. A pin changes when somebody acts, which is
+ * rare, and the server deletes this copy whenever the connection drops — a
+ * dropped connection that comes back, with the page still open, leaves the
+ * copy gone and nothing new to write. Position has its heartbeat for the
+ * same reason; this is the pin's, slower, since nobody judges it by its age.
+ */
+export const MEET_REFRESH_MS = 30_000;
+
+/**
+ * This device's copy of the meeting point.
+ *
+ * No debounce: a pin is set by a tap, usually the tap on Navigate, and the
+ * page is on its way to the background as it lands. A write held back three
+ * seconds, as position's is, would wait for a page the phone had already
+ * suspended — and the pin would never leave it.
+ */
+export function createMeetPolicy(
+  ports: GraphPorts,
+): ResourcePolicy<MeetInput, null> {
+  return {
+    id: "meet",
+    debounceMs: 0,
+    maxWaitMs: 0,
+    timeoutMs: 10_000,
+    staleAfterMs: 0,
+    retryAttempts: 3,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 5,
+      baseOpenMs: 30_000,
+      maxOpenMs: 60_000,
+      multiplier: 2,
+    },
+    admits: (previous, next, previousAtMs, nowMs) =>
+      previous.code !== next.code ||
+      previous.slot !== next.slot ||
+      !samePin(previous.pin, next.pin) ||
+      nowMs - previousAtMs >= MEET_REFRESH_MS,
+    identity: (input) =>
+      `m:${input.code}:${input.slot}:${input.pin.at}:${input.pin.by}:` +
+      `${input.pin.position.lat},${input.pin.position.lng}`,
+    run: async (input, signal) => {
+      const { pin } = input;
+      const result = await ports.writeMeet(
+        input.code,
+        input.slot,
+        {
+          at: pin.at,
+          by: pin.by,
+          byName: pin.byName,
+          lat: pin.position.lat,
+          lng: pin.position.lng,
+          name: pin.name,
         },
         signal,
       );

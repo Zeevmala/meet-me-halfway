@@ -652,6 +652,147 @@ describe("reads — locations for the people in the session only", () => {
   });
 });
 
+describe("meet — the meeting point, for the people in the session", () => {
+  const HAIFA = { lat: 32.794, lng: 34.99 };
+
+  /** A meeting point as a device publishes it: set now, by `by`. */
+  function pin(by: number, extra: Record<string, unknown> = {}) {
+    return { at: Date.now(), by, ...HAIFA, ...extra };
+  }
+
+  beforeEach(async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+  });
+
+  it("lets a slot holder publish it under its own slot", async () => {
+    await assertSucceeds(
+      as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0)),
+    );
+    await assertSucceeds(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/meet/1`)
+        .set(pin(1, { name: "Cafe Nord", byName: "Dana" })),
+    );
+  });
+
+  // A copy of what someone else set: how a meeting point outlives whoever
+  // set it leaving.
+  it("lets a holder publish a copy of a meeting point someone else set", async () => {
+    await assertSucceeds(
+      as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(pin(0)),
+    );
+  });
+
+  it("refuses one under a slot it does not hold", async () => {
+    await assertFails(as(CREATOR).ref(`sessions/${CODE}/meet/1`).set(pin(0)));
+    await assertFails(
+      as(JOINERS[1]).ref(`sessions/${CODE}/meet/2`).set(pin(2)),
+    );
+    await assertFails(
+      as(JOINERS[1]).ref(`sessions/${CODE}/meet/5`).set(pin(4)),
+    );
+  });
+
+  // Where the group is meeting is as much theirs as where they are.
+  it("lets every slot holder read it, and nobody else", async () => {
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0));
+
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/meet`).get());
+    await assertSucceeds(as(JOINERS[0]).ref(`sessions/${CODE}/meet`).get());
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/meet`).get());
+    await assertFails(as(SIXTH).ref(`sessions/${CODE}/meet/0`).get());
+    await assertFails(
+      testEnv
+        .unauthenticatedContext()
+        .database()
+        .ref(`sessions/${CODE}/meet`)
+        .get(),
+    );
+  });
+
+  it("refuses one that is not a meeting point", async () => {
+    const ref = as(CREATOR).ref(`sessions/${CODE}/meet/0`);
+    const noTime: Record<string, unknown> = pin(0);
+    delete noTime.at;
+    const noLat: Record<string, unknown> = pin(0);
+    delete noLat.lat;
+    for (const bad of [
+      noTime,
+      noLat,
+      { ...pin(0), lat: 91 },
+      { ...pin(0), lng: -181 },
+      { ...pin(0), by: 5 },
+      { ...pin(0), by: 1.5 },
+      { ...pin(0), by: "0" },
+      { ...pin(0), at: "now" },
+      { ...pin(0), name: "" },
+      { ...pin(0), name: "x".repeat(81) },
+      { ...pin(0), name: 7 },
+      { ...pin(0), byName: "" },
+      { ...pin(0), byName: "x".repeat(31) },
+      { ...pin(0), byName: 7 },
+      { ...pin(0), ts: Date.now() },
+    ]) {
+      await assertFails(ref.set(bad));
+    }
+  });
+
+  // Of all the copies, the latest `at` stands. A time far ahead would hold
+  // a meeting point against everyone else's for as long as it lasted.
+  it("refuses one set further ahead than clocks disagree by", async () => {
+    const ref = as(CREATOR).ref(`sessions/${CODE}/meet/0`);
+
+    await assertSucceeds(ref.set(pin(0, { at: Date.now() + 30_000 })));
+    await assertFails(ref.set(pin(0, { at: Date.now() + 5 * 60_000 })));
+  });
+
+  it("refuses one set before the session was", async () => {
+    let created = 0;
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      created = (
+        await ctx.database().ref(`sessions/${CODE}/created`).get()
+      ).val() as number;
+    });
+
+    await assertFails(
+      as(CREATOR)
+        .ref(`sessions/${CODE}/meet/0`)
+        .set(pin(0, { at: created - 1 })),
+    );
+  });
+
+  it("lets the holder clear its own, and nobody clear another's", async () => {
+    await as(CREATOR).ref(`sessions/${CODE}/meet/0`).set(pin(0));
+    await as(JOINERS[0]).ref(`sessions/${CODE}/meet/1`).set(pin(0));
+
+    await assertFails(as(JOINERS[0]).ref(`sessions/${CODE}/meet/0`).remove());
+    await assertSucceeds(as(CREATOR).ref(`sessions/${CODE}/meet/0`).remove());
+  });
+
+  // Like a position: nothing new once the 24 hours are up, but the copy can
+  // still be taken down — by the client, or by its onDisconnect.
+  it("refuses a new one in an expired session, and still lets the holder clear it", async () => {
+    await testEnv.clearDatabase();
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .database()
+        .ref(`sessions/${CODE}`)
+        .set({
+          created: Date.now() - 25 * 60 * 60 * 1000,
+          creatorUid: CREATOR,
+          slots: { 0: CREATOR },
+          meet: {
+            0: { at: Date.now() - 24 * 60 * 60 * 1000, by: 0, ...HAIFA },
+          },
+        });
+    });
+    const ref = as(CREATOR).ref(`sessions/${CODE}/meet/0`);
+
+    await assertFails(ref.set(pin(0)));
+    await assertSucceeds(ref.remove());
+  });
+});
+
 describe("timestamps — the server's clock, not the device's", () => {
   // `created` set the 24-hour window and `ts` every peer's idea of who is
   // stale; both were whatever the device said. A client could backdate or

@@ -23,20 +23,30 @@ import {
   deriveMidpoint,
   deriveDestination,
   derivePhase,
+  latestPin,
+  sessionCode,
+  sessionSlot,
 } from "./nodes";
 import {
   createVenuePolicy,
   createRoutePolicy,
   createPresencePolicy,
+  createMeetPolicy,
   PRESENCE_HEARTBEAT_MS,
   routesAnswer,
 } from "./policies";
-import type { PresenceInput, RouteInput, VenueInput } from "./policies";
+import type {
+  MeetInput,
+  PresenceInput,
+  RouteInput,
+  VenueInput,
+} from "./policies";
 import type { GraphPorts } from "./ports";
 import type {
   ExpiryResult,
   GraphSources,
   LivenessResult,
+  PinEvent,
   RouteInfo,
   RouteSet,
   SessionLifecycle,
@@ -77,6 +87,8 @@ export const DEFAULT_SOURCES: GraphSources = {
   ownAccuracy: null,
   participants: [],
   selectedPlace: null,
+  ownPin: null,
+  peerPins: [],
   travelProfile: "driving",
   ownUid: null,
   ownName: "",
@@ -114,6 +126,18 @@ export interface GraphSnapshot {
   readonly phase: SessionPhase;
   /** Own location is not reaching RTDB; peers will start seeing us as stale. */
   readonly presenceFailed: boolean;
+  /**
+   * The meeting point somebody set, or `null` while there is none and the
+   * destination is the live midpoint (or this device's pick).
+   */
+  readonly pin: PinEvent | null;
+  /**
+   * By slot: whether that slot has been on the map at some point while this
+   * page was open, own slot excluded. A claim is never released, so this is
+   * how a device that shared and then left is told from one that joined and
+   * never shared.
+   */
+  readonly seenSharing: readonly boolean[];
 }
 
 export interface GraphRuntime {
@@ -125,6 +149,12 @@ export interface GraphRuntime {
    * render, not two.
    */
   readonly setSources: (patch: Partial<GraphSources>) => void;
+  /**
+   * Set the meeting point for everyone, as this device's slot, now. Later
+   * than any pin this device knows, so it is the one that stands. Ignored
+   * while there is no session slot to set it as.
+   */
+  readonly setMeetingPoint: (position: LatLng, name: string | null) => void;
   readonly dispose: () => void;
   /** True once disposed; the React adapter uses this to detect StrictMode's
    * simulated unmount and stand up a replacement. */
@@ -177,6 +207,10 @@ export function createRuntime(
     createPresencePolicy(ports),
     ports,
   );
+  const meet: Resource<MeetInput, null> = createResource(
+    createMeetPolicy(ports),
+    ports,
+  );
 
   // Memo cells. Each holds the previous output so an unchanged computation
   // returns the identical reference and the snapshot stays stable — which
@@ -201,6 +235,15 @@ export function createRuntime(
   // used to be the session hook's, and a write still retrying in the graph
   // put back a position the hook had just removed.
   let published: { code: string; slot: ParticipantIndex } | null = null;
+  // The meeting point: the latest pin this device has seen in this session,
+  // and where it last published its own copy of it.
+  let pin: PinEvent | null = null;
+  let pinCode: string | null = null;
+  // The other slots seen on the map since the session went live: a fold,
+  // like the pin, since those who left are no longer there to see.
+  let seenSharing: readonly boolean[] = NO_FLAGS;
+  let seenCode: string | null = null;
+  let meetPublished: { code: string; slot: ParticipantIndex } | null = null;
   // Positions the routes are computed from, and the routes published from
   // them — both memoised so an unchanged roster keeps its references.
   let countedFor: SlotVector | null = null;
@@ -227,6 +270,8 @@ export function createRuntime(
     travelProfile: sources.travelProfile,
     phase: "idle",
     presenceFailed: false,
+    pin: null,
+    seenSharing: NO_FLAGS,
   };
 
   let disposed = false;
@@ -300,6 +345,13 @@ export function createRuntime(
     published = null;
   }
 
+  /** Delete this device's copy of the meeting point, once it is not publishing one. */
+  function withdrawMeet(): void {
+    if (meetPublished === null) return;
+    ports.removeMeet(meetPublished.code, meetPublished.slot);
+    meetPublished = null;
+  }
+
   /** Keep one heartbeat wake armed while own position is being published. */
   function armHeartbeat(publishing: boolean): void {
     if (!publishing) {
@@ -356,6 +408,7 @@ export function createRuntime(
   function compute(): void {
     let nextDestination: LatLng | null = null;
     let nextSelected: RankedVenue | null = null;
+    let publishing = false;
 
     // Walk the declared order so the edge map governs execution rather than
     // merely documenting it. noFallthroughCasesInSwitch keeps this exhaustive.
@@ -378,6 +431,18 @@ export function createRuntime(
         case "slots": {
           const next = buildSlotVector(sources, liveness);
           if (!sameSlots(next, slots)) slots = next;
+          const code = sessionCode(sources.session);
+          if (code !== seenCode) {
+            seenCode = code;
+            seenSharing = NO_FLAGS;
+          }
+          let seen: boolean[] | null = null;
+          for (const slot of slots.occupied) {
+            if (slot === slots.ownSlot || seenSharing[slot] === true) continue;
+            seen ??= [...seenSharing];
+            seen[slot] = true;
+          }
+          if (seen !== null) seenSharing = seen;
           break;
         }
         case "presence": {
@@ -414,12 +479,44 @@ export function createRuntime(
             });
             if (published === null) published = { code, slot };
             armHeartbeat(true);
+            publishing = true;
           } else {
             // However it stopped — location off, the session lost, expired
             // or closed — what was published comes down here.
             presence.request(null);
             armHeartbeat(false);
             withdrawPublished();
+          }
+          break;
+        }
+        case "pin": {
+          // One session's pins say nothing about another's.
+          const code = sessionCode(sources.session);
+          if (code !== null && code !== pinCode) {
+            pinCode = code;
+            pin = null;
+          }
+          pin = latestPin(pin, [sources.ownPin, ...sources.peerPins]);
+          break;
+        }
+        case "meet": {
+          // Published alongside own position, and taken down with it: it is
+          // a copy of something the others already have, but whoever stops
+          // sharing stops sharing everything.
+          const session = sources.session;
+          if (publishing && pin !== null && session.kind === "live") {
+            const { code, slot } = session;
+            if (
+              meetPublished !== null &&
+              (meetPublished.code !== code || meetPublished.slot !== slot)
+            ) {
+              withdrawMeet();
+            }
+            meet.request({ code, slot, pin });
+            if (meetPublished === null) meetPublished = { code, slot };
+          } else {
+            meet.request(null);
+            withdrawMeet();
           }
           break;
         }
@@ -471,6 +568,7 @@ export function createRuntime(
             ranked,
             sources.selectedPlace,
             midpoint,
+            pin,
           );
           nextDestination = result.destination;
           nextSelected = result.selectedVenue;
@@ -509,6 +607,8 @@ export function createRuntime(
             travelProfile: sources.travelProfile,
             phase,
             presenceFailed: presenceState.status === "failed",
+            pin,
+            seenSharing,
           };
           if (
             next.slots !== snapshot.slots ||
@@ -521,7 +621,9 @@ export function createRuntime(
             next.routesDegraded !== snapshot.routesDegraded ||
             next.travelProfile !== snapshot.travelProfile ||
             next.phase !== snapshot.phase ||
-            next.presenceFailed !== snapshot.presenceFailed
+            next.presenceFailed !== snapshot.presenceFailed ||
+            next.pin !== snapshot.pin ||
+            next.seenSharing !== snapshot.seenSharing
           ) {
             snapshot = next;
             notify();
@@ -552,6 +654,7 @@ export function createRuntime(
   venues.subscribe(tick);
   routes.subscribe(tick);
   presence.subscribe(tick);
+  meet.subscribe(tick);
 
   function setSources(patch: Partial<GraphSources>): void {
     if (disposed) return;
@@ -567,6 +670,21 @@ export function createRuntime(
     tick();
   }
 
+  function setMeetingPoint(position: LatLng, name: string | null): void {
+    if (disposed) return;
+    const slot = sessionSlot(sources.session);
+    if (slot === null) return;
+    const serverNowMs = Math.round(ports.now() + sources.serverTimeOffsetMs);
+    // Later than every pin this device knows, whatever its clock says. A tap
+    // is the newest decision there is, and on a clock running a little
+    // behind the device that set the current pin, "now" would lose to it.
+    const at = Math.max(serverNowMs, pin === null ? 0 : pin.at + 1);
+    // An empty name is no name: the rules refuse one, and "Set by " says
+    // nothing.
+    const byName = sources.ownName.trim() === "" ? null : sources.ownName;
+    setSources({ ownPin: { at, by: slot, byName, position, name } });
+  }
+
   // Seed derived state from the initial sources.
   tick();
 
@@ -577,6 +695,7 @@ export function createRuntime(
       return () => listeners.delete(listener);
     },
     setSources,
+    setMeetingPoint,
     dispose: () => {
       disposed = true;
       livenessWake.cancel();
@@ -589,6 +708,8 @@ export function createRuntime(
       // a write in flight — then take down what was published.
       presence.dispose();
       withdrawPublished();
+      meet.dispose();
+      withdrawMeet();
       listeners.clear();
     },
     isDisposed: () => disposed,

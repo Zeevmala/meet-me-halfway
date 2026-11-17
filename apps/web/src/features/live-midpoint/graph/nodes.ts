@@ -14,10 +14,19 @@ import type {
   GraphSources,
   LivenessResult,
   ParticipantSource,
+  PinEvent,
   SessionLifecycle,
   SessionPhase,
   SlotVector,
 } from "./types";
+
+/**
+ * How far the live midpoint has to drift from the meeting point before the
+ * map shows it again and the card offers to move the meeting point there.
+ * Nearer than this the two are the same place to anyone driving to it — the
+ * same radius within which routes are not fetched again.
+ */
+export const PIN_DRIFT_M = 200;
 
 /** A participant whose last write is older than this is shown as stale. */
 export const STALE_THRESHOLD_MS = 30_000;
@@ -268,7 +277,22 @@ export function deriveDestination(
   venues: readonly RankedVenue[],
   picked: PlaceResult | null,
   midpoint: LatLng | null,
+  pin: PinEvent | null = null,
 ): DestinationResult {
+  // A pin is the group's decision, and it outranks this device's own pick:
+  // a pick shared with nobody cannot be where everyone is going. The list
+  // still highlights the venue the pin stands on, if it lists it.
+  if (pin !== null) {
+    return {
+      destination: pin.position,
+      selectedVenue:
+        venues.find(
+          (venue) =>
+            venue.location.lat === pin.position.lat &&
+            venue.location.lng === pin.position.lng,
+        ) ?? null,
+    };
+  }
   const shown =
     picked === null
       ? null
@@ -276,4 +300,58 @@ export function deriveDestination(
   return shown === null
     ? { destination: midpoint, selectedVenue: null }
     : { destination: shown.location, selectedVenue: shown };
+}
+
+/** Whether two pins are the same event. */
+export function samePin(a: PinEvent | null, b: PinEvent | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.at === b.at &&
+    a.by === b.by &&
+    a.byName === b.byName &&
+    a.position.lat === b.position.lat &&
+    a.position.lng === b.position.lng &&
+    a.name === b.name
+  );
+}
+
+/**
+ * Whether `a` was set after `b`. Later `at` wins; an exact tie, which
+ * needs two devices to pin in the same millisecond, goes to the lower slot,
+ * then the lower coordinates — any rule will do, so long as every device
+ * applies the same one and so settles on the same pin.
+ */
+function setAfter(a: PinEvent, b: PinEvent): boolean {
+  if (a.at !== b.at) return a.at > b.at;
+  if (a.by !== b.by) return a.by < b.by;
+  if (a.position.lat !== b.position.lat) {
+    return a.position.lat < b.position.lat;
+  }
+  return a.position.lng < b.position.lng;
+}
+
+/**
+ * The meeting point: the latest pin among the one already known and every
+ * candidate.
+ *
+ * A fold rather than a function of the current sources alone, because the
+ * pins seen are not all still there to see. The device that set one is
+ * usually the first to leave — it went to navigate — and its entry goes with
+ * it; the others go on publishing their copies, but a device that is left on
+ * its own has nobody else's to read. What it has seen, it keeps.
+ *
+ * Returns `current` itself when nothing newer arrived, so an unchanged
+ * meeting point keeps its reference.
+ */
+export function latestPin(
+  current: PinEvent | null,
+  candidates: readonly (PinEvent | null)[],
+): PinEvent | null {
+  let latest = current;
+  for (const candidate of candidates) {
+    if (candidate === null || samePin(candidate, latest)) continue;
+    if (latest === null || setAfter(candidate, latest)) latest = candidate;
+  }
+  return latest;
 }

@@ -36,9 +36,9 @@ let app: FirebaseApp;
 let db: Database;
 
 /** Read through the emulator's REST API, outside the client under test. */
-async function stored(): Promise<unknown> {
+async function stored(path: string = PATH): Promise<unknown> {
   const res = await fetch(
-    `http://${HOST}:${PORT}/${PATH}.json?ns=${NAMESPACE}`,
+    `http://${HOST}:${PORT}/${path}.json?ns=${NAMESPACE}`,
     {
       headers: { Authorization: "Bearer owner" },
     },
@@ -119,5 +119,43 @@ it("removes the position on every dropped connection, not just the first", async
 
   goOffline(db);
   await eventually(async () => (await stored()) === null, "second drop");
+  goOnline(db);
+});
+
+// The meeting point each device publishes is deleted the same way as its
+// position: privacy.html says nothing of the session's whereabouts outlives
+// the people in it.
+it("removes the copy of the meeting point on every dropped connection too", async () => {
+  const writer = createPresenceWriter(db);
+  const live = new AbortController().signal;
+  const meet = `sessions/${CODE}/meet/1`;
+  const pin = {
+    at: 1,
+    by: 0 as const,
+    byName: null,
+    lat: 32.79,
+    lng: 34.99,
+    name: null,
+  };
+
+  await writer.writeMeet(CODE, 1, pin, live);
+  await eventually(async () => (await stored(meet)) !== null, "first write");
+  // Without a name there is no name field: RTDB would refuse an undefined
+  // one, and the rules a null one.
+  expect(await stored(meet)).toEqual({ at: 1, by: 0, lat: 32.79, lng: 34.99 });
+
+  goOffline(db);
+  await eventually(async () => (await stored(meet)) === null, "first drop");
+
+  goOnline(db);
+  await connected(true);
+  await writer.writeMeet(CODE, 1, { ...pin, at: 2 }, live);
+  await eventually(
+    async () => (await stored(meet)) !== null,
+    "write after reconnect",
+  );
+
+  goOffline(db);
+  await eventually(async () => (await stored(meet)) === null, "second drop");
   goOnline(db);
 });

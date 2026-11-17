@@ -652,6 +652,41 @@
   opacity: 0.55;
 }
 
+/* Who set the meeting point: quiet, under its name. */
+.live-trip-pin {
+  font-size: 12px;
+  color: var(--live-text-muted);
+}
+
+.live-trip-move {
+  display: block;
+  margin-block-start: 6px;
+  padding: 4px 0;
+  min-height: 44px;
+  background: none;
+  border: none;
+  color: var(--live-green);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.live-trip-move:focus-visible {
+  outline: 2px solid var(--live-blue);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.live-nav-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--live-text-muted);
+  text-align: center;
+}
+
 .live-eta-hint {
   font-size: 11px;
   color: var(--live-text-muted);

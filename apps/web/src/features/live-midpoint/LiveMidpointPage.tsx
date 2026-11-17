@@ -19,7 +19,8 @@ import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import { CLOSED_SESSION, useLiveSession } from "./hooks/useLiveSession";
 import { useOverlayInsets } from "./hooks/useOverlayInsets";
 import { useGraph, useGraphRuntime } from "./graph/useGraph";
-import { sessionCode, sessionSlot } from "./graph/nodes";
+import { PIN_DRIFT_M, sessionCode, sessionSlot } from "./graph/nodes";
+import { haversineDistance } from "./lib/geo-math";
 import type { OtherParticipantView, TravelProfile } from "./graph/types";
 import { deriveScreen } from "./screen";
 import type { LocationTrouble, Screen, Sheet } from "./screen";
@@ -203,6 +204,7 @@ function LiveMidpointInner({
       ownPosition: geo.position,
       ownAccuracy: geo.accuracy,
       participants: session.participants,
+      peerPins: session.peerPins,
       ownUid: uid,
       ownName: session.ownName,
       serverTimeOffsetMs,
@@ -212,6 +214,7 @@ function LiveMidpointInner({
     uid,
     session.state,
     session.participants,
+    session.peerPins,
     session.ownName,
     geo.position,
     geo.accuracy,
@@ -223,12 +226,32 @@ function LiveMidpointInner({
   // a venue the graph had already stopped routing to. The pick goes in as the
   // place itself, so the graph can keep it listed once a search stops
   // returning it.
+  // Once a meeting point is set, picking a venue moves it there: the pick
+  // alone would be this device's, and a destination nobody else had.
   const handleSelectVenue = useCallback(
     (venue: RankedVenue | null) => {
       runtime.setSources({ selectedPlace: venue });
+      if (venue !== null && runtime.getSnapshot().pin !== null) {
+        runtime.setMeetingPoint(venue.location, venue.displayName);
+      }
     },
     [runtime],
   );
+
+  // Going is the decision. The first Navigate fixes the destination where it
+  // is, for everyone here: the live midpoint moved a kilometre for every two
+  // the others drove, and went with whoever left the page first. Read from
+  // the runtime, not from this render: the tap is what is current.
+  const handleNavigate = useCallback(() => {
+    const { pin, destination, selectedVenue } = runtime.getSnapshot();
+    if (pin !== null || destination === null) return;
+    runtime.setMeetingPoint(destination, selectedVenue?.displayName ?? null);
+  }, [runtime]);
+
+  const handleMovePin = useCallback(() => {
+    const { midpoint } = runtime.getSnapshot();
+    if (midpoint !== null) runtime.setMeetingPoint(midpoint, null);
+  }, [runtime]);
 
   const handleProfileChange = useCallback(
     (profile: TravelProfile) => {
@@ -301,6 +324,28 @@ function LiveMidpointInner({
     }
     return out;
   }, [slots, routes]);
+
+  // Who set the meeting point, as the card names them: `null` for this
+  // device. Their name as it is now while they are here, and as it was when
+  // they set it once they have gone — which is usually the case.
+  const { pin } = graph;
+  const pinView = useMemo(() => {
+    if (pin === null) return null;
+    const setBy =
+      pin.by === slots.ownSlot
+        ? null
+        : (slots.names[pin.by] ??
+          pin.byName ??
+          t("live.participant", { n: pin.by + 1 }));
+    return { setBy, name: pin.name };
+  }, [pin, slots]);
+
+  // The live midpoint has wandered from the meeting point far enough to be
+  // somewhere else: shown on the map, and offered as the new meeting point.
+  const pinDrifted =
+    pin !== null &&
+    graph.midpoint !== null &&
+    haversineDistance(pin.position, graph.midpoint) >= PIN_DRIFT_M;
 
   // ── Initialize: stream GPS, and create or join the session ──
   // Both effects are plain start/stop pairs with no run-once guard. They used
@@ -412,9 +457,10 @@ function LiveMidpointInner({
     session: session.state,
     geo: geo.status,
     ownPosition,
-    midpoint: graph.midpoint,
+    destination: graph.destination,
+    pinned: graph.pin !== null,
     claimedSlots: session.claimedSlots,
-    othersSharing: otherParticipants.length,
+    othersSeen: graph.seenSharing.filter(Boolean).length,
   });
 
   if (screen.kind === "ended") {
@@ -528,11 +574,14 @@ function LiveMidpointInner({
               ownPosition={sheet.ownPosition}
               ownRoute={routes[ownIndex] ?? null}
               otherParticipants={otherParticipants}
-              destination={graph.destination ?? sheet.midpoint}
+              destination={sheet.destination}
               travelProfile={graph.travelProfile}
               onProfileChange={handleProfileChange}
               selectedVenueName={graph.selectedVenue?.displayName ?? null}
               routesStale={graph.routesDegraded}
+              pin={pinView}
+              onMovePin={pinDrifted ? handleMovePin : null}
+              onNavigate={handleNavigate}
             />
           </>
         );
@@ -547,6 +596,7 @@ function LiveMidpointInner({
         routes={routeGeometries}
         venues={graph.venues}
         selectedVenue={graph.selectedVenue}
+        pinned={graph.pin?.position ?? null}
         insets={overlay.insets}
       />
 

@@ -15,7 +15,7 @@ import type { Result } from "../../../core/dag/result";
 import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
-import type { PresenceValue } from "../lib/presence-rtdb";
+import type { MeetValue, PresenceValue } from "../lib/presence-rtdb";
 import type { RouteInfo, TravelProfile } from "./types";
 
 export interface GraphPorts {
@@ -58,5 +58,17 @@ export interface GraphPorts {
    * backstop.
    */
   readonly removePresence: (code: string, slot: ParticipantIndex) => void;
+  /**
+   * Publish this device's copy of the meeting point at the claimed slot, and
+   * delete it. Removed with the position, by the node that removes that, and
+   * by the server's `onDisconnect` when the connection drops.
+   */
+  readonly writeMeet: (
+    code: string,
+    slot: ParticipantIndex,
+    value: MeetValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
+  readonly removeMeet: (code: string, slot: ParticipantIndex) => void;
   readonly placesEnabled: boolean;
 }

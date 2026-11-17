@@ -319,3 +319,86 @@ describe("MidpointCard", () => {
     expect(distance.tagName).toBe("BDI");
   });
 });
+
+describe("MidpointCard — the meeting point", () => {
+  it("says, before anyone goes, that navigating sets the meeting point", () => {
+    renderCard();
+
+    expect(screen.getByText("live.navigateSetsPoint")).toBeTruthy();
+  });
+
+  // Going is the decision: the page fixes the destination for everyone as a
+  // Navigate link is followed.
+  it("reports a tap on either Navigate link, and still follows it", () => {
+    const onNavigate = vi.fn();
+    renderCard({ onNavigate });
+
+    for (const name of ["live.navigateWaze", "live.navigateGoogle"]) {
+      const link = screen.getByRole("link", { name });
+      const followed = fireEvent.click(link);
+      // Not prevented: the navigation app opens as it did.
+      expect(followed).toBe(true);
+    }
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("titles the card as the meeting point, and says who set it", () => {
+    renderCard({ pin: { setBy: "Dana", name: null } });
+
+    expect(screen.getByText("live.meetingPoint")).toBeTruthy();
+    expect(screen.getByText('live.pinSetBy:{"name":"Dana"}')).toBeTruthy();
+    expect(screen.queryByText("live.midpoint")).toBeNull();
+    expect(screen.queryByText("live.navigateSetsPoint")).toBeNull();
+  });
+
+  it("says when it was this device that set it", () => {
+    renderCard({ pin: { setBy: null, name: null } });
+
+    expect(screen.getByText("live.pinSetByYou")).toBeTruthy();
+  });
+
+  // Set on a venue, it is the venue everyone sees, whatever this device has
+  // picked since.
+  it("names the venue it was set on, over this device's own pick", () => {
+    renderCard({
+      pin: { setBy: "Dana", name: "Cafe Nord" },
+      selectedVenueName: "Bar Two",
+    });
+
+    expect(screen.getByText('live.meetAt:{"name":"Cafe Nord"}')).toBeTruthy();
+    expect(screen.queryByText('live.meetAt:{"name":"Bar Two"}')).toBeNull();
+  });
+
+  it("offers to move it to the current midpoint only when told it can", () => {
+    const onMovePin = vi.fn();
+    const { rerender } = renderCard({ pin: { setBy: "Dana", name: null } });
+    expect(screen.queryByRole("button", { name: "live.movePin" })).toBeNull();
+
+    rerender(
+      <MidpointCard
+        ownIndex={0}
+        ownPosition={ownPosition}
+        ownRoute={null}
+        otherParticipants={[]}
+        destination={destination}
+        travelProfile="driving"
+        onProfileChange={vi.fn()}
+        selectedVenueName={null}
+        routesStale={false}
+        pin={{ setBy: "Dana", name: null }}
+        onMovePin={onMovePin}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "live.movePin" }));
+
+    expect(onMovePin).toHaveBeenCalledTimes(1);
+  });
+
+  // The others went to navigate; the meeting point did not go with them.
+  it("says nobody else is sharing when the card is down to this device", () => {
+    renderCard({ otherParticipants: [], pin: { setBy: "Dana", name: null } });
+
+    expect(screen.getByText("live.nobodyElse")).toBeTruthy();
+    expect(rows()).toHaveLength(1);
+  });
+});

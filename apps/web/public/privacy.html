@@ -77,7 +77,7 @@
       </header>
 
       <h1>Privacy Policy</h1>
-      <p class="muted">Last updated: November 16, 2026</p>
+      <p class="muted">Last updated: November 17, 2026</p>
 
       <p>
         Meet Me Halfway has no server of its own. It runs in your browser and uses the
@@ -133,6 +133,13 @@
           a random ID created by Firebase Anonymous Authentication. It is not linked to
           your name, email, phone number or any account.
         </li>
+        <li>
+          once somebody in the session has set the <strong>meeting point</strong>
+          &mdash; tapping Navigate sets it, and anyone can move it &mdash; your copy of
+          it: the place, when it was set, and the name of whoever set it. Every device
+          in the session keeps a copy, so the meeting point is still there for the
+          others after the person who set it has left.
+        </li>
       </ul>
       <p>
         In the database, each update replaces the one before it, so no history of where
@@ -168,8 +175,9 @@
       <h2>How long it is kept</h2>
       <ul>
         <li>
-          <strong>Your location and display name</strong> are kept until you stop
-          sharing. Closing the page or turning off location permission deletes them.
+          <strong>Your location, display name and copy of the meeting point</strong>
+          are kept until you stop sharing. Closing the page or turning off location
+          permission deletes them.
           If the page closes abruptly or your connection drops, the database deletes
           them as soon as it notices the connection has gone. If your connection comes
           back while the page is still open, the app starts sharing again.

@@ -6,6 +6,8 @@ import {
   deriveMidpoint,
   deriveDestination,
   derivePhase,
+  latestPin,
+  samePin,
   sessionCode,
   sessionSlot,
   DEPARTED_THRESHOLD_MS,
@@ -17,6 +19,7 @@ import type {
   GraphSources,
   LivenessResult,
   ParticipantSource,
+  PinEvent,
   SessionLifecycle,
 } from "./types";
 import type { LatLng } from "../lib/geo-math";
@@ -66,6 +69,8 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownAccuracy: 5,
     participants: [],
     selectedPlace: null,
+    ownPin: null,
+    peerPins: [],
     travelProfile: "driving",
     ownUid: "own-uid",
     ownName: "Me",
@@ -312,6 +317,135 @@ describe("deriveDestination", () => {
     expect(
       deriveDestination([], venue("v1", JERUSALEM), null).destination,
     ).toBeNull();
+  });
+});
+
+describe("deriveDestination — a pin", () => {
+  const pin: PinEvent = {
+    at: 5,
+    by: 1,
+    byName: null,
+    position: HAIFA,
+    name: null,
+  };
+
+  it("goes to the pin, not the midpoint", () => {
+    const result = deriveDestination([], null, TEL_AVIV, pin);
+
+    expect(result.destination).toEqual(HAIFA);
+    expect(result.selectedVenue).toBeNull();
+  });
+
+  // A pick is this device's alone; the pin is where everyone is going.
+  it("goes to the pin over this device's own pick", () => {
+    const listed = venue("v1", JERUSALEM);
+
+    const result = deriveDestination([listed], listed, TEL_AVIV, pin);
+
+    expect(result.destination).toEqual(HAIFA);
+    expect(result.selectedVenue).toBeNull();
+  });
+
+  it("highlights the listed venue the pin stands on", () => {
+    const listed = venue("v1", JERUSALEM);
+    const onVenue: PinEvent = { ...pin, position: JERUSALEM, name: "Cafe" };
+
+    const result = deriveDestination([listed], null, TEL_AVIV, onVenue);
+
+    expect(result.destination).toEqual(JERUSALEM);
+    expect(result.selectedVenue).toBe(listed);
+  });
+
+  it("is the pin even with no midpoint at all", () => {
+    expect(deriveDestination([], null, null, pin).destination).toEqual(HAIFA);
+  });
+});
+
+describe("latestPin", () => {
+  const first: PinEvent = {
+    at: 1_000,
+    by: 0,
+    byName: null,
+    position: TEL_AVIV,
+    name: null,
+  };
+  const second: PinEvent = {
+    at: 2_000,
+    by: 2,
+    byName: null,
+    position: HAIFA,
+    name: null,
+  };
+
+  it("is nothing until somebody sets one", () => {
+    expect(latestPin(null, [null])).toBeNull();
+    expect(latestPin(null, [])).toBeNull();
+  });
+
+  it("takes the pin with the latest time, in whatever order they arrive", () => {
+    expect(latestPin(null, [first, second])).toBe(second);
+    expect(latestPin(null, [second, first])).toBe(second);
+  });
+
+  // The device that set it is usually the first to go: it went to navigate,
+  // and its entry went with it. What was seen is kept.
+  it("keeps the pin it has once its candidates are gone", () => {
+    const held = latestPin(null, [second]);
+
+    expect(latestPin(held, [])).toBe(second);
+    expect(latestPin(held, [null])).toBe(second);
+  });
+
+  it("ignores an older pin arriving late", () => {
+    expect(latestPin(second, [first])).toBe(second);
+  });
+
+  // Copies of the same pin arrive from every device that holds one. A fresh
+  // object each time; it must not count as news.
+  it("keeps its reference when a copy of the same pin arrives", () => {
+    const copy: PinEvent = { ...second, position: { ...second.position } };
+
+    expect(latestPin(second, [copy])).toBe(second);
+  });
+
+  // Two pins in the same millisecond: every device must settle on the same
+  // one, whichever it heard first.
+  it("breaks an exact tie the same way on every device", () => {
+    const a: PinEvent = {
+      at: 3_000,
+      by: 1,
+      byName: null,
+      position: TEL_AVIV,
+      name: null,
+    };
+    const b: PinEvent = {
+      at: 3_000,
+      by: 3,
+      byName: null,
+      position: HAIFA,
+      name: null,
+    };
+
+    expect(latestPin(a, [b])).toBe(a);
+    expect(latestPin(b, [a])).toBe(a);
+  });
+});
+
+describe("samePin", () => {
+  const pin: PinEvent = {
+    at: 1,
+    by: 0,
+    byName: null,
+    position: TEL_AVIV,
+    name: "Cafe",
+  };
+
+  it("compares by value", () => {
+    expect(samePin(pin, { ...pin, position: { ...TEL_AVIV } })).toBe(true);
+    expect(samePin(pin, { ...pin, at: 2 })).toBe(false);
+    expect(samePin(pin, { ...pin, name: null })).toBe(false);
+    expect(samePin(pin, null)).toBe(false);
+    expect(samePin(null, null)).toBe(true);
   });
 });
 

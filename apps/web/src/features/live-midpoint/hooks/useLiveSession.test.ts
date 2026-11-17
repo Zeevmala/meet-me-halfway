@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { IDLE_SESSION, sessionReducer, useLiveSession } from "./useLiveSession";
+import {
+  IDLE_SESSION,
+  parsePins,
+  sessionReducer,
+  useLiveSession,
+} from "./useLiveSession";
 import type {
   SessionEvent,
   SessionFailure,
@@ -32,6 +37,10 @@ const mockOnValueUnsub = vi.fn();
 let slotsCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let slotsErrorCallback: ((err: Error) => void) | null = null;
 const mockSlotsUnsub = vi.fn();
+// …and so does the meeting point.
+let meetCallback: ((snap: { val: () => unknown }) => void) | null = null;
+let meetErrorCallback: ((err: Error) => void) | null = null;
+const mockMeetUnsub = vi.fn();
 
 vi.mock("firebase/database", () => ({
   onValue: (
@@ -43,6 +52,11 @@ vi.mock("firebase/database", () => ({
       slotsCallback = onSnap;
       slotsErrorCallback = onErr;
       return mockSlotsUnsub;
+    }
+    if (ref.path?.endsWith("/meet")) {
+      meetCallback = onSnap;
+      meetErrorCallback = onErr;
+      return mockMeetUnsub;
     }
     onValueCallback = onSnap;
     onValueErrorCallback = onErr;
@@ -165,6 +179,8 @@ beforeEach(() => {
   onValueErrorCallback = null;
   slotsCallback = null;
   slotsErrorCallback = null;
+  meetCallback = null;
+  meetErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
@@ -1261,6 +1277,90 @@ describe("useLiveSession", () => {
     });
   });
 
+  describe("peerPins", () => {
+    const PIN = { at: 1_000, by: 1, lat: 32.79, lng: 34.99 };
+
+    it("is empty, with nothing listening, until the session is live", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      expect(result.current.peerPins).toEqual([]);
+      expect(meetCallback).toBeNull();
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      expect(mockRef).toHaveBeenCalledWith(mockDb, "sessions/ABC234/meet");
+      act(() => {
+        meetCallback?.({ val: () => ({ "2": { ...PIN, name: "Cafe" } }) });
+      });
+      expect(result.current.peerPins).toEqual([
+        {
+          at: 1_000,
+          by: 1,
+          byName: null,
+          position: { lat: 32.79, lng: 34.99 },
+          name: "Cafe",
+        },
+      ]);
+    });
+
+    // A copy whose pin stands is still a pin to the graph, however many
+    // devices hold it.
+    it("reports every device's copy, its own included", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        meetCallback?.({ val: () => [PIN, PIN] });
+      });
+
+      expect(result.current.peerPins).toHaveLength(2);
+    });
+
+    it("keeps the pins seen, and reports it, when the meeting point stops being readable", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        meetCallback?.({ val: () => ({ "1": PIN }) });
+      });
+      const refusal = new Error("Permission denied");
+      act(() => {
+        meetErrorCallback?.(refusal);
+      });
+
+      expect(result.current.state.kind).toBe("live");
+      expect(result.current.peerPins).toHaveLength(1);
+      expect(mockCaptureException).toHaveBeenCalledWith(
+        refusal,
+        expect.objectContaining({
+          tags: expect.objectContaining({ phase: "listen-meet" }),
+        }),
+      );
+    });
+
+    it("detaches with the session, and describes no session once it is gone", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      act(() => {
+        meetCallback?.({ val: () => ({ "1": PIN }) });
+      });
+      act(() => {
+        result.current.close();
+      });
+
+      expect(mockMeetUnsub).toHaveBeenCalledTimes(1);
+      expect(result.current.peerPins).toEqual([]);
+    });
+  });
+
   describe("close", () => {
     it("closes the session and detaches the participants listener", async () => {
       const { result } = renderHook(() => useLiveSession(TEST_UID));
@@ -1436,6 +1536,67 @@ describe("useLiveSession", () => {
 });
 
 /** Every transition in ARCHITECTURE.md's session lifecycle, without React. */
+describe("parsePins", () => {
+  const PIN = { at: 1_000, by: 1, lat: 32.79, lng: 34.99 };
+
+  it("reads one pin per entry, in slot order", () => {
+    expect(
+      parsePins({
+        "3": { ...PIN, at: 3 },
+        "0": { ...PIN, at: 2, name: "Cafe" },
+      }),
+    ).toEqual([
+      {
+        at: 2,
+        by: 1,
+        byName: null,
+        position: { lat: 32.79, lng: 34.99 },
+        name: "Cafe",
+      },
+      {
+        at: 3,
+        by: 1,
+        byName: null,
+        position: { lat: 32.79, lng: 34.99 },
+        name: null,
+      },
+    ]);
+  });
+
+  it("is empty for nothing at all", () => {
+    expect(parsePins(null)).toEqual([]);
+    expect(parsePins("x")).toEqual([]);
+  });
+
+  // The rules hold every field to its type and range, but a snapshot is not
+  // the rules.
+  it("drops every entry that is not a well-formed pin", () => {
+    expect(
+      parsePins({
+        "5": PIN,
+        x: PIN,
+        "0": { ...PIN, at: "soon" },
+        "1": { ...PIN, by: 7 },
+        "2": { ...PIN, lat: 91 },
+        "3": { ...PIN, lng: Number.NaN },
+        "4": null,
+      }),
+    ).toEqual([]);
+  });
+
+  it("takes a blank name as no name", () => {
+    expect(parsePins({ "1": { ...PIN, name: "  " } })[0]?.name).toBeNull();
+    expect(parsePins({ "1": { ...PIN, byName: " " } })[0]?.byName).toBeNull();
+  });
+
+  // Whoever set it has usually gone by the time it is read.
+  it("reads the name of whoever set it", () => {
+    expect(parsePins({ "1": { ...PIN, byName: "Dana" } })[0]?.byName).toBe(
+      "Dana",
+    );
+  });
+});
+
 describe("sessionReducer", () => {
   const run = (...events: SessionEvent[]) =>
     events.reduce(sessionReducer, IDLE_SESSION);

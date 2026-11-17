@@ -25,9 +25,10 @@ function inputs(overrides: Partial<ScreenInputs> = {}): ScreenInputs {
     session: LIVE,
     geo: "watching",
     ownPosition: OWN,
-    midpoint: MIDPOINT,
+    destination: MIDPOINT,
+    pinned: false,
     claimedSlots: 2,
-    othersSharing: 1,
+    othersSeen: 1,
     ...overrides,
   };
 }
@@ -88,7 +89,7 @@ describe("deriveScreen — the sheet", () => {
           phase,
           session: { kind: phase, handshake: 1 },
           ownPosition: null,
-          midpoint: null,
+          destination: null,
           claimedSlots: 0,
         }),
       );
@@ -105,9 +106,9 @@ describe("deriveScreen — the sheet", () => {
     const screen = deriveScreen(
       inputs({
         phase: "waiting",
-        midpoint: null,
+        destination: null,
         claimedSlots: 3,
-        othersSharing: 0,
+        othersSeen: 0,
       }),
     );
     expect(screen).toEqual({
@@ -124,7 +125,7 @@ describe("deriveScreen — the sheet", () => {
   // places: invites went out to a session nobody else could join.
   it("waits without inviting once all five slots are claimed, however few are present", () => {
     const screen = deriveScreen(
-      inputs({ phase: "waiting", midpoint: null, claimedSlots: 5 }),
+      inputs({ phase: "waiting", destination: null, claimedSlots: 5 }),
     );
     expect(screen).toMatchObject({
       sheet: { kind: "waiting", code: CODE, full: true },
@@ -137,14 +138,14 @@ describe("deriveScreen — the sheet", () => {
   it("says it is locating, not waiting, when others are here and own position is not", () => {
     for (const phase of ["connected", "some_stale"] as const) {
       expect(
-        deriveScreen(inputs({ phase, ownPosition: null, midpoint: null })),
+        deriveScreen(inputs({ phase, ownPosition: null, destination: null })),
       ).toMatchObject({ kind: "map", sheet: { kind: "locating" } });
     }
   });
 
   it("is the meeting once own position and the midpoint are both known", () => {
     expect(deriveScreen(inputs({ phase: "some_stale" }))).toMatchObject({
-      sheet: { kind: "meeting", ownPosition: OWN, midpoint: MIDPOINT },
+      sheet: { kind: "meeting", ownPosition: OWN, destination: MIDPOINT },
       canInvite: true,
     });
   });
@@ -176,6 +177,33 @@ describe("deriveScreen — the sheet", () => {
   });
 });
 
+describe("deriveScreen — a meeting point", () => {
+  // The regression: whoever tapped Navigate first left the page for the
+  // navigation app, and the others' Navigate buttons went with them.
+  it("keeps the meeting with nobody else here once a meeting point is set", () => {
+    expect(
+      deriveScreen(inputs({ phase: "waiting", pinned: true })),
+    ).toMatchObject({
+      kind: "map",
+      sheet: { kind: "meeting", ownPosition: OWN, destination: MIDPOINT },
+    });
+  });
+
+  it("says it is locating, not waiting, when the meeting point is set and own position is not", () => {
+    expect(
+      deriveScreen(
+        inputs({ phase: "waiting", pinned: true, ownPosition: null }),
+      ),
+    ).toMatchObject({ kind: "map", sheet: { kind: "locating" } });
+  });
+
+  it("waits, with the code to share, while nobody else is here and nothing is set", () => {
+    expect(
+      deriveScreen(inputs({ phase: "waiting", pinned: false })),
+    ).toMatchObject({ sheet: { kind: "waiting", code: CODE } });
+  });
+});
+
 describe("deriveScreen — devices that joined without sharing", () => {
   // A slot is what lets a device read everyone's position. One that claims
   // a slot and publishes nothing was on nobody's map and in nobody's list:
@@ -183,20 +211,20 @@ describe("deriveScreen — devices that joined without sharing", () => {
   it("counts the claims that are neither this device nor anyone on the map", () => {
     expect(
       deriveScreen(
-        inputs({ phase: "waiting", claimedSlots: 2, othersSharing: 0 }),
+        inputs({ phase: "waiting", claimedSlots: 2, othersSeen: 0 }),
       ),
     ).toMatchObject({ kind: "map", unseenDevices: 1 });
     expect(
-      deriveScreen(inputs({ claimedSlots: 5, othersSharing: 2 })),
+      deriveScreen(inputs({ claimedSlots: 5, othersSeen: 2 })),
     ).toMatchObject({ unseenDevices: 2 });
   });
 
   it("is zero when everyone who joined is on the map", () => {
     expect(
-      deriveScreen(inputs({ claimedSlots: 2, othersSharing: 1 })),
+      deriveScreen(inputs({ claimedSlots: 2, othersSeen: 1 })),
     ).toMatchObject({ unseenDevices: 0 });
     expect(
-      deriveScreen(inputs({ claimedSlots: 5, othersSharing: 4 })),
+      deriveScreen(inputs({ claimedSlots: 5, othersSeen: 4 })),
     ).toMatchObject({ unseenDevices: 0 });
   });
 
@@ -204,10 +232,10 @@ describe("deriveScreen — devices that joined without sharing", () => {
   // with the participants listener.
   it("is zero until the claims are counted, and never negative", () => {
     expect(
-      deriveScreen(inputs({ claimedSlots: 0, othersSharing: 0 })),
+      deriveScreen(inputs({ claimedSlots: 0, othersSeen: 0 })),
     ).toMatchObject({ unseenDevices: 0 });
     expect(
-      deriveScreen(inputs({ claimedSlots: 1, othersSharing: 2 })),
+      deriveScreen(inputs({ claimedSlots: 1, othersSeen: 2 })),
     ).toMatchObject({ unseenDevices: 0 });
   });
 
@@ -218,7 +246,7 @@ describe("deriveScreen — devices that joined without sharing", () => {
           phase: "joining",
           session: { kind: "joining", handshake: 1 },
           claimedSlots: 3,
-          othersSharing: 0,
+          othersSeen: 0,
         }),
       ),
     ).toMatchObject({ unseenDevices: 0 });
@@ -230,7 +258,7 @@ describe("deriveScreen — location trouble", () => {
   // tore down the watch that was still acquiring.
   it("draws a timeout as a banner over the map, leaving the sheet as it is", () => {
     const screen = deriveScreen(
-      inputs({ geo: "timeout", ownPosition: null, midpoint: null }),
+      inputs({ geo: "timeout", ownPosition: null, destination: null }),
     );
     expect(screen).toMatchObject({
       kind: "map",

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { createVenuePolicy, createRoutePolicy, routesAnswer } from "./policies";
-import type { RouteInput, VenueInput } from "./policies";
+import {
+  createMeetPolicy,
+  createVenuePolicy,
+  createRoutePolicy,
+  MEET_REFRESH_MS,
+  routesAnswer,
+} from "./policies";
+import type { MeetInput, RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
 import type { LatLng } from "../lib/geo-math";
 import { ok, err } from "../../../core/dag/result";
@@ -22,6 +28,8 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     fetchRoute: vi.fn().mockResolvedValue(ok(null)),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     removePresence: vi.fn(),
+    writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
+    removeMeet: vi.fn(),
     placesEnabled: true,
     ...overrides,
   };
@@ -214,6 +222,78 @@ describe("route policy", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe("RATE_LIMITED");
+  });
+});
+
+describe("meet policy", () => {
+  const input: MeetInput = {
+    code: "ABC234",
+    slot: 1,
+    pin: { at: 1_000, by: 0, byName: null, position: TEL_AVIV, name: null },
+  };
+
+  // Set by a tap on Navigate, as the page goes to the background: a write
+  // held back by a debounce would wait on a page the phone had suspended.
+  it("writes at once, with no debounce", () => {
+    const policy = createMeetPolicy(makePorts());
+
+    expect(policy.debounceMs).toBe(0);
+    expect(policy.maxWaitMs).toBe(0);
+  });
+
+  it("admits a new pin, and nothing else, until the refresh is due", () => {
+    const policy = createMeetPolicy(makePorts());
+    const moved = { ...input, pin: { ...input.pin, at: 2_000 } };
+    const copy = { ...input, pin: { ...input.pin, position: { ...TEL_AVIV } } };
+
+    expect(policy.admits(input, moved, 0, 1_000)).toBe(true);
+    expect(policy.admits(input, copy, 0, 1_000)).toBe(false);
+  });
+
+  // The server deletes this copy whenever the connection drops; a page that
+  // reconnects has nothing new to write, so the copy is written again.
+  it("admits the same pin again once the refresh is due", () => {
+    const policy = createMeetPolicy(makePorts());
+
+    expect(policy.admits(input, input, 0, MEET_REFRESH_MS)).toBe(true);
+  });
+
+  it("writes the pin's fields under the claimed slot", async () => {
+    const ports = makePorts();
+    const policy = createMeetPolicy(ports);
+
+    await policy.run(
+      { ...input, pin: { ...input.pin, name: "Cafe" } },
+      new AbortController().signal,
+    );
+
+    expect(ports.writeMeet).toHaveBeenCalledWith(
+      "ABC234",
+      1,
+      {
+        at: 1_000,
+        by: 0,
+        byName: null,
+        lat: TEL_AVIV.lat,
+        lng: TEL_AVIV.lng,
+        name: "Cafe",
+      },
+      expect.anything(),
+    );
+  });
+
+  it("reports a failed write", async () => {
+    const policy = createMeetPolicy(
+      makePorts({
+        writeMeet: vi
+          .fn()
+          .mockResolvedValue(err({ kind: "DENIED", detail: "denied" })),
+      }),
+    );
+
+    const result = await policy.run(input, new AbortController().signal);
+
+    expect(result.ok).toBe(false);
   });
 });
 

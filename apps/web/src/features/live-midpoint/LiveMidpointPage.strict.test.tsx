@@ -38,6 +38,7 @@ vi.mock("./hooks/useLiveSession", async (importOriginal) => ({
     ownName: "Me",
     participants: [],
     claimedSlots: 1,
+    peerPins: [],
     createSession: mockCreateSession,
     joinSession: mockJoinSession,
     setOwnName: vi.fn(),
@@ -56,6 +57,8 @@ const testPorts: GraphPorts = {
   fetchRoute: vi.fn(),
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
   removePresence: vi.fn(),
+  writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
+  removeMeet: vi.fn(),
   placesEnabled: false,
 };
 

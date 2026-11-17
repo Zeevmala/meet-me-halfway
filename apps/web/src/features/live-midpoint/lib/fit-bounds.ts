@@ -23,6 +23,7 @@ export function fitSignature(
   participants: readonly MapParticipant[],
   midpoint: LatLng | null,
   selectedVenue: RankedVenue | null,
+  pinned: LatLng | null = null,
 ): Map<string, LatLng> {
   const signature = new Map<string, LatLng>();
   for (const participant of participants) {
@@ -32,6 +33,9 @@ export function fitSignature(
   if (selectedVenue !== null) {
     signature.set(`venue:${selectedVenue.id}`, selectedVenue.location);
   }
+  // Setting the meeting point is news, like a venue picked: it takes the
+  // camera back to frame everyone and it.
+  if (pinned !== null) signature.set("pin", pinned);
   return signature;
 }
 

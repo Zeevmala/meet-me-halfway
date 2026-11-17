@@ -40,6 +40,23 @@ export interface PresenceValue {
   readonly name: string;
 }
 
+/**
+ * This device's copy of the meeting point. `at` is when it was set, on the
+ * server's clock as the setter's device knew it; copies carry it unchanged,
+ * so every device compares the same instant.
+ */
+export interface MeetValue {
+  readonly at: number;
+  /** The slot of whoever set it. */
+  readonly by: ParticipantIndex;
+  /** Their display name when they set it. */
+  readonly byName: string | null;
+  readonly lat: number;
+  readonly lng: number;
+  /** The venue's name, when it was set on one. */
+  readonly name: string | null;
+}
+
 export interface PresenceWriter {
   readonly write: (
     code: string,
@@ -48,10 +65,32 @@ export interface PresenceWriter {
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
   readonly remove: (code: string, slot: ParticipantIndex) => void;
+  readonly writeMeet: (
+    code: string,
+    slot: ParticipantIndex,
+    value: MeetValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
+  readonly removeMeet: (code: string, slot: ParticipantIndex) => void;
 }
 
 export function presencePath(code: string, slot: ParticipantIndex): string {
   return `sessions/${code}/participants/${slot}`;
+}
+
+export function meetPath(code: string, slot: ParticipantIndex): string {
+  return `sessions/${code}/meet/${slot}`;
+}
+
+/** A failed write as the resource layer takes it: a rules denial is `DENIED`. */
+function classifyWriteFailure(thrown: unknown): ResourceError {
+  // A rules denial — say, once the session is past its 24 hours — was
+  // classified as a network failure: retried three times per write, and
+  // counted towards opening the breaker on a healthy database.
+  const failure = classifyThrown(thrown);
+  return failure.kind === "NETWORK" && PERMISSION_DENIED.test(failure.detail)
+    ? { kind: "DENIED", detail: failure.detail }
+    : failure;
 }
 
 export function createPresenceWriter(db: Database): PresenceWriter {
@@ -61,8 +100,8 @@ export function createPresenceWriter(db: Database): PresenceWriter {
   // it a departed participant lingers, keeps dragging the computed midpoint,
   // and leaves their last position in the database for good.
   //
-  // Only `participants/{slot}` is cleared, never the `slots/{i}` claim: the
-  // claim is write-once, so releasing it would both break that rule's
+  // Only `participants/{slot}` and `meet/{slot}` are cleared, never the
+  // `slots/{i}` claim: the claim is write-once, so releasing it would both break that rule's
   // guarantee and let a reconnecting participant come back a different colour.
   const published = new Set<string>();
 
@@ -97,50 +136,71 @@ export function createPresenceWriter(db: Database): PresenceWriter {
     });
   };
 
+  /**
+   * Send `value` to `path`, armed for removal on disconnect first. The
+   * resource aborts a superseded write, but `set` has already been sent over
+   * the WebSocket by then; the abort is reported so the epoch guard discards
+   * the result rather than counting it as a success.
+   */
+  const publish = async (
+    path: string,
+    value: object,
+    signal: AbortSignal,
+  ): Promise<Result<void, ResourceError>> => {
+    if (!published.has(path)) {
+      published.add(path);
+      arm(path);
+    }
+    watchConnection();
+
+    try {
+      await set(ref(db, path), value);
+      if (signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      return ok(undefined);
+    } catch (thrown) {
+      if (thrown instanceof DOMException && thrown.name === "AbortError") {
+        throw thrown;
+      }
+      return err(classifyWriteFailure(thrown));
+    }
+  };
+
+  const unpublish = (path: string): void => {
+    published.delete(path);
+    // RTDB sends this over the open WebSocket immediately; it completes even
+    // while the page is unloading.
+    remove(ref(db, path)).catch(() => {
+      /* best effort on unload — onDisconnect is the backstop */
+    });
+  };
+
   return {
-    write: async (code, slot, value, signal) => {
-      const path = presencePath(code, slot);
-      const ownRef = ref(db, path);
+    write: (code, slot, value, signal) =>
+      publish(
+        presencePath(code, slot),
+        { ...value, ts: serverTimestamp() },
+        signal,
+      ),
 
-      if (!published.has(path)) {
-        published.add(path);
-        arm(path);
-      }
-      watchConnection();
+    remove: (code, slot) => unpublish(presencePath(code, slot)),
 
-      try {
-        await set(ownRef, { ...value, ts: serverTimestamp() });
-        // The resource aborts a superseded write, but `set` has already been
-        // sent over the WebSocket by then; report the abort so the epoch guard
-        // discards the result rather than counting it as a success.
-        if (signal.aborted) {
-          throw new DOMException("Aborted", "AbortError");
-        }
-        return ok(undefined);
-      } catch (thrown) {
-        if (thrown instanceof DOMException && thrown.name === "AbortError") {
-          throw thrown;
-        }
-        // A rules denial — say, once the session is past its 24 hours — was
-        // classified as a network failure: retried three times per write,
-        // and counted towards opening the breaker on a healthy database.
-        const failure = classifyThrown(thrown);
-        return err(
-          failure.kind === "NETWORK" && PERMISSION_DENIED.test(failure.detail)
-            ? { kind: "DENIED", detail: failure.detail }
-            : failure,
-        );
-      }
+    writeMeet: (code, slot, value, signal) => {
+      // RTDB refuses an undefined property, and the rules a null one: a
+      // name is left out when there is none.
+      const { name, byName, ...rest } = value;
+      return publish(
+        meetPath(code, slot),
+        {
+          ...rest,
+          ...(byName === null ? {} : { byName }),
+          ...(name === null ? {} : { name }),
+        },
+        signal,
+      );
     },
 
-    remove: (code, slot) => {
-      const path = presencePath(code, slot);
-      published.delete(path);
-      // RTDB sends this over the open WebSocket immediately; it completes even
-      // while the page is unloading.
-      remove(ref(db, path)).catch(() => {
-        /* best effort on unload — onDisconnect is the backstop */
-      });
-    },
+    removeMeet: (code, slot) => unpublish(meetPath(code, slot)),
   };
 }

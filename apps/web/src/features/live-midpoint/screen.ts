@@ -22,7 +22,8 @@ export type Sheet =
   | {
       readonly kind: "meeting";
       readonly ownPosition: LatLng;
-      readonly midpoint: LatLng;
+      /** Where everyone is going: the meeting point, a pick, or the midpoint. */
+      readonly destination: LatLng;
     };
 
 /** Location trouble that does not stop anything, drawn as a banner. */
@@ -63,10 +64,17 @@ export interface ScreenInputs {
   readonly geo: GeoStatus;
   /** Own position as the slot vector holds it. */
   readonly ownPosition: LatLng | null;
-  readonly midpoint: LatLng | null;
+  /** The graph's destination: the meeting point, a pick, or the midpoint. */
+  readonly destination: LatLng | null;
+  /** Somebody set a meeting point, so there is somewhere to go alone too. */
+  readonly pinned: boolean;
   readonly claimedSlots: number;
-  /** Other participants with a position on the map; own is not counted. */
-  readonly othersSharing: number;
+  /**
+   * Other participants this page has seen on the map at some point, here or
+   * gone; own is not counted. Somebody who shared and then left — to
+   * navigate, usually — is not someone who joined to watch.
+   */
+  readonly othersSeen: number;
 }
 
 const NO_SHEET: Sheet = { kind: "none" };
@@ -111,19 +119,17 @@ function deriveSheet(
     case "joining":
       return { kind: inputs.phase };
     case "waiting":
-      return code === null ? NO_SHEET : { kind: "waiting", code, full };
+      if (code === null) return NO_SHEET;
+      // Nobody else is here, but the meeting point is: whoever tapped
+      // Navigate first is usually the first to leave the page, and the
+      // others' way there went with them.
+      return inputs.pinned
+        ? meetingOrLocating(inputs)
+        : { kind: "waiting", code, full };
     case "connected":
     case "some_stale":
       if (code === null) return NO_SHEET;
-      // Own slot and another make two points, so the midpoint exists
-      // whenever own position does: a missing one is a missing own fix.
-      return inputs.ownPosition !== null && inputs.midpoint !== null
-        ? {
-            kind: "meeting",
-            ownPosition: inputs.ownPosition,
-            midpoint: inputs.midpoint,
-          }
-        : { kind: "locating" };
+      return meetingOrLocating(inputs);
     // `lost`, `expired` and `failed` reach here only in the render before the
     // graph takes the session that ended them; endedSession covers them from
     // the next one.
@@ -137,7 +143,11 @@ function deriveSheet(
 }
 
 /**
- * Claims, less this device's own, less the others who are on the map.
+ * Claims, less this device's own, less the others it has seen on the map.
+ *
+ * Counting only those on the map now named everyone who had gone to
+ * navigate as a device watching unseen — once a meeting point keeps the page
+ * going after the others leave, that was every meeting.
  *
  * Zero until the claims have been counted (`claimedSlots` is 0 until the
  * live session answers), and never negative: the two listeners it is fed by
@@ -145,7 +155,23 @@ function deriveSheet(
  */
 function unseenDevices(inputs: ScreenInputs, code: string | null): number {
   if (code === null) return 0;
-  return Math.max(0, inputs.claimedSlots - 1 - inputs.othersSharing);
+  return Math.max(0, inputs.claimedSlots - 1 - inputs.othersSeen);
+}
+
+/**
+ * The meeting card once own position and a destination are both known, else
+ * "Finding your location". With anyone else here the midpoint exists
+ * whenever own position does, and with a meeting point set the destination
+ * always does: either way a missing one is a missing own fix.
+ */
+function meetingOrLocating(inputs: ScreenInputs): Sheet {
+  return inputs.ownPosition !== null && inputs.destination !== null
+    ? {
+        kind: "meeting",
+        ownPosition: inputs.ownPosition,
+        destination: inputs.destination,
+      }
+    : { kind: "locating" };
 }
 
 function locationTrouble(geo: GeoStatus): LocationTrouble | null {

@@ -6,6 +6,7 @@ import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
 import type { ParticipantInfo, SessionState } from "./hooks/useLiveSession";
+import type { PinEvent } from "./graph/types";
 import { ok, err } from "../../core/dag/result";
 import { DEPARTED_THRESHOLD_MS, SESSION_TTL_MS } from "./graph/nodes";
 
@@ -74,6 +75,8 @@ const testPorts: GraphPorts = {
   // the same contract production does.
   writePresence: mockWritePresence,
   removePresence: mockPresenceRemove,
+  writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
+  removeMeet: vi.fn(),
   placesEnabled: false,
 };
 
@@ -107,6 +110,7 @@ interface RecordedMapProps {
   midpoint: unknown;
   venues: unknown;
   selectedVenue: unknown;
+  pinned: unknown;
   insets: unknown;
 }
 const liveMapProps: RecordedMapProps[] = [];
@@ -136,9 +140,26 @@ vi.mock("./components/WaitingCard", () => ({
 }));
 
 // ── Mock MidpointCard ──
+// Props recorded, so the meeting-point cases can see what the card is told
+// and press what it is given.
+interface RecordedCardProps {
+  destination: { lat: number; lng: number };
+  pin: { setBy: string | null; name: string | null } | null;
+  onMovePin: (() => void) | null;
+  onNavigate: () => void;
+}
+const cardProps: RecordedCardProps[] = [];
 vi.mock("./components/MidpointCard", () => ({
-  default: () => <div data-testid="midpoint-card">MidpointCard</div>,
+  default: (props: RecordedCardProps) => {
+    cardProps.push(props);
+    return <div data-testid="midpoint-card">MidpointCard</div>;
+  },
 }));
+const lastCard = (): RecordedCardProps => {
+  const props = cardProps[cardProps.length - 1];
+  if (props === undefined) throw new Error("the meeting card was not shown");
+  return props;
+};
 
 // ── Mock VenueListCard ──
 vi.mock("./components/VenueListCard", () => ({
@@ -185,6 +206,8 @@ function defaultSession() {
     participants: [] as ParticipantInfo[],
     // Own claim only. Claims are not the participants: they never shrink.
     claimedSlots: 1,
+    // Nobody has set a meeting point.
+    peerPins: [] as PinEvent[],
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
@@ -195,6 +218,7 @@ function defaultSession() {
 beforeEach(() => {
   vi.clearAllMocks();
   liveMapProps.length = 0;
+  cardProps.length = 0;
   mockSearchVenues.mockResolvedValue({ ok: true, value: [] });
   mockFetchRoute.mockResolvedValue({ ok: true, value: null });
   mockAuth.mockReturnValue({ status: "authenticated", uid: "test-uid" });
@@ -795,6 +819,38 @@ describe("LiveMidpointPage", () => {
     expect(screen.queryByText(/live\.unseenDevice/)).toBeNull();
   });
 
+  // A claim is never released. Somebody who shared and then left — gone to
+  // navigate, usually — was named as a device watching unseen.
+  it("says nothing of a device that shared and then left", () => {
+    const here = {
+      uid: "p1",
+      position: { lat: 31.77, lng: 35.21 },
+      accuracy: 15,
+      lastSeen: 0,
+      index: 1 as ParticipantIndex,
+      name: null,
+    };
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [here],
+      claimedSlots: 2,
+    });
+    const { rerender } = renderPage();
+
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [],
+      claimedSlots: 2,
+    });
+    rerender(
+      <ServicesProvider services={testServices}>
+        <LiveMidpointPage urlCode={null} />
+      </ServicesProvider>,
+    );
+
+    expect(screen.queryByText(/live\.unseenDevice/)).toBeNull();
+  });
+
   // The links were part of the waiting card, which a joiner never sees: they
   // go from "Connecting" straight to the meeting.
   it("keeps the privacy policy and terms under the meeting card", () => {
@@ -938,6 +994,115 @@ describe("LiveMidpointPage", () => {
 
     expect(screen.queryByTestId("midpoint-card")).toBeNull();
     expect(screen.getByTestId("waiting-card")).toBeTruthy();
+  });
+});
+
+describe("LiveMidpointPage — the meeting point", () => {
+  const PEER = {
+    uid: "p1",
+    position: { lat: 31.77, lng: 35.21 },
+    accuracy: 15,
+    lastSeen: 0,
+    index: 1 as ParticipantIndex,
+    name: "Dana",
+  };
+  const HAIFA = { lat: 32.794, lng: 34.99 };
+
+  it("goes to the live midpoint, with nobody named, until somebody sets one", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), participants: [PEER] });
+
+    renderPage();
+
+    expect(lastCard().pin).toBeNull();
+    expect(lastCard().onMovePin).toBeNull();
+  });
+
+  // Going is the decision: the destination stops moving with the others.
+  it("fixes the destination for everyone as Navigate is followed", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), participants: [PEER] });
+    renderPage();
+    const midpoint = lastCard().destination;
+
+    act(() => lastCard().onNavigate());
+
+    expect(lastCard().pin).toEqual({ setBy: null, name: null });
+    expect(lastCard().destination).toEqual(midpoint);
+  });
+
+  it("says who set it, by the name they share", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [PEER],
+      peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
+    });
+
+    renderPage();
+
+    expect(lastCard().pin).toEqual({ setBy: "Dana", name: null });
+    expect(lastCard().destination).toEqual(HAIFA);
+  });
+
+  // The regression: whoever tapped Navigate left the page for the navigation
+  // app, and the others' Navigate buttons went with them.
+  it("keeps the meeting card once everybody else has left", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [],
+      peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
+    });
+
+    renderPage();
+
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+    expect(lastCard().destination).toEqual(HAIFA);
+    // Unnamed and gone: their slot's label.
+    expect(lastCard().pin).toEqual({
+      setBy: 'live.participant:{"n":2}',
+      name: null,
+    });
+  });
+
+  // They are usually gone by the time anyone reads it, and their name went
+  // with their entry: "Set by P1" said nothing.
+  it("names someone who has left by the name they set it under", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [],
+      peerPins: [{ at: 5, by: 1, byName: "Dana", position: HAIFA, name: null }],
+    });
+
+    renderPage();
+
+    expect(lastCard().pin).toEqual({ setBy: "Dana", name: null });
+  });
+
+  it("offers to move it once the live midpoint has wandered, and moves it there", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [PEER],
+      peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
+    });
+    renderPage();
+    const move = lastCard().onMovePin;
+    if (move === null) throw new Error("no move offered");
+
+    act(() => move());
+
+    expect(lastCard().pin).toEqual({ setBy: null, name: null });
+    expect(lastCard().destination).not.toEqual(HAIFA);
+    expect(lastCard().onMovePin).toBeNull();
+  });
+
+  it("draws the meeting point on the map", () => {
+    mockSession.mockReturnValue({
+      ...defaultSession(),
+      participants: [PEER],
+      peerPins: [{ at: 5, by: 1, byName: null, position: HAIFA, name: null }],
+    });
+
+    renderPage();
+
+    expect(liveMapProps[liveMapProps.length - 1]?.pinned).toEqual(HAIFA);
   });
 });
 

@@ -18,6 +18,8 @@ export type NodeId =
   | "expiry"
   | "slots"
   | "presence"
+  | "pin"
+  | "meet"
   | "midpoint"
   | "phase"
   | "venues"
@@ -40,16 +42,24 @@ export const EDGES: EdgeMap = {
   // A write, and a sink: nothing derives from its value. It stops — and
   // removes what it published — once the session has expired.
   presence: ["expiry"],
+  // The meeting point somebody set: the latest pin seen, held for as long as
+  // the page is open. Reads sources only.
+  pin: [],
+  // A write, and a sink, like presence: this device's copy of the pin, for
+  // whoever arrives or comes back after the one who set it has gone.
+  meet: ["pin", "expiry", "presence"],
   midpoint: ["slots"],
   phase: ["slots", "liveness", "expiry", "presence"],
   venues: ["midpoint"],
-  destination: ["midpoint", "venues"],
+  destination: ["midpoint", "venues", "pin"],
   routes: ["slots", "destination"],
   frame: [
     "slots",
     "presence",
     "liveness",
     "expiry",
+    "pin",
+    "meet",
     "midpoint",
     "phase",
     "venues",

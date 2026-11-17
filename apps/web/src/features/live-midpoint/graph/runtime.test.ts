@@ -101,6 +101,8 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     fetchRoute: vi.fn().mockResolvedValue(ok(route(1000))),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     removePresence: vi.fn(),
+    writeMeet: vi.fn().mockResolvedValue(ok(undefined)),
+    removeMeet: vi.fn(),
     placesEnabled: true,
     ...overrides,
   };
@@ -1095,6 +1097,347 @@ describe("createRuntime — departed peers and stale routes", () => {
 
     await h.advance(10_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
+    r.dispose();
+  });
+});
+
+describe("createRuntime — the meeting point", () => {
+  /** Live in slot 0, sharing from Tel Aviv, with a peer in Jerusalem. */
+  function meeting(h: ReturnType<typeof createHarness>) {
+    const r = createRuntime(h.ports);
+    r.setSources({
+      session: LIVE,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 10,
+      participants: [peer(1, JERUSALEM)],
+    });
+    return r;
+  }
+
+  const HAIFA: LatLng = { lat: 32.794, lng: 34.99 };
+
+  it("goes to the live midpoint until somebody sets a meeting point", () => {
+    const h = createHarness();
+    const r = meeting(h);
+
+    expect(r.getSnapshot().pin).toBeNull();
+    expect(r.getSnapshot().destination).toEqual(r.getSnapshot().midpoint);
+    r.dispose();
+  });
+
+  it("fixes the destination where it is set, as this device's slot", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+
+    r.setMeetingPoint(midpoint, null);
+
+    const pin = r.getSnapshot().pin;
+    expect(pin).toMatchObject({
+      by: 0,
+      byName: null,
+      position: midpoint,
+      name: null,
+    });
+    expect(r.getSnapshot().destination).toEqual(midpoint);
+    r.dispose();
+  });
+
+  // The defect: the Navigate target was the live centroid, and moved a
+  // kilometre for every two the others drove.
+  it("keeps the destination where it was set as people move", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    const midpoint = r.getSnapshot().midpoint;
+    if (midpoint === null) throw new Error("no midpoint");
+    r.setMeetingPoint(midpoint, null);
+
+    r.setSources({ participants: [peer(1, HAIFA)] });
+
+    expect(r.getSnapshot().midpoint).not.toEqual(midpoint);
+    expect(r.getSnapshot().destination).toEqual(midpoint);
+    r.dispose();
+  });
+
+  // The defect: the others' Navigate buttons went with the midpoint the
+  // moment the person who had tapped Navigate left the page.
+  it("keeps the meeting point once everybody else has gone", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+
+    r.setSources({ participants: [], peerPins: [] });
+
+    expect(r.getSnapshot().midpoint).toBeNull();
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
+    expect(r.getSnapshot().pin).toMatchObject({
+      by: 1,
+      byName: null,
+      position: HAIFA,
+    });
+    r.dispose();
+  });
+
+  it("adopts a peer's pin, and routes everyone to it", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: "Cafe" },
+      ],
+    });
+    await h.advance(10_000);
+
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
+    const calls = vi.mocked(h.ports.fetchRoute).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[calls.length - 1][1]).toEqual(HAIFA);
+    r.dispose();
+  });
+
+  it("takes the newest pin, and ignores an older one arriving late", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 2_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: JERUSALEM, name: null },
+      ],
+    });
+
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
+    r.dispose();
+  });
+
+  // Clocks disagree. A tap on a device whose clock runs behind the one that
+  // set the current pin must still move it.
+  it("sets a pin later than the one it replaces, whatever this clock says", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 50_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+
+    r.setMeetingPoint(JERUSALEM, null);
+
+    expect(r.getSnapshot().pin?.at).toBe(50_001);
+    expect(r.getSnapshot().destination).toEqual(JERUSALEM);
+    r.dispose();
+  });
+
+  it("signs a pin with this device's name, and with none when it has none", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({ ownName: "Dana" });
+
+    r.setMeetingPoint(HAIFA, null);
+    expect(r.getSnapshot().pin?.byName).toBe("Dana");
+
+    r.setSources({ ownName: "  " });
+    r.setMeetingPoint(JERUSALEM, null);
+    expect(r.getSnapshot().pin?.byName).toBeNull();
+    r.dispose();
+  });
+
+  it("stamps a pin with the server's clock", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({ serverTimeOffsetMs: 7_000 });
+
+    r.setMeetingPoint(HAIFA, null);
+
+    expect(r.getSnapshot().pin?.at).toBe(7_000);
+    r.dispose();
+  });
+
+  it("sets nothing while there is no session slot to set it as", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports);
+
+    r.setMeetingPoint(HAIFA, null);
+
+    expect(r.getSnapshot().pin).toBeNull();
+    r.dispose();
+  });
+
+  // Whoever arrives or comes back after the setter has gone learns the pin
+  // from the copies the others publish.
+  it("publishes its copy of the pin at once, under its own slot", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: "Cafe" },
+      ],
+    });
+
+    await h.advance(0);
+
+    expect(h.ports.writeMeet).toHaveBeenCalledWith(
+      "ABC234",
+      0,
+      {
+        at: 1_000,
+        by: 1,
+        byName: null,
+        lat: HAIFA.lat,
+        lng: HAIFA.lng,
+        name: "Cafe",
+      },
+      expect.anything(),
+    );
+    r.dispose();
+  });
+
+  it("publishes nothing while nobody has set a meeting point", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+
+    await h.advance(60_000);
+
+    expect(h.ports.writeMeet).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Taken down with own position: whoever stops sharing stops sharing all of
+  // it, and it is deleted the same way.
+  it("removes its copy when location is turned off", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+    await h.advance(0);
+
+    r.setSources({ ownPosition: null });
+
+    expect(h.ports.removeMeet).toHaveBeenCalledWith("ABC234", 0);
+    // The pin itself stays: it is where the others are going.
+    expect(r.getSnapshot().pin).toMatchObject({ position: HAIFA });
+    r.dispose();
+  });
+
+  it("removes its copy when the page closes", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+    await h.advance(0);
+
+    r.setSources({ session: { kind: "closed" } });
+
+    expect(h.ports.removeMeet).toHaveBeenCalledWith("ABC234", 0);
+    r.dispose();
+  });
+
+  it("removes its copy when the runtime is disposed", async () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+    await h.advance(0);
+
+    r.dispose();
+
+    expect(h.ports.removeMeet).toHaveBeenCalledWith("ABC234", 0);
+  });
+
+  it("removes nothing it never published", () => {
+    const h = createHarness();
+    const r = meeting(h);
+
+    r.setSources({ session: { kind: "closed" } });
+    r.dispose();
+
+    expect(h.ports.removeMeet).not.toHaveBeenCalled();
+  });
+
+  it("keeps its reference while the same pin arrives again", () => {
+    const h = createHarness();
+    const r = meeting(h);
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: HAIFA, name: null },
+      ],
+    });
+    const before = r.getSnapshot();
+
+    r.setSources({
+      peerPins: [
+        { at: 1_000, by: 1, byName: null, position: { ...HAIFA }, name: null },
+        { at: 1_000, by: 1, byName: null, position: { ...HAIFA }, name: null },
+      ],
+    });
+
+    expect(r.getSnapshot()).toBe(before);
+    r.dispose();
+  });
+});
+
+describe("createRuntime — who has been seen sharing", () => {
+  it("remembers a slot after its participant has gone", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports);
+    r.setSources({
+      session: LIVE,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      participants: [peer(2, JERUSALEM)],
+    });
+    expect(r.getSnapshot().seenSharing[2]).toBe(true);
+
+    r.setSources({ participants: [] });
+
+    expect(r.getSnapshot().seenSharing[2]).toBe(true);
+    expect(r.getSnapshot().seenSharing.filter(Boolean)).toHaveLength(1);
+    r.dispose();
+  });
+
+  it("never counts this device's own slot", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports);
+    r.setSources({ session: LIVE, ownUid: "own-uid", ownPosition: TEL_AVIV });
+
+    expect(r.getSnapshot().seenSharing.some(Boolean)).toBe(false);
+    r.dispose();
+  });
+
+  it("keeps its reference while nobody new appears", () => {
+    const h = createHarness();
+    const r = createRuntime(h.ports);
+    r.setSources({
+      session: LIVE,
+      ownUid: "own-uid",
+      ownPosition: TEL_AVIV,
+      participants: [peer(2, JERUSALEM)],
+    });
+    const before = r.getSnapshot().seenSharing;
+
+    r.setSources({ participants: [peer(2, { lat: 31.78, lng: 35.22 })] });
+
+    expect(r.getSnapshot().seenSharing).toBe(before);
     r.dispose();
   });
 });

@@ -77,6 +77,37 @@ export type SessionLifecycle =
   | { readonly kind: "failed" }
   | { readonly kind: "closed" };
 
+/**
+ * A meeting point somebody in the session set.
+ *
+ * The midpoint is live: it moves whenever anyone does, and it is gone the
+ * moment the second-to-last person stops sharing — which is what tapping
+ * Navigate does on a phone, as the page goes to the background. So a
+ * destination the group had settled on drifted under them, and vanished for
+ * whoever was left. A pin is the decision, kept: the first Navigate sets one,
+ * and anyone can move it.
+ *
+ * Every device publishes the latest pin it knows in its own entry
+ * (`sessions/{code}/meet/{slot}`), which is deleted with its position, so a
+ * pin outlives any one person leaving and nothing of it outlives the session.
+ * Of all the pins a device has seen, the latest `at` wins.
+ */
+export interface PinEvent {
+  /** Server-clock ms at which it was set. The latest pin is the meeting point. */
+  readonly at: number;
+  /** The slot of whoever set it. */
+  readonly by: ParticipantIndex;
+  /**
+   * Their display name as it was when they set it. Kept with the pin because
+   * they are usually gone by the time anyone reads it, and their name went
+   * with their entry.
+   */
+  readonly byName: string | null;
+  readonly position: LatLng;
+  /** The venue's name when it was set on one, else `null`. */
+  readonly name: string | null;
+}
+
 /** What the UI renders. Derived — never stored. */
 export type SessionPhase =
   | "idle"
@@ -130,6 +161,14 @@ export interface GraphSources {
    * destination until it is cleared, even once a search no longer returns it.
    */
   readonly selectedPlace: PlaceResult | null;
+  /** The meeting point this device set last, if it set one. */
+  readonly ownPin: PinEvent | null;
+  /**
+   * The meeting point each participant's device last published, its own
+   * entry included: what the others have seen, kept by them as long as they
+   * are here.
+   */
+  readonly peerPins: readonly PinEvent[];
   readonly travelProfile: TravelProfile;
   readonly ownUid: string | null;
   readonly ownName: string;
@@ -176,6 +215,7 @@ export interface ExpiryResult {
 
 export interface DestinationResult {
   readonly destination: LatLng | null;
+  /** The listed venue the destination is, if it is one. */
   readonly selectedVenue: RankedVenue | null;
 }
 

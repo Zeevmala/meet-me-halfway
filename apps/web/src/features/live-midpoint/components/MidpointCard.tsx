@@ -34,6 +34,21 @@ interface MidpointCardProps {
   selectedVenueName: string | null;
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
+  /**
+   * The meeting point somebody set, if anyone has: who set it (`null` for
+   * this device), and the venue's name when it was set on one.
+   */
+  pin?: { readonly setBy: string | null; readonly name: string | null } | null;
+  /**
+   * Move the meeting point to the live midpoint, offered once the two have
+   * drifted apart; `null` while there is nothing to move it to.
+   */
+  onMovePin?: (() => void) | null;
+  /**
+   * Called as a Navigate link is followed. Going is the decision: the page
+   * fixes the meeting point for everyone here, if nobody has yet.
+   */
+  onNavigate?: () => void;
 }
 
 interface Row {
@@ -65,6 +80,9 @@ export default memo(function MidpointCard({
   onProfileChange,
   selectedVenueName,
   routesStale,
+  pin = null,
+  onMovePin = null,
+  onNavigate,
 }: MidpointCardProps) {
   const rows: Row[] = [
     {
@@ -100,10 +118,21 @@ export default memo(function MidpointCard({
       <div className="live-trip-head">
         <div className="live-trip-title">
           <span className="live-trip-dest">
-            {selectedVenueName
-              ? t("live.meetAt", { name: selectedVenueName })
-              : t("live.midpoint")}
+            {pin !== null
+              ? pin.name
+                ? t("live.meetAt", { name: pin.name })
+                : t("live.meetingPoint")
+              : selectedVenueName
+                ? t("live.meetAt", { name: selectedVenueName })
+                : t("live.midpoint")}
           </span>
+          {pin !== null && (
+            <span className="live-trip-pin">
+              {pin.setBy === null
+                ? t("live.pinSetByYou")
+                : t("live.pinSetBy", { name: pin.setBy })}
+            </span>
+          )}
           {spread !== null && (
             <span className="live-trip-spread">
               {spread <= 1
@@ -172,6 +201,16 @@ export default memo(function MidpointCard({
         <div className="live-eta-hint">{t("live.participantStaleHint")}</div>
       )}
 
+      {otherParticipants.length === 0 && (
+        <div className="live-eta-hint">{t("live.nobodyElse")}</div>
+      )}
+
+      {onMovePin !== null && (
+        <button type="button" className="live-trip-move" onClick={onMovePin}>
+          {t("live.movePin")}
+        </button>
+      )}
+
       {routesStale && (
         <div className="live-routes-stale" role="status">
           {t("live.routesStale")}
@@ -185,6 +224,7 @@ export default memo(function MidpointCard({
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
           aria-label={t("live.navigateWaze")}
+          onClick={onNavigate}
         >
           <NavigateGlyph />
           {t("live.waze")}
@@ -195,11 +235,18 @@ export default memo(function MidpointCard({
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
           aria-label={t("live.navigateGoogle")}
+          onClick={onNavigate}
         >
           <NavigateGlyph />
           {t("live.googleMaps")}
         </a>
       </div>
+
+      {/* Said before it happens: the tap that opens the navigation app also
+          fixes the destination for everyone here. */}
+      {pin === null && (
+        <p className="live-nav-hint">{t("live.navigateSetsPoint")}</p>
+      )}
     </div>
   );
 });

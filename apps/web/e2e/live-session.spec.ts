@@ -280,6 +280,85 @@ test("two devices meet, and the map draws them where they are", async ({
   }
 });
 
+/** The destination a device's Waze button would navigate to. */
+async function wazeDestination(page: Page): Promise<string | null> {
+  const href = await page
+    .getByRole("link", { name: "Navigate with Waze" })
+    .getAttribute("href");
+  return href === null ? null : new URL(href).searchParams.get("ll");
+}
+
+/**
+ * Going is the decision, and it outlasts whoever made it.
+ *
+ * The defects, measured on the build before this: the Navigate target was
+ * the live midpoint, and moved a kilometre for every two the others drove;
+ * and when the person who tapped Navigate left the page — which a phone does
+ * as it opens the navigation app — the other's midpoint and Navigate buttons
+ * went too, a second later, for "Waiting for others to join".
+ */
+test("the first Navigate sets the meeting point for everyone, and it stays when that person leaves", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+
+  const creator = await openDevice(browser, TEL_AVIV, "/", { viewport: PHONE });
+  const codeBadge = creator.page.locator(".live-badge-code");
+  await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
+    timeout: 30_000,
+  });
+  const joiner = await openDevice(
+    browser,
+    HAIFA,
+    `/?code=${(await codeBadge.textContent()) ?? ""}`,
+    { viewport: PHONE },
+  );
+  for (const { page } of [creator, joiner]) {
+    await expect(page.locator(".live-nav-buttons")).toBeVisible({
+      timeout: 45_000,
+    });
+    await expect(page.locator(".live-nav-hint")).toBeVisible();
+  }
+  const midpoint = await wazeDestination(creator.page);
+
+  // The creator taps Navigate. The navigation app is answered here, not
+  // fetched: what is under test is what the tap leaves behind.
+  await creator.context.route("**/waze.com/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "" }),
+  );
+  const navigation = creator.context.waitForEvent("page");
+  await creator.page.getByRole("link", { name: "Navigate with Waze" }).click();
+  await (await navigation).close();
+
+  // Both are told, and both are going to the same place.
+  await expect(creator.page.locator(".live-trip-pin")).toHaveText("Set by you");
+  await expect(joiner.page.locator(".live-trip-pin")).toHaveText(/^Set by /, {
+    timeout: 15_000,
+  });
+  expect(await wazeDestination(joiner.page)).toBe(midpoint);
+
+  // The joiner sets off. The midpoint moves; the meeting point does not.
+  await joiner.context.setGeolocation({ latitude: 32.6, longitude: 34.93 });
+  await expect
+    .poll(() => joiner.page.locator(".live-trip-move").count(), {
+      message: "the drift is offered as a new meeting point",
+      timeout: 15_000,
+    })
+    .toBe(1);
+  expect(await wazeDestination(joiner.page)).toBe(midpoint);
+
+  // The creator's page goes: its socket closes, and the server deletes its
+  // position and its copy of the meeting point. The joiner keeps both the
+  // meeting point and the way there.
+  await creator.context.close();
+  await expect(joiner.page.locator(".live-trip")).toContainText(
+    "Nobody else is sharing their location right now",
+    { timeout: 30_000 },
+  );
+  await expect(joiner.page.locator(".live-waiting-title")).toHaveCount(0);
+  expect(await wazeDestination(joiner.page)).toBe(midpoint);
+});
+
 // A link to a session the database never held. The rules deny that read rather
 // than answer empty, and the same denial greets a device that may read nothing
 // at all, so the join reads the `probe` rule before it blames the session.

@@ -38,8 +38,10 @@ SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
   ui.ownName ────────────┼──► presence ◄─┐         └──► phase               │
                          │   (RTDB write,│                ▲                 ▼
                          │    and delete)│                │   routes ──► frame
-                         └──► expiry ────┴────────────────┘
-                             (clock)
+                         ├──► expiry ────┴────────────────┘
+                         │   (clock)
+  ui.Navigate / Move ────┼──► pin ─────────────────────────────► destination
+  meet listener ─────────┘   (latest seen) ──► meet (RTDB write, and delete)
 ```
 
 `useLiveGeolocation`, `useLiveSession`, `useAuth` and `useNetworkStatus` are
@@ -68,12 +70,53 @@ the edges declared, it is a failing test that names both nodes.
 | `expiry` | pure | session, server clock | `expired` + `flipAtMs` | — |
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
 | `presence` | effectful | a live session, not expired, + own position | RTDB write; deletes what it wrote once that stops | report failed |
+| `pin` | fold | own pin, every device's published copy | the latest `PinEvent` seen, kept after its copies are gone | — |
+| `meet` | effectful | `pin`, while `presence` publishes | RTDB write of this device's copy; deleted with own position | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
 | `phase` | pure | session, `expiry`, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `midpoint` | raw `PlaceResult[]`, ranked against the live midpoint, the pick pinned in | last answer while young, else says it failed |
-| `destination` | pure | `midpoint`, `venues`, the pick | `LatLng \| null` | — |
+| `destination` | pure | `pin`, `midpoint`, `venues`, the pick | the pin, else the pick, else the midpoint | — |
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
+
+### The meeting point is a fold, published by everyone
+
+The midpoint is live: it moves whenever anyone does, and it is gone the moment
+the second-to-last person stops sharing — which is what tapping Navigate does
+on a phone, as the page goes to the background. Measured on the build before
+the pin, the other person's Navigate target moved a kilometre for every two
+the first one drove, and their Navigate buttons went a second after the first
+one left for Waze.
+
+A **pin** is the decision, kept. The first Navigate sets one at the current
+destination, and anyone can move it to the current midpoint once the two have
+drifted `PIN_DRIFT_M` (200 m) apart; picking a venue while one is set moves it
+there. `PinEvent` is `{ at, by, byName, position, name }`, and `at` is the
+server's clock as the setter knew it — a tap is stamped later than every pin
+that device has seen, so a clock running behind cannot lose a user's decision.
+
+Where it lives decides what it costs. A session-level node would outlive
+everybody, and the session record is never deleted: a coordinate between the
+participants, kept for good, which the privacy policy does not allow. So every
+device publishes its **copy** of the latest pin it knows in its own entry,
+`sessions/{code}/meet/{slot}`, written by the `meet` node alongside its
+position and deleted with it — by the node when it stops publishing, and by
+the server's `onDisconnect` (armed and re-armed exactly as for presence) when
+the connection drops. A pin therefore outlives any one person leaving, and
+nothing of it outlives the people in the session.
+
+The `pin` node is a **fold**, `latestPin(current, [ownPin, ...peerPins])`:
+the latest `at` wins, an exact tie goes to the lower slot, and what has been
+seen is kept after its copies are gone. That last part is load-bearing: the
+device that set the pin is usually the first to leave, and a device left on
+its own has nobody else's copy to read. The register resets only if the
+session code changes.
+
+`meet` writes with no debounce. The tap that sets a pin is the tap that opens
+the navigation app, and a write held back three seconds, as position's is,
+would wait on a page the phone had already suspended. It rewrites an
+unchanged copy every 30 s, since a dropped-and-restored connection deletes it
+and nothing else would put it back.
 
 ### Liveness holds one timer, not an interval
 
@@ -278,6 +321,7 @@ Every effectful node is one `createResource` instance. The policy record
 | `venues` | 5 s | 15 s | 100 m | 8 s | 2 | 4 fails / 30 s | 5 min | last-good, else `failed` |
 | `routes` | 3 s | 9 s | 200 m | 10 s | 2 | 5 fails / 60 s | 60 s | last-good |
 | `presence` | 3 s | 3 s | 10 m | 10 s | 3 | 5 fails / 60 s | — | report failed |
+| `meet` | 0 | 0 | a new pin | 10 s | 3 | 5 fails / 60 s | 30 s rewrite | report failed |
 
 `presence` is a **write**, and still one `createResource`: everything the
 combinator provides is what the hand-rolled throttle in `useLiveSession` was

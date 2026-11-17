@@ -10,7 +10,8 @@ import { t } from "../../../strings";
 import * as Sentry from "@sentry/react";
 import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
-import { accuracyCircleGeoJSON } from "../lib/geo-math";
+import { accuracyCircleGeoJSON, haversineDistance } from "../lib/geo-math";
+import { PIN_DRIFT_M } from "../graph/nodes";
 import { fitSignature, hasSettled, sameMembers } from "../lib/fit-bounds";
 import type { FitSignature } from "../lib/fit-bounds";
 import type { Insets } from "../lib/camera-insets";
@@ -72,6 +73,12 @@ interface LiveMapProps {
   routes: readonly (GeoJSON.LineString | null)[];
   venues: readonly RankedVenue[];
   selectedVenue: RankedVenue | null;
+  /**
+   * The meeting point somebody set, if anyone has: the destination glyph
+   * stands on it, and the live midpoint is drawn beside it, muted, only once
+   * it has wandered somewhere else.
+   */
+  pinned?: LatLng | null;
   /**
    * What the overlays cover of the full-bleed map (`useOverlayInsets`). Fits
    * frame inside the rest, so nothing they frame lands under the sheet.
@@ -234,6 +241,7 @@ function LiveMap({
   routes,
   venues,
   selectedVenue,
+  pinned = null,
   insets,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -251,8 +259,20 @@ function LiveMap({
 
   // What Show everyone frames, read when it is tapped: the control outlives
   // every render, so it cannot close over one render's props.
-  const framingRef = useRef({ participants, midpoint, selectedVenue, insets });
-  framingRef.current = { participants, midpoint, selectedVenue, insets };
+  const framingRef = useRef({
+    participants,
+    midpoint,
+    selectedVenue,
+    pinned,
+    insets,
+  });
+  framingRef.current = {
+    participants,
+    midpoint,
+    selectedVenue,
+    pinned,
+    insets,
+  };
   const fitLabelRef = useRef(t("live.fitAll"));
   fitLabelRef.current = t("live.fitAll");
 
@@ -310,6 +330,7 @@ function LiveMap({
         framing.participants,
         framing.midpoint,
         framing.selectedVenue,
+        framing.pinned,
       );
       if (signature.size === 0) return;
       lastFitRef.current = signature;
@@ -394,7 +415,7 @@ function LiveMap({
     if (!mapInstance) return;
 
     // Keyed by identity, not by array position — see lib/fit-bounds.ts.
-    const current = fitSignature(participants, midpoint, selectedVenue);
+    const current = fitSignature(participants, midpoint, selectedVenue, pinned);
     if (current.size === 0) return;
     // Someone joined or left, or a venue was picked or cleared: news worth
     // taking the camera back for. Movement alone never takes it from a user
@@ -413,7 +434,17 @@ function LiveMap({
     lastInsetsRef.current = insets;
     frame(mapInstance, current, insets);
     if (!following) setFollowing(true);
-  }, [mapInstance, participants, midpoint, selectedVenue, insets, following]);
+  }, [
+    mapInstance,
+    participants,
+    midpoint,
+    selectedVenue,
+    pinned,
+    insets,
+    following,
+  ]);
+
+  const target = pinned ?? midpoint;
 
   return (
     <>
@@ -442,14 +473,30 @@ function LiveMap({
             isOwn={p.isOwn}
           />
         ))}
-      {mapInstance && midpoint && (
+      {/* The destination glyph: the meeting point once somebody set one,
+          else the live midpoint — muted while this device has a venue
+          picked in its place. */}
+      {mapInstance && target !== null && (
         <LiveMidpointMarker
+          key="destination"
           map={mapInstance}
-          lat={midpoint.lat}
-          lng={midpoint.lng}
-          muted={selectedVenue !== null}
+          lat={target.lat}
+          lng={target.lng}
+          muted={pinned === null && selectedVenue !== null}
         />
       )}
+      {mapInstance &&
+        pinned !== null &&
+        midpoint !== null &&
+        haversineDistance(pinned, midpoint) >= PIN_DRIFT_M && (
+          <LiveMidpointMarker
+            key="live-midpoint"
+            map={mapInstance}
+            lat={midpoint.lat}
+            lng={midpoint.lng}
+            muted
+          />
+        )}
       {mapInstance &&
         venues.map((v) => (
           <VenueMarker
