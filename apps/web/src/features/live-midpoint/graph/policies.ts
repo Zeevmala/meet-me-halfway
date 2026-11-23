@@ -17,6 +17,14 @@ import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
 import type { RouteInfo, RouteSet, TravelProfile } from "./types";
+import {
+  REFINE_FRACTION,
+  keepsIncumbent,
+  pickFairest,
+  ringCandidates,
+  scoreCandidates,
+} from "../lib/fair-point";
+import type { PublishedMeeting } from "../lib/fair-point";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -303,6 +311,153 @@ export function createRoutePolicy(
 
       if (successes === 0 && firstError !== null) return err(firstError);
       return ok({ dest: input.dest, profile: input.profile, bySlot });
+    },
+  };
+}
+
+export interface FairInput {
+  readonly code: string;
+  /** Slot-keyed positions of everyone counted; `null` is anyone else. */
+  readonly slots: readonly (LatLng | null)[];
+  /** `occupancyMask(slots)` — who this point is fair to. */
+  readonly mask: string;
+  readonly profile: TravelProfile;
+  readonly centroid: LatLng;
+  /** Distance from the centroid to the farthest participant. */
+  readonly radiusM: number;
+  /** The point already published for these people, if there is one. */
+  readonly incumbent: LatLng | null;
+}
+
+/**
+ * Re-evaluate at least this often. The matrix carries no live traffic, so
+ * this is not about congestion: it bounds how long a point chosen from old
+ * positions can stand when nothing else asked.
+ */
+const FAIR_TTL_MS = 10 * 60_000;
+/** The centroid drifting this far is worth a new evaluation, whatever the scale. */
+const FAIR_ADMIT_MIN_M = 500;
+/** …or this fraction of the group's radius, when that is larger. */
+const FAIR_ADMIT_RADIUS_FRACTION = 0.2;
+
+/**
+ * The time-fair meeting point: computed, and published for the session.
+ *
+ * Only the session's leader — the lowest counted slot — runs this; the runtime
+ * offers everyone else `null`. One evaluation is two matrix requests, coarse
+ * then fine (see `lib/fair-point.ts`), and a write when the answer changed.
+ *
+ * **Admission is on the centroid, not on anyone's position.** While people
+ * drive towards the point their positions change constantly and the centroid
+ * hardly at all, and that is exactly when the point must hold still. Keyed on
+ * positions like the routes are, a half-hour trip was sixty evaluations — a
+ * matrix is billed per element — each one a chance to move the destination
+ * under people already navigating to it. Keyed on the centroid it is a
+ * handful: the first, and one each time the group's centre has genuinely
+ * shifted, as when only one of them has set off.
+ *
+ * **The incumbent is a candidate.** The published point is scored in the same
+ * matrix as the new best and kept unless it is beaten by a margin
+ * (`keepsIncumbent`), so the point is sticky by construction rather than by a
+ * timer. `admits` ignores the incumbent: this node's own write changes it, and
+ * admitting on that would be the node re-triggering itself.
+ *
+ * `staleAfterMs: 0`: nothing reads this resource's value. What every client
+ * uses, the leader included, is the point as read back from the database, so
+ * there is one source of truth and a refused write shows as no point at all.
+ */
+export function createFairPolicy(
+  ports: GraphPorts,
+): ResourcePolicy<FairInput, PublishedMeeting | null> {
+  return {
+    id: "meeting",
+    debounceMs: 4_000,
+    maxWaitMs: 12_000,
+    timeoutMs: 15_000,
+    staleAfterMs: 0,
+    retryAttempts: 2,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 4,
+      baseOpenMs: 30_000,
+      maxOpenMs: 120_000,
+      multiplier: 2,
+    },
+    admits: (previous, next, previousAtMs, nowMs) =>
+      previous.code !== next.code ||
+      previous.profile !== next.profile ||
+      previous.mask !== next.mask ||
+      haversineDistance(previous.centroid, next.centroid) >=
+        Math.max(
+          FAIR_ADMIT_MIN_M,
+          previous.radiusM * FAIR_ADMIT_RADIUS_FRACTION,
+        ) ||
+      nowMs - previousAtMs >= FAIR_TTL_MS,
+    identity: (input) =>
+      `m:${input.code}:${input.profile}:${input.mask}:` +
+      cellKey(input.centroid, FAIR_ADMIT_MIN_M),
+
+    run: async (
+      input,
+      signal,
+    ): Promise<Result<PublishedMeeting | null, ResourceError>> => {
+      const sources = input.slots.filter(
+        (position): position is LatLng => position !== null,
+      );
+
+      // Round one: the whole group's extent, around its centroid.
+      const coarse = ringCandidates(input.centroid, input.radiusM);
+      const first = await ports.fetchMatrix(
+        sources,
+        coarse,
+        input.profile,
+        signal,
+      );
+      if (!first.ok) return err(first.error);
+      const coarseBest = pickFairest(
+        scoreCandidates(first.value.durations, first.value.destinations),
+      );
+      // Nowhere everyone can reach: no fair point, and the centroid stands.
+      if (coarseBest === null) return ok(null);
+
+      // Round two: a third of that extent, around round one's best. The
+      // incumbent rides along last, so it is judged by the same matrix as
+      // whatever might replace it.
+      const fine = ringCandidates(
+        coarseBest.point,
+        input.radiusM * REFINE_FRACTION,
+      );
+      const candidates =
+        input.incumbent === null ? fine : [...fine, input.incumbent];
+      const second = await ports.fetchMatrix(
+        sources,
+        candidates,
+        input.profile,
+        signal,
+      );
+      if (!second.ok) return err(second.error);
+      const scored = scoreCandidates(
+        second.value.durations,
+        second.value.destinations,
+      );
+      const best = pickFairest(scored.slice(0, fine.length));
+      if (best === null) return ok(null);
+
+      const incumbent =
+        input.incumbent === null ? null : (scored[fine.length] ?? null);
+      if (
+        input.incumbent !== null &&
+        incumbent !== null &&
+        keepsIncumbent(incumbent, best)
+      ) {
+        // Kept as published — the coordinates that are in the database, not
+        // the router's re-snapping of them — so there is nothing to write.
+        return ok({ point: input.incumbent, mask: input.mask });
+      }
+
+      const meeting: PublishedMeeting = { point: best.point, mask: input.mask };
+      const written = await ports.writeMeeting(input.code, meeting, signal);
+      return written.ok ? ok(meeting) : err(written.error);
     },
   };
 }

@@ -13,16 +13,24 @@ const mockOnDisconnectRemove = vi.fn();
 const mockRef = vi.fn((_db: unknown, path?: string) => ({ path }));
 let onValueCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let onValueErrorCallback: ((err: Error) => void) | null = null;
+let meetingCallback: ((snap: { val: () => unknown }) => void) | null = null;
+let meetingErrorCallback: ((err: Error) => void) | null = null;
 const mockOnValueUnsub = vi.fn();
 
 vi.mock("firebase/database", () => ({
   onValue: (
-    _ref: unknown,
+    target: { path?: string },
     onSnap: (snap: { val: () => unknown }) => void,
     onErr: (err: Error) => void,
   ) => {
-    onValueCallback = onSnap;
-    onValueErrorCallback = onErr;
+    // The session listens to two nodes; keep each listener's callbacks apart.
+    if (target.path?.endsWith("/meeting")) {
+      meetingCallback = onSnap;
+      meetingErrorCallback = onErr;
+    } else {
+      onValueCallback = onSnap;
+      onValueErrorCallback = onErr;
+    }
     return mockOnValueUnsub;
   },
   ref: (_db: unknown, path?: string) => mockRef(_db, path),
@@ -140,6 +148,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   onValueCallback = null;
   onValueErrorCallback = null;
+  meetingCallback = null;
+  meetingErrorCallback = null;
   mockSet.mockResolvedValue(undefined);
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
@@ -876,6 +886,65 @@ describe("useLiveSession", () => {
 
       expect(result.current.status).toBe("ready");
       expect(result.current.ownIndex).toBe(1);
+    });
+  });
+
+  describe("the meeting point", () => {
+    it("surfaces the point the session carries", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      expect(result.current.meeting).toBeNull();
+
+      act(() => {
+        meetingCallback?.({
+          val: () => ({ lat: 31.9, lng: 35, mask: "11000", ts: 1000 }),
+        });
+      });
+
+      expect(result.current.meeting).toEqual({
+        point: { lat: 31.9, lng: 35 },
+        mask: "11000",
+      });
+    });
+
+    // The graph compares sources by identity: a re-delivered snapshot must
+    // not look like a new point.
+    it("keeps the same object for the same point", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+      const deliver = () =>
+        act(() => {
+          meetingCallback?.({
+            val: () => ({ lat: 31.9, lng: 35, mask: "11000", ts: 1000 }),
+          });
+        });
+
+      deliver();
+      const first = result.current.meeting;
+      deliver();
+
+      expect(result.current.meeting).toBe(first);
+    });
+
+    // Rules that predate the meeting node deny this read; the session, and
+    // the geographic midpoint, carry on without it.
+    it("does not fail the session when the meeting point cannot be read", async () => {
+      const { result } = renderHook(() => useLiveSession(TEST_UID));
+      await act(async () => {
+        await result.current.createSession(live());
+      });
+
+      act(() => {
+        meetingErrorCallback?.(new Error("permission_denied"));
+      });
+
+      expect(result.current.status).toBe("ready");
+      expect(result.current.error).toBeNull();
+      expect(result.current.meeting).toBeNull();
     });
   });
 

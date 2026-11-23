@@ -7,10 +7,12 @@
  * runtime acyclicity check.
  *
  * That check is the durable payoff. There is no cycle today, but there is one
- * waiting: re-centring venue search on the selected venue, or deriving a
- * time-balanced midpoint from route durations, both close the loop
- * `midpoint → venues → destination → midpoint`. Either would be a hang or an
- * infinite render, discovered at runtime on a phone. Here it is a failed test.
+ * waiting: re-centring venue search on the selected venue, or deriving the
+ * time-balanced meeting point from the `routes` node's durations, both close
+ * the loop `meeting → venues → destination → meeting`. Either would be a hang
+ * or an infinite render, discovered at runtime on a phone. Here it is a failed
+ * test. (The `meeting` node balances travel time without it: it asks its own
+ * matrix, upstream of the destination.)
  */
 
 export type NodeId =
@@ -18,6 +20,7 @@ export type NodeId =
   | "slots"
   | "presence"
   | "midpoint"
+  | "meeting"
   | "phase"
   | "venues"
   | "destination"
@@ -38,14 +41,20 @@ export const EDGES: EdgeMap = {
   presence: [],
   midpoint: ["slots"],
   phase: ["slots", "liveness", "presence"],
-  venues: ["midpoint"],
-  destination: ["midpoint", "venues"],
+  // The time-fair point. It reads positions and the centroid, and asks a
+  // travel-time matrix of its own — never the `routes` node, which is what
+  // keeps "a meeting point balanced by travel time" from closing the loop
+  // `meeting → destination → routes → meeting` the header warns about.
+  meeting: ["slots", "midpoint"],
+  venues: ["meeting"],
+  destination: ["meeting", "venues"],
   routes: ["slots", "destination"],
   frame: [
     "slots",
     "presence",
     "liveness",
     "midpoint",
+    "meeting",
     "phase",
     "venues",
     "destination",

@@ -7,7 +7,7 @@ import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
-import { ok } from "../../../core/dag/result";
+import { ok, err } from "../../../core/dag/result";
 import type { TimerId } from "../../../core/dag/resource";
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
@@ -83,6 +83,10 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     searchVenues: vi.fn().mockResolvedValue(ok(PLACES)),
     fetchRoute: vi.fn().mockResolvedValue(ok(route(1000))),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
+    // No matrix by default: the meeting point is the centroid unless a test
+    // supplies one.
+    fetchMatrix: vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 422 })),
+    writeMeeting: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     ...overrides,
   };
@@ -708,5 +712,238 @@ describe("createRuntime — departed peers and stale routes", () => {
     await h.advance(10_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
     r.dispose();
+  });
+});
+
+describe("createRuntime — the time-fair meeting point", () => {
+  const CENTROID: LatLng = { lat: 31.925, lng: 34.995 };
+  // Where the roads say to meet: well off the centroid, towards Jerusalem.
+  const FAIR: LatLng = { lat: 31.86, lng: 35.08 };
+
+  /**
+   * A matrix whose every trip to a candidate takes as many seconds as the
+   * candidate is metres from `target`, so the candidate nearest it wins.
+   * Destinations come back as asked, as if every one were already on a road.
+   */
+  function matrixFavouring(target: LatLng) {
+    return vi.fn(
+      async (sources: readonly LatLng[], destinations: readonly LatLng[]) =>
+        ok({
+          durations: sources.map(() =>
+            destinations.map(
+              (d) =>
+                Math.hypot(d.lat - target.lat, d.lng - target.lng) * 111_000,
+            ),
+          ),
+          destinations: [...destinations],
+        }),
+    );
+  }
+
+  const leading = { ownSlot: 0 as ParticipantIndex, ownPosition: TEL_AVIV };
+
+  function session(h: ReturnType<typeof createHarness>, own = leading) {
+    return createRuntime(h.ports, {
+      ...own,
+      sessionCode: "ABC234",
+      ownUid: "u0",
+      sessionStatus: "ready",
+      participants: [peer(own.ownSlot === 0 ? 1 : 0, JERUSALEM)],
+    });
+  }
+
+  it("has the leader compute a point in two rounds and publish it", async () => {
+    const fetchMatrix = matrixFavouring(FAIR);
+    const writeMeeting = vi.fn().mockResolvedValue(ok(undefined));
+    const h = createHarness({
+      fetchMatrix,
+      writeMeeting,
+      placesEnabled: false,
+    });
+    session(h);
+
+    await h.advance(12_000);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(2);
+    expect(fetchMatrix.mock.calls[0]?.[0]).toEqual([TEL_AVIV, JERUSALEM]);
+    expect(writeMeeting).toHaveBeenCalledTimes(1);
+    const [code, meeting] = writeMeeting.mock.calls[0] ?? [];
+    expect(code).toBe("ABC234");
+    expect(meeting.mask).toBe("11000");
+    // Round two searched around round one's best, so it lands nearer the
+    // target than any first-round candidate could.
+    const offBy = Math.hypot(
+      meeting.point.lat - FAIR.lat,
+      meeting.point.lng - FAIR.lng,
+    );
+    const centroidOffBy = Math.hypot(
+      CENTROID.lat - FAIR.lat,
+      CENTROID.lng - FAIR.lng,
+    );
+    expect(offBy).toBeLessThan(centroidOffBy / 3);
+  });
+
+  // One source of truth: what every device uses, the leader included, is the
+  // point as the database holds it.
+  it("uses a point only once the session carries it", async () => {
+    const h = createHarness({
+      fetchMatrix: matrixFavouring(FAIR),
+      placesEnabled: false,
+    });
+    const r = session(h);
+    await h.advance(12_000);
+
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    expect(r.getSnapshot().midpoint?.lat).toBeCloseTo(CENTROID.lat, 1);
+
+    r.setSources({ publishedMeeting: { point: FAIR, mask: "11000" } });
+
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+    expect(r.getSnapshot().destination).toEqual(FAIR);
+  });
+
+  it("leaves the computing to the leader", async () => {
+    const fetchMatrix = matrixFavouring(FAIR);
+    const h = createHarness({ fetchMatrix, placesEnabled: false });
+    const r = session(h, { ownSlot: 1, ownPosition: TEL_AVIV });
+
+    await h.advance(60_000);
+    expect(fetchMatrix).not.toHaveBeenCalled();
+
+    // …and still follows the point the leader published.
+    r.setSources({ publishedMeeting: { point: FAIR, mask: "11000" } });
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+  });
+
+  it("routes everyone to the fair point and searches venues around it", async () => {
+    const h = createHarness({ fetchMatrix: matrixFavouring(FAIR) });
+    const r = session(h);
+    r.setSources({ publishedMeeting: { point: FAIR, mask: "11000" } });
+
+    await h.advance(15_000);
+
+    expect(h.ports.fetchRoute).toHaveBeenCalledWith(
+      TEL_AVIV,
+      FAIR,
+      "driving",
+      expect.anything(),
+    );
+    expect(h.ports.searchVenues).toHaveBeenCalledWith(
+      FAIR,
+      expect.any(Number),
+      expect.anything(),
+    );
+  });
+
+  it("falls back to the centroid when the group changes, until a new point lands", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = session(h);
+    r.setSources({ publishedMeeting: { point: FAIR, mask: "11000" } });
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+
+    r.setSources({
+      participants: [peer(1, JERUSALEM), peer(2, { lat: 32.3, lng: 34.9 })],
+    });
+
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+  });
+
+  it("ignores a point nowhere near the people it claims to serve", () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = session(h);
+
+    r.setSources({
+      publishedMeeting: { point: { lat: 33.2, lng: 35.6 }, mask: "11000" },
+    });
+
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+  });
+
+  // A destination that moves while people drive to it is not a destination.
+  it("keeps the published point while it stays near enough to the best", async () => {
+    const even = vi.fn(
+      async (sources: readonly LatLng[], destinations: readonly LatLng[]) =>
+        ok({
+          durations: sources.map(() => destinations.map(() => 1_200)),
+          destinations: [...destinations],
+        }),
+    );
+    const writeMeeting = vi.fn().mockResolvedValue(ok(undefined));
+    const h = createHarness({
+      fetchMatrix: even,
+      writeMeeting,
+      placesEnabled: false,
+    });
+    const r = session(h);
+    r.setSources({ publishedMeeting: { point: FAIR, mask: "11000" } });
+
+    await h.advance(12_000);
+
+    expect(even).toHaveBeenCalledTimes(2);
+    // The incumbent rode along in round two, and nothing was written.
+    expect(even.mock.calls[1]?.[1]).toContainEqual(FAIR);
+    expect(writeMeeting).not.toHaveBeenCalled();
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+  });
+
+  // Positions change constantly on the way there; the group's centre does
+  // not. Re-evaluating on positions was sixty billed matrices per trip.
+  it("does not re-evaluate while people converge on the point", async () => {
+    const fetchMatrix = matrixFavouring(CENTROID);
+    const h = createHarness({ fetchMatrix, placesEnabled: false });
+    const r = session(h);
+    await h.advance(12_000);
+    expect(fetchMatrix).toHaveBeenCalledTimes(2);
+
+    // Both a third of the way in: 13 km each, the centroid where it was.
+    r.setSources({
+      ownPosition: { lat: 32.0283, lng: 34.8517 },
+      participants: [peer(1, { lat: 31.8217, lng: 35.1383 }, h.now())],
+    });
+    await h.advance(60_000);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-evaluates when the group's centre has moved", async () => {
+    const fetchMatrix = matrixFavouring(CENTROID);
+    const h = createHarness({ fetchMatrix, placesEnabled: false });
+    const r = session(h);
+    await h.advance(12_000);
+
+    // Only one of them set off: the centre drifts with them.
+    r.setSources({ ownPosition: { lat: 31.9, lng: 35.0 } });
+    await h.advance(12_000);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(4);
+  });
+
+  it("asks nothing once everyone is within a short walk", async () => {
+    const fetchMatrix = matrixFavouring(FAIR);
+    const h = createHarness({ fetchMatrix, placesEnabled: false });
+    createRuntime(h.ports, {
+      ...leading,
+      sessionCode: "ABC234",
+      ownUid: "u0",
+      sessionStatus: "ready",
+      participants: [peer(1, { lat: 32.081, lng: 34.781 })],
+    });
+
+    await h.advance(60_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
+  });
+
+  it("stays on the centroid when the matrix cannot be reached", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = session(h);
+
+    await h.advance(60_000);
+
+    expect(h.ports.writeMeeting).not.toHaveBeenCalled();
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    expect(r.getSnapshot().midpoint).not.toBeNull();
   });
 });

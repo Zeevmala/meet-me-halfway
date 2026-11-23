@@ -14,6 +14,7 @@ import { useServices } from "../../components/ServicesProvider";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import type { Connectivity } from "../../hooks/useNetworkStatus";
 import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
+import { useWakeLock } from "../../hooks/useWakeLock";
 import { useLiveGeolocation } from "./hooks/useLiveGeolocation";
 import type { GeoStatus } from "./hooks/useLiveGeolocation";
 import { useLiveSession } from "./hooks/useLiveSession";
@@ -167,6 +168,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       ownName: session.ownName,
       sessionStatus: session.status,
       serverTimeOffsetMs,
+      publishedMeeting: session.meeting,
     });
   }, [
     runtime,
@@ -176,10 +178,16 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     session.code,
     session.ownName,
     session.status,
+    session.meeting,
     geo.position,
     geo.accuracy,
     serverTimeOffsetMs,
   ]);
+
+  // A phone that sleeps stops reporting: browsers suspend geolocation with
+  // the screen, and the others watch this participant go stale mid-trip. Held
+  // only while there is a session to report to.
+  useWakeLock(session.status === "ready");
 
   // Turning location off is turning sharing off. The denial clears the
   // position, so nothing new is published; this takes down what already was,
@@ -500,6 +508,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
                 travelProfile={graph.travelProfile}
                 onProfileChange={handleProfileChange}
                 selectedVenueName={graph.selectedVenue?.displayName ?? null}
+                meetingBasis={graph.meetingBasis}
                 routesStale={graph.routesDegraded}
               />
             </>

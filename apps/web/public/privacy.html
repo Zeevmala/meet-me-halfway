@@ -77,7 +77,7 @@
       </header>
 
       <h1>Privacy Policy</h1>
-      <p class="muted">Last updated: October 31, 2026</p>
+      <p class="muted">Last updated: November 23, 2026</p>
 
       <p>
         Meet Me Halfway has no server of its own. It runs in your browser and uses the
@@ -100,8 +100,8 @@
         </li>
         <li>
           A small <strong>session record</strong> &mdash; the code, when it was created,
-          and random IDs for the people in it &mdash; is
-          <strong>not deleted automatically</strong>. After 24 hours nobody but us can
+          random IDs for the people in it, and the last meeting point worked out for
+          the group &mdash; is <strong>not deleted automatically</strong>. After 24 hours nobody but us can
           open it.
         </li>
         <li>
@@ -155,6 +155,10 @@
           created and the random IDs of the people in it, but no locations or names.
         </li>
         <li>
+          <strong>The meeting point</strong> worked out for the group, like the
+          locations it is worked out from, can be seen only by people who have joined.
+        </li>
+        <li>
           <strong>Nobody but us, after 24 hours.</strong> From 24 hours after a session
           was created, the database refuses to open it to anyone.
         </li>
@@ -175,8 +179,11 @@
         </li>
         <li>
           <strong>The session record</strong> holds the session code, when the session
-          was created, and the random IDs of the person who created it and of everyone
-          who joined. It is <strong>not deleted automatically</strong>. It stays in the
+          was created, the random IDs of the person who created it and of everyone
+          who joined, and the meeting point last worked out for the group: one place,
+          between the people in the session, and which of the five places in the
+          session it was worked out for. It holds nobody's own location. It is
+          <strong>not deleted automatically</strong>. It stays in the
           database until we delete it; after 24 hours, nobody but us can open it.
         </li>
         <li>
@@ -217,6 +224,13 @@
               person in the session to the meeting point &mdash; the midpoint, or the
               venue you picked. Mapbox therefore receives every participant's precise
               location, from every participant's device.
+            </li>
+            <li>
+              To find a meeting point that is fair in travel time, one device in the
+              session &mdash; the earliest person to join who is still sharing
+              &mdash; also asks Mapbox how long the trip would take from each person
+              to a set of places between them. That request carries every
+              participant's precise location too.
             </li>
             <li>
               Mapbox's map software keeps a random identifier in your browser, replaces

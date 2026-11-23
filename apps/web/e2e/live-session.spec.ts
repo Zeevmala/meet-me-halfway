@@ -238,6 +238,17 @@ test("two devices meet, and the map draws them where they are", async ({
     });
   }
 
+  // The meeting point is the session's, not each device's: the creator — the
+  // lowest slot — computes the time-fair point and publishes it under the real
+  // rules, and the joiner, who computes nothing, reads it. Until both say so,
+  // each would be showing a midpoint of its own.
+  for (const { page } of [creator, joiner]) {
+    await expect(page.locator(".live-trip-dest")).toHaveText(
+      "Fair meeting point",
+      { timeout: 30_000 },
+    );
+  }
+
   // Soft from here: when the map is wrong it is usually wrong in more than
   // one way at once, and a run should name every way rather than the first.
   const check = expect.configure({ soft: true });

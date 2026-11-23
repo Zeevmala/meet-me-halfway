@@ -21,7 +21,16 @@
 - [x] Firebase RTDB security rules — published by the `deploy` job in
       `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
       the rules can no longer reach production independently
+- [x] Time-fair meeting point — minimax travel time over a Matrix API
+      sample, shared through the session so every device routes to one place
+- [x] Screen wake lock during a session; arrival shown per participant
 - [ ] Custom domain + SSL
+- [ ] Mapbox Matrix budget — an evaluation is two requests of
+      participants × ~20 elements; watch usage against the plan's free tier
+      before promoting the app
+- [ ] Install prompt (Android `beforeinstallprompt`, iOS Add to Home Screen
+      hint) and store listings (Play via Trusted Web Activity; iOS needs a
+      native shell for background location)
 - [ ] Route geometry: request `overview=simplified` for non-local slots — the
       last-known-good buffer doubles retained geometry, and full overview is
       ~150–400 KB per route

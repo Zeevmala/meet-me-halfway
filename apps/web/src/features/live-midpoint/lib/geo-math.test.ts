@@ -5,6 +5,7 @@ import {
   haversineDistance,
   formatDistance,
   accuracyCircleGeoJSON,
+  destinationPoint,
   type LatLng,
 } from "./geo-math";
 
@@ -286,5 +287,33 @@ describe("accuracyCircleGeoJSON", () => {
     const d = haversineDistance(TEL_AVIV, { lat, lng });
     expect(d).toBeGreaterThan(4);
     expect(d).toBeLessThan(6);
+  });
+});
+
+describe("destinationPoint", () => {
+  it("lands the asked distance away, on the asked bearing", () => {
+    const north = destinationPoint(TEL_AVIV, 0, 10_000);
+    expect(haversineDistance(TEL_AVIV, north)).toBeCloseTo(10_000, 3);
+    expect(north.lng).toBeCloseTo(TEL_AVIV.lng, 9);
+    expect(north.lat).toBeGreaterThan(TEL_AVIV.lat);
+
+    const east = destinationPoint(TEL_AVIV, 90, 10_000);
+    expect(haversineDistance(TEL_AVIV, east)).toBeCloseTo(10_000, 3);
+    expect(east.lng).toBeGreaterThan(TEL_AVIV.lng);
+  });
+
+  it("returns the origin for no distance", () => {
+    const same = destinationPoint(TEL_AVIV, 123, 0);
+    expect(same.lat).toBeCloseTo(TEL_AVIV.lat, 12);
+    expect(same.lng).toBeCloseTo(TEL_AVIV.lng, 12);
+  });
+
+  // The database rules refuse a longitude outside [-180, 180].
+  it("keeps longitude in range across the antimeridian", () => {
+    const fiji = { lat: -17.7, lng: 179.9 };
+    const east = destinationPoint(fiji, 90, 50_000);
+    expect(east.lng).toBeGreaterThanOrEqual(-180);
+    expect(east.lng).toBeLessThan(-179);
+    expect(haversineDistance(fiji, east)).toBeCloseTo(50_000, 3);
   });
 });

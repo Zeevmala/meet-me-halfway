@@ -45,8 +45,10 @@ npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet
 - **Sheet content** — the midpoint card leads with time: one row per person (you first) with the ETA in their colour and the distance beside it, a header with the destination, the arrival spread ("N min apart" — the midpoint is geographic, so halfway in distance is rarely halfway in time) and the travel-mode toggle, then Navigate as the main action. Inviting lives on the session code in the top bar (`.live-badge-share`, while a slot is free): the one control present in every phase with a code, where the bottom card's share button was lost twice to phase gaps. Stale people are tagged on their own row. Distances are wrapped in `<bdi>`: inside a Hebrew row the bidi algorithm laid "40.6 km" out as "km 40.6"
 - **Mapbox Directions API** — client-side N-participant routing (all participants to midpoint/venue), 3s debounced
 - **Google Places API (New)** — venue search around midpoint (optional, disabled if `VITE_GOOGLE_PLACES_API_KEY` not set)
-- **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side
-- **Derived pipeline runs as a declared DAG** — `liveness → slots → {presence, midpoint} → phase/venues → destination → routes → frame`, declared in `features/live-midpoint/graph/edges.ts`, executed in topological order by a per-mount runtime exposed through `useSyncExternalStore`. Effectful nodes are `createResource` instances carrying debounce + maxWait, admission control, retry, timeout, a lazy circuit breaker and last-known-good degradation, under a shared concurrency bulkhead (`core/dag/semaphore.ts`). Own location is published by the `presence` node — a write expressed as the same combinator. See `ARCHITECTURE.md`
+- **Midpoint** — geographic centroid via Cartesian mean on unit sphere (supports 2–5 points), computed client-side. It is the fallback, not the destination
+- **Meeting point, fair in time** — the place minimising the longest trip (minimax on the road network), sampled coarse-to-fine: a centre and three rings of six candidates scored by one Mapbox Matrix request, then a second round a third the size around the best (`lib/fair-point.ts`, the `meeting` node). **One participant computes it and the session carries it** (`sessions/{code}/meeting`): computed per device it differed per device, since each samples the others' positions at its own moment. The leader is the lowest counted slot, and the rules — not the client — enforce that, by the point's occupancy mask. Every device, the leader included, uses the point as read back from the database, and only while its mask equals the people that device counts and it lies among them; otherwise the meeting point is the centroid and the card says "Midpoint", not "Fair meeting point". The published point is a candidate in the next evaluation and is kept unless beaten by max(90s, 10% of the longest trip), and evaluations are admitted on the *centroid* moving, never on positions — positions change all the way there, and each evaluation is billed per matrix element (2 requests × participants × ~20). The matrix carries no live traffic. The snapshot's `midpoint` field is this resolved meeting point; `meetingBasis` says which it is
+- **Screen wake lock** — held while a session is ready (`hooks/useWakeLock.ts`), re-requested whenever the page returns to view. A page has no background location: a locked phone stops `watchPosition`, and its owner goes stale for everyone else
+- **Derived pipeline runs as a declared DAG** — `liveness → slots → {presence, midpoint} → meeting → phase/venues → destination → routes → frame`, declared in `features/live-midpoint/graph/edges.ts`, executed in topological order by a per-mount runtime exposed through `useSyncExternalStore`. Effectful nodes are `createResource` instances carrying debounce + maxWait, admission control, retry, timeout, a lazy circuit breaker and last-known-good degradation, under a shared concurrency bulkhead (`core/dag/semaphore.ts`). Own location is published by the `presence` node — a write expressed as the same combinator. See `ARCHITECTURE.md`
 - **Participant model** — up to 5 participants per session, indexed 0–4 (creator = 0), each with a distinct color
 - **i18next** — en/he with full RTL support via CSS logical properties
 
@@ -58,7 +60,7 @@ No backend, no database server, no Docker, no Python.
 2. **Creator** opens `/` → geolocation prompt → 6-char session code → `created`, `creatorUid` and `slots/0` are written in one atomic update, and only then do the code, its share buttons and the URL (`/?code=XXXXXX`) appear — until the database holds the session the page says "Setting up…" and there is nothing to share, because a link to a session that was never written can only read "Session not found". `created` is write-once, so a refusal means the code is taken (sessions are never deleted) and a fresh one is drawn, up to three
 3. **Joiners** (up to 4) open `/?code=XXXXXX` → a code the generator could not have produced fails as `INVALID_CODE` before anything is read → each claims the lowest free `slots/{1..4}` write-once; the database arbitrates, a loser retries the next index, and all five taken means a genuine `SESSION_FULL`
 4. All participant locations stream to Firebase RTDB at `/sessions/{code}/participants/{slot}` (throttled 1 write/3s by the `presence` node, and re-sent every 10s while standing still — peers mark anyone silent for 30s as stale, and stop counting them toward the midpoint and routes after 2 minutes)
-5. Client computes geographic centroid of all positions + fetches Mapbox driving routes for each participant
+5. Client computes the geographic centroid of all positions; the lowest slot also computes the time-fair meeting point and publishes it to the session. Every client fetches Mapbox routes for each participant to that point
 6. Optional venue search around midpoint (Google Places, ranked by rating/proximity/popularity/open_now)
 
 ## Key Source Layout
@@ -92,7 +94,10 @@ apps/web/src/
 │       ├── presence-rtdb.ts           # slot-keyed own-location write + onDisconnect arming, behind the port
 │       ├── fit-bounds.ts              # identity-keyed fitBounds jitter guard; sameMembers (news vs movement)
 │       ├── camera-insets.ts           # overlay boxes → fit padding (clamped), corner-control lifts
-│       ├── eta.ts                     # ETA minutes/hours, arrival spread (latest − earliest)
+│       ├── fair-point.ts              # time-fair meeting point: ring candidates, minimax pick, incumbent margin, mask acceptance
+│       ├── matrix-api.ts              # createMatrixClient(token) → Result<MatrixResult, ResourceError> (≤25 coordinates)
+│       ├── meeting-rtdb.ts            # sessions/{code}/meeting write + snapshot parse, behind the port
+│       ├── eta.ts                     # ETA minutes/hours, arrival spread (latest − earliest), hasArrived (75 m)
 │       └── nav-links.ts              # Waze/Google Maps deep link generators
 ├── core/dag/                          # framework- and domain-agnostic execution core
 │   ├── result.ts                      # Result<T, E> + ok/err
@@ -107,7 +112,8 @@ apps/web/src/
 │   ├── useAuth.ts                     # Anonymous sign-in with retry + typed AuthErrorCode classification
 │   ├── useFirebase.ts                 # thin read of useServices().firebase
 │   ├── useNetworkStatus.ts            # Connectivity: online / offline (navigator.onLine) / unreachable (.info/connected false past a 6s grace)
-│   └── useServerTimeOffset.ts         # .info/serverTimeOffset — liveness runs on server time
+│   ├── useServerTimeOffset.ts         # .info/serverTimeOffset — liveness runs on server time
+│   └── useWakeLock.ts                 # screen wake lock while a session is ready
 ├── lib/
 │   ├── config.ts                      # the ONLY module reading VITE_* app config; validateAppConfig
 │   ├── services.ts                    # composition root: createServices(config)
@@ -130,10 +136,13 @@ Tests are typechecked. Vitest strips types without checking them, so `tsc` is th
   creatorUid: string (write-once, must match auth.uid)
   slots/{0..4}: uid (write-once; exactly five keys may ever exist)
   participants/{slot}: { uid, lat, lng, accuracy, ts, name }   # ts: server timestamp
+  meeting: { lat, lng, mask, ts }   # the time-fair point; mask: five 0/1 chars, the slots it was computed for
 /probe   (never holds data; readable by anyone signed in, writable by nobody)
 ```
 
 Security rules enforce: auth required for all reads, write-once session metadata, numeric range validation for lat/lng, no extra fields (`$other: false`), session keys in the code generator's alphabet, no claim or position in a session that was never created or is over 24 hours old (a holder may still clear their own position), `created` and `ts` equal to the server's `now` — and **the participant cap**.
+
+`meeting` is writable only by the holder of the lowest slot its `mask` names — so the one point in play is the leader's, and a device ignores any point whose mask is not the people it counts. The mask must be five `0`/`1` characters naming at least two slots; `ts` is the server's `now` and a rewrite must be 2s after the last; it cannot be deleted. It is readable by slot holders only, like the locations it is derived from, and it stays with the session record (the privacy policy says so). The node is additive: a client from before it never touches it, and a client ahead of its rules is refused the write and stays on the centroid.
 
 Reads are per field, and there is no read rule on the session node itself, so nobody reads it whole. `created`, `creatorUid` and `slots` are readable by anyone signed in while the session is fresh: the join needs them before it holds a slot, and they carry no position or name. `participants` — the locations — is readable only by a holder of one of the five slots of a fresh session. Someone left out of a full session sees no one's location.
 
@@ -180,6 +189,7 @@ Deploys run one at a time (a `concurrency` group on the job), so two quick pushe
 - Fallible operations return `Result<T, E>` from `core/dag/result.ts` rather than throwing, returning an empty value, or writing a state code. This includes the session handshake: `createSession`/`joinSession` return `Result` and take an `AbortSignal`
 - Derived values are derived, not stored. `SessionPhase` and participant staleness and departure are graph nodes, not `useState` — a predicate over a clock must never be driven by a polling interval (mobile browsers throttle `setInterval` to minutes and freeze it under bfcache)
 - Anything the graph publishes is referentially stable; do not rebuild it with `.map()` in a render body. Project it with `useMemo` keyed on the snapshot array, or the map re-uploads every route geometry per frame
+- Anything every participant must agree on is session state, not a per-device derivation. A value computed on each device from positions sampled at each device's own moment differs per device; one writer publishes it, the rules say who that writer is, and everyone reads it back — the writer included
 - New effectful work belongs in a `ResourcePolicy` (`graph/policies.ts`), not a bespoke hook with its own debounce and abort handling
 - I/O reaches the graph through `graph/ports.ts` so tests inject fakes and a virtual clock instead of mocking modules, globals or timers. React-tree dependencies arrive through `ServicesProvider` for the same reason
 - `import.meta.env.VITE_*` is read in `lib/config.ts` and nowhere else (`DEV`/`PROD`/`MODE` are build flags and stay at their point of use)

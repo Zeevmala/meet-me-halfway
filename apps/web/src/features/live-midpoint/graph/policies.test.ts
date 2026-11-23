@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { createVenuePolicy, createRoutePolicy, routesAnswer } from "./policies";
-import type { RouteInput, VenueInput } from "./policies";
+import {
+  createFairPolicy,
+  createVenuePolicy,
+  createRoutePolicy,
+  routesAnswer,
+} from "./policies";
+import type { FairInput, RouteInput, VenueInput } from "./policies";
 import type { GraphPorts } from "./ports";
 import type { LatLng } from "../lib/geo-math";
 import { ok, err } from "../../../core/dag/result";
@@ -12,6 +17,8 @@ const NEARBY: LatLng = { lat: 32.0804, lng: 34.7803 };
 // ~1.2 km from TEL_AVIV — outside both.
 const FAR: LatLng = { lat: 32.09, lng: 34.79 };
 const JERUSALEM: LatLng = { lat: 31.77, lng: 35.21 };
+// ~110 m from the Tel Aviv–Jerusalem centroid.
+const NEAR_CENTROID: LatLng = { lat: 31.926, lng: 34.995 };
 
 function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
   return {
@@ -21,6 +28,10 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     searchVenues: vi.fn().mockResolvedValue(ok([])),
     fetchRoute: vi.fn().mockResolvedValue(ok(null)),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
+    // No matrix by default: the meeting point is the centroid unless a test
+    // supplies one.
+    fetchMatrix: vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 422 })),
+    writeMeeting: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     ...overrides,
   };
@@ -236,5 +247,131 @@ describe("routesAnswer", () => {
 
   it("lapses when the travel profile changes", () => {
     expect(routesAnswer(set, TEL_AVIV, "walking")).toBe(false);
+  });
+});
+
+describe("fair policy", () => {
+  const CENTROID: LatLng = { lat: 31.925, lng: 34.995 };
+  const signal = new AbortController().signal;
+
+  const input = (overrides: Partial<FairInput> = {}): FairInput => ({
+    code: "ABC234",
+    slots: [TEL_AVIV, JERUSALEM, null, null, null],
+    mask: "11000",
+    profile: "driving",
+    centroid: CENTROID,
+    radiusM: 26_000,
+    incumbent: null,
+    ...overrides,
+  });
+
+  const echo = (seconds: (j: number) => number | null) =>
+    vi.fn(async (sources: readonly LatLng[], destinations: readonly LatLng[]) =>
+      ok({
+        durations: sources.map(() => destinations.map((_d, j) => seconds(j))),
+        destinations: [...destinations],
+      }),
+    );
+
+  const policy = createFairPolicy(makePorts());
+
+  it("does not admit movement that leaves the centroid where it was", () => {
+    expect(
+      policy.admits(input(), input({ centroid: NEAR_CENTROID }), 0, 0),
+    ).toBe(false);
+  });
+
+  it("admits a centroid that drifted a fifth of the group's radius", () => {
+    // ~6.7 km north; a fifth of 26 km is 5.2 km.
+    const drifted = { lat: CENTROID.lat + 0.06, lng: CENTROID.lng };
+    expect(policy.admits(input(), input({ centroid: drifted }), 0, 0)).toBe(
+      true,
+    );
+  });
+
+  it("admits a change of group or of travel mode at once", () => {
+    expect(policy.admits(input(), input({ mask: "11100" }), 0, 0)).toBe(true);
+    expect(policy.admits(input(), input({ profile: "walking" }), 0, 0)).toBe(
+      true,
+    );
+  });
+
+  // The node's own write changes the incumbent; admitting on it would be the
+  // node re-triggering itself.
+  it("does not admit its own published point as news", () => {
+    expect(policy.admits(input(), input({ incumbent: CENTROID }), 0, 0)).toBe(
+      false,
+    );
+  });
+
+  it("re-evaluates after ten minutes even if nothing moved", () => {
+    expect(policy.admits(input(), input(), 0, 9 * 60_000)).toBe(false);
+    expect(policy.admits(input(), input(), 0, 10 * 60_000)).toBe(true);
+  });
+
+  it("publishes nothing when no candidate is reachable by everyone", async () => {
+    const writeMeeting = vi.fn().mockResolvedValue(ok(undefined));
+    const p = createFairPolicy(
+      makePorts({ fetchMatrix: echo(() => null), writeMeeting }),
+    );
+
+    expect(await p.run(input(), signal)).toEqual({ ok: true, value: null });
+    expect(writeMeeting).not.toHaveBeenCalled();
+  });
+
+  it("replaces an incumbent that is beaten by more than the margin", async () => {
+    const writeMeeting = vi.fn().mockResolvedValue(ok(undefined));
+    // Candidate 3 takes 20 minutes; everything else, the incumbent (last)
+    // included, takes 40.
+    const p = createFairPolicy(
+      makePorts({
+        fetchMatrix: echo((j) => (j === 3 ? 1_200 : 2_400)),
+        writeMeeting,
+      }),
+    );
+
+    const result = await p.run(input({ incumbent: JERUSALEM }), signal);
+
+    expect(writeMeeting).toHaveBeenCalledTimes(1);
+    expect(result.ok && result.value?.point).not.toEqual(JERUSALEM);
+  });
+
+  it("reports a matrix failure without writing", async () => {
+    const writeMeeting = vi.fn().mockResolvedValue(ok(undefined));
+    const p = createFairPolicy(
+      makePorts({
+        fetchMatrix: vi
+          .fn()
+          .mockResolvedValue(err({ kind: "RATE_LIMITED", retryAfterMs: 0 })),
+        writeMeeting,
+      }),
+    );
+
+    const result = await p.run(input(), signal);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "RATE_LIMITED", retryAfterMs: 0 },
+    });
+    expect(writeMeeting).not.toHaveBeenCalled();
+  });
+
+  // Rules that predate the meeting node, or that see another leader.
+  it("reports a refused publish as the failure it is", async () => {
+    const p = createFairPolicy(
+      makePorts({
+        fetchMatrix: echo(() => 600),
+        writeMeeting: vi
+          .fn()
+          .mockResolvedValue(
+            err({ kind: "DENIED", detail: "permission_denied" }),
+          ),
+      }),
+    );
+
+    const result = await p.run(input(), signal);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("DENIED");
   });
 });

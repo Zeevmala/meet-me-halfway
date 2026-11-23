@@ -73,6 +73,7 @@ function renderCard(
     travelProfile: "driving" as const,
     onProfileChange: vi.fn(),
     selectedVenueName: null as string | null,
+    meetingBasis: "distance" as const,
     routesStale: false,
   };
   return render(<MidpointCard {...defaults} {...overrides} />);
@@ -319,5 +320,26 @@ describe("MidpointCard", () => {
     renderCard({ ownRoute });
     const distance = screen.getByText(formatDistance(ownRoute.distance));
     expect(distance.tagName).toBe("BDI");
+  });
+
+  it("says when the meeting point is fair by travel time", () => {
+    renderCard({ meetingBasis: "time" });
+    expect(screen.getByText("live.fairPoint")).toBeTruthy();
+    expect(screen.queryByText("live.midpoint")).toBeNull();
+  });
+
+  it("calls the geographic fallback a midpoint, which is all it is", () => {
+    renderCard({ meetingBasis: "distance" });
+    expect(screen.getByText("live.midpoint")).toBeTruthy();
+  });
+
+  // Read off the position: the last route fetched still says "1 min" to
+  // someone standing at the door.
+  it("shows whoever has reached the destination as arrived", () => {
+    renderCard({ ownPosition: destination });
+
+    const [own, other] = rows();
+    expect(within(own!).getByText("live.arrived")).toBeTruthy();
+    expect(within(other!).queryByText("live.arrived")).toBeNull();
   });
 });

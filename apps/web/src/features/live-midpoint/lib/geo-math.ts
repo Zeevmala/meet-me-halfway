@@ -77,6 +77,36 @@ export function haversineDistance(a: LatLng, b: LatLng): number {
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+/**
+ * The point `distanceMeters` from `origin` along an initial bearing (degrees
+ * clockwise from north) — the spherical direct problem.
+ */
+export function destinationPoint(
+  origin: LatLng,
+  bearingDeg: number,
+  distanceMeters: number,
+): LatLng {
+  const lat1 = toRad(origin.lat);
+  const lng1 = toRad(origin.lng);
+  const bearing = toRad(bearingDeg);
+  const angular = distanceMeters / R;
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angular) +
+      Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing),
+  );
+  const lng2 =
+    lng1 +
+    Math.atan2(
+      Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+      Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2),
+    );
+
+  // Normalised to [-180, 180): a ring drawn across the antimeridian would
+  // otherwise hand the database a longitude its rules refuse.
+  return { lat: toDeg(lat2), lng: ((toDeg(lng2) + 540) % 360) - 180 };
+}
+
 /** Format meters as "1.2 km" or "450 m". */
 export function formatDistance(meters: number): string {
   if (meters >= 1000) {

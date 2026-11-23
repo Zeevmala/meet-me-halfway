@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { etaMinutes, etaParts, etaSpreadMinutes } from "./eta";
+import {
+  ARRIVAL_RADIUS_M,
+  etaMinutes,
+  etaParts,
+  etaSpreadMinutes,
+  hasArrived,
+} from "./eta";
+import { destinationPoint } from "./geo-math";
 
 describe("etaMinutes", () => {
   it("rounds up to the whole minute", () => {
@@ -38,5 +45,19 @@ describe("etaSpreadMinutes", () => {
 
   it("is zero for arrivals in the same minute", () => {
     expect(etaSpreadMinutes([{ duration: 600 }, { duration: 590 }])).toBe(0);
+  });
+});
+
+describe("hasArrived", () => {
+  const destination = { lat: 31.925, lng: 34.995 };
+
+  it("counts someone within the arrival radius as there", () => {
+    const near = destinationPoint(destination, 40, ARRIVAL_RADIUS_M - 5);
+    expect(hasArrived(near, destination)).toBe(true);
+  });
+
+  it("does not count someone still down the street", () => {
+    const far = destinationPoint(destination, 40, ARRIVAL_RADIUS_M + 25);
+    expect(hasArrived(far, destination)).toBe(false);
   });
 });

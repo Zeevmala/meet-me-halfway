@@ -27,6 +27,8 @@ import { backoffDelayMs } from "../../../core/dag/backoff";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import { classifyJoinError, describeError } from "../lib/error-classification";
 import { detectInAppBrowser } from "../lib/in-app-browser";
+import { meetingPath, parseMeeting } from "../lib/meeting-rtdb";
+import type { PublishedMeeting } from "../lib/fair-point";
 
 /** Typed error codes — avoids fragile string matching in the UI layer. */
 export type SessionErrorCode =
@@ -84,6 +86,8 @@ export interface LiveSessionState {
   ownIndex: ParticipantIndex | null;
   ownName: string;
   participants: ParticipantInfo[];
+  /** The session's published time-fair meeting point, if it has one. */
+  meeting: PublishedMeeting | null;
   error: SessionErrorCode | null;
   /** Raw underlying error description — shown in the UI "Details" expander
    * and useful when users report a failure. */
@@ -309,6 +313,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   const [creatorUid, setCreatorUid] = useState<string | null>(null);
   const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
+  const [meeting, setMeeting] = useState<PublishedMeeting | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [ownName, setOwnNameState] = useState<string>(() =>
@@ -316,6 +321,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   );
 
   const unsubRef = useRef<Unsubscribe | null>(null);
+  const meetingUnsubRef = useRef<Unsubscribe | null>(null);
   const codeRef = useRef<string | null>(null);
   const creatorUidRef = useRef<string | null>(null);
   // The slot we hold, kept in a ref so cleanup can remove the right node
@@ -388,6 +394,40 @@ export function useLiveSession(uid: string): LiveSessionState {
       );
     },
     [db, uid, appCheck],
+  );
+
+  /**
+   * Listen for the session's meeting point.
+   *
+   * Its failure is not the session's. A denial here means rules that predate
+   * the meeting node (the ~30s between a hosting deploy and its rules), and
+   * the page works without it: no published point is simply the geographic
+   * midpoint, which is what the graph falls back to.
+   */
+  const listenForMeeting = useCallback(
+    (sessionCode: string) => {
+      meetingUnsubRef.current = onValue(
+        ref(db, meetingPath(sessionCode)),
+        (snap) => {
+          const next = parseMeeting(snap.val());
+          // Same value, same object: the graph compares sources by identity.
+          setMeeting((previous) =>
+            previous !== null &&
+            next !== null &&
+            previous.mask === next.mask &&
+            previous.point.lat === next.point.lat &&
+            previous.point.lng === next.point.lng
+              ? previous
+              : next,
+          );
+        },
+        (err) => {
+          console.warn("[session] meeting listener error:", err);
+          setMeeting(null);
+        },
+      );
+    },
+    [db],
   );
 
   /** Record a handshake failure once, in the shape the UI and the caller need. */
@@ -482,6 +522,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         // listener attached before the write is rejected with
         // permission_denied. (joinSession attaches its own after the claim.)
         listenForParticipants(sessionCode);
+        listenForMeeting(sessionCode);
 
         return ok(sessionCode);
       } catch (thrown) {
@@ -496,7 +537,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         return err(fail("CREATE_FAILED", describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [
+      db,
+      uid,
+      appCheck,
+      appCheckReady,
+      listenForParticipants,
+      listenForMeeting,
+      fail,
+    ],
   );
 
   /** Join an existing session. */
@@ -591,6 +640,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         setStatus("ready");
 
         listenForParticipants(sessionCode);
+        listenForMeeting(sessionCode);
         return ok(sessionCode);
       } catch (thrown) {
         if (signal.aborted) {
@@ -613,7 +663,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         return err(fail(classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [
+      db,
+      uid,
+      appCheck,
+      appCheckReady,
+      listenForParticipants,
+      listenForMeeting,
+      fail,
+    ],
   );
 
   /**
@@ -657,6 +715,10 @@ export function useLiveSession(uid: string): LiveSessionState {
       unsubRef.current();
       unsubRef.current = null;
     }
+    if (meetingUnsubRef.current) {
+      meetingUnsubRef.current();
+      meetingUnsubRef.current = null;
+    }
     withdraw();
   }, [withdraw]);
 
@@ -674,6 +736,7 @@ export function useLiveSession(uid: string): LiveSessionState {
     ownIndex,
     ownName,
     participants,
+    meeting,
     error,
     errorDetails,
     createSession,

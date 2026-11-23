@@ -5,6 +5,21 @@
  * the trip takes, and 22 km can be 20 minutes or an hour.
  */
 
+import { haversineDistance } from "./geo-math";
+import type { LatLng } from "./geo-math";
+
+/**
+ * Within this of the destination is there. Wider than a doorway on purpose: a
+ * phone indoors or between buildings is commonly 30–50 m off, and a meeting
+ * point is a place to find each other, not a parking space.
+ */
+export const ARRIVAL_RADIUS_M = 75;
+
+/** Whether someone at `position` has reached `destination`. */
+export function hasArrived(position: LatLng, destination: LatLng): boolean {
+  return haversineDistance(position, destination) <= ARRIVAL_RADIUS_M;
+}
+
 /** Whole minutes, rounded up as the card always has: 61 s reads "2 min". */
 export function etaMinutes(seconds: number): number {
   return Math.ceil(seconds / 60);

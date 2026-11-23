@@ -2,6 +2,7 @@ import type * as GeoJSON from "geojson";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { RankedVenue } from "../lib/venue-ranking";
+import type { PublishedMeeting } from "../lib/fair-point";
 
 export type TravelProfile = "driving" | "walking";
 
@@ -100,7 +101,21 @@ export interface GraphSources {
    * this device's clock alone.
    */
   readonly serverTimeOffsetMs: number;
+  /**
+   * The time-fair meeting point the session carries, as last read from the
+   * database; `null` until one has been published. Whether it still answers
+   * the people counted is the `meeting` node's to decide.
+   */
+  readonly publishedMeeting: PublishedMeeting | null;
 }
+
+/**
+ * What the meeting point is halfway *in*: `time` when it is the published
+ * time-fair point, `distance` when it is the geographic centroid — before a
+ * fair point lands, when the matrix cannot be reached, or once everyone is
+ * within a short walk.
+ */
+export type MeetingBasis = "time" | "distance";
 
 /**
  * Staleness and departure of every slot, plus the next instant either changes.

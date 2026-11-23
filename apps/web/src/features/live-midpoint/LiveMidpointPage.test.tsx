@@ -73,6 +73,10 @@ const testPorts: GraphPorts = {
   // schedules, so it is never actually driven — it exists so the fake satisfies
   // the same contract production does.
   writePresence: mockWritePresence,
+  // No matrix by default: the meeting point is the centroid unless a test
+  // supplies one.
+  fetchMatrix: vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 422 })),
+  writeMeeting: vi.fn().mockResolvedValue(ok(undefined)),
   placesEnabled: false,
 };
 
@@ -169,6 +173,7 @@ function defaultSession() {
     // roster fixture below unassignable — and the spread in the movement test
     // a spread of `never`.
     participants: [] as ParticipantInfo[],
+    meeting: null,
     error: null,
     errorDetails: null,
     creatorUid: "test-uid",
@@ -563,6 +568,7 @@ describe("LiveMidpointPage", () => {
       ...defaultSession(),
       status: "ready",
       participants: [],
+      meeting: null,
     });
 
     renderPage();

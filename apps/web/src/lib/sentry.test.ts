@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { BrowserOptions } from "@sentry/react";
 import { createDirectionsClient } from "../features/live-midpoint/lib/directions-api";
+import { createMatrixClient } from "../features/live-midpoint/lib/matrix-api";
 
 // Held outside a vi.fn: init runs when ./sentry is first imported, before any
 // test, and mock call records do not survive into the tests.
@@ -92,6 +93,31 @@ describe("redact", () => {
     expect(redacted).not.toMatch(COORDINATE_DIGITS);
     expect(redacted).toContain(
       "https://api.mapbox.com/directions/v5/mapbox/driving/[redacted]?",
+    );
+  });
+
+  // The Matrix request names everyone too, and where they might meet.
+  it("removes every position from a Matrix request", async () => {
+    let requested = "";
+    vi.stubGlobal("fetch", (url: string) => {
+      requested = url;
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    await createMatrixClient("pk.test")(
+      [TEL_AVIV, HAIFA],
+      [{ lat: 32.44, lng: 34.89 }],
+      "driving",
+      new AbortController().signal,
+    );
+    vi.unstubAllGlobals();
+
+    const redacted = redact(requested);
+
+    expect(requested).toMatch(COORDINATE_DIGITS);
+    expect(redacted).not.toMatch(COORDINATE_DIGITS);
+    expect(redacted).not.toMatch(/32\.44|34\.89/);
+    expect(redacted).toContain(
+      "https://api.mapbox.com/directions-matrix/v1/mapbox/driving/[redacted]?",
     );
   });
 

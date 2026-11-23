@@ -16,6 +16,8 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PresenceValue } from "../lib/presence-rtdb";
+import type { MatrixResult } from "../lib/matrix-api";
+import type { PublishedMeeting } from "../lib/fair-point";
 import type { RouteInfo, TravelProfile } from "./types";
 
 export interface GraphPorts {
@@ -47,6 +49,23 @@ export interface GraphPorts {
     code: string,
     slot: ParticipantIndex,
     value: PresenceValue,
+    signal: AbortSignal,
+  ) => Promise<Result<void, ResourceError>>;
+  /** Travel times from every source to every destination, in one request. */
+  readonly fetchMatrix: (
+    sources: readonly LatLng[],
+    destinations: readonly LatLng[],
+    profile: TravelProfile,
+    signal: AbortSignal,
+  ) => Promise<Result<MatrixResult, ResourceError>>;
+  /**
+   * Publish the session's meeting point. The rules accept it only from the
+   * holder of the lowest slot in its mask, so a denial is an answer about who
+   * leads, not a failure of the database.
+   */
+  readonly writeMeeting: (
+    code: string,
+    meeting: PublishedMeeting,
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
   readonly placesEnabled: boolean;

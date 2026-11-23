@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added — a meeting point that is fair in time
+
+- **Halfway in minutes, not kilometres.** The midpoint was geographic, and a
+  kilometre of motorway is not a kilometre of city: people "meeting halfway"
+  arrived twenty minutes apart, and the card could only report the gap. The
+  meeting point is now the place that minimises the longest trip, found from
+  Mapbox travel-time matrices in two rounds, coarse then fine. The card calls
+  it "Fair meeting point"; routes, venue search and the navigation buttons all
+  go there
+- **One point for everyone.** One participant — the lowest slot still sharing
+  — computes it and publishes it to the session; everyone reads that. The
+  database rules accept the point only from that participant. Computed per
+  device, five people would have been sent to five places
+- **It holds still.** A published point is kept unless a new one is better by
+  the larger of 90 seconds and a tenth of the longest trip, and it is
+  re-evaluated when the group's centre moves, not whenever anyone does
+- **Falls back to the geographic midpoint** when the matrix cannot be reached,
+  while a new point is on its way after someone joins or leaves, and once
+  everyone is within a short walk
+- **"Arrived".** Anyone within 75 m of the destination shows as arrived in
+  place of an ETA
+- **The screen stays awake during a session.** A locked phone stops reporting
+  its location, and the others watched that person go stale mid-trip
+- **Rules and client together:** `sessions/{code}/meeting` is new in
+  `infra/database.rules.json`. The change is additive — a client from before
+  it never touches the node — and during the ~30s between hosting and rules
+  the publish is refused and the geographic midpoint stands
+- The privacy policy says what is new: one device also sends everyone's
+  location to Mapbox for the travel times, and the session record keeps the
+  last meeting point
+
 ### Fixed — the reload after a deploy
 
 - **A deploy put the error screen up in open tabs.** The reload that

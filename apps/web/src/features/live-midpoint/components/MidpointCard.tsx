@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
-import { etaParts, etaSpreadMinutes } from "../lib/eta";
-import type { RouteInfo, TravelProfile } from "../graph/types";
+import { etaParts, etaSpreadMinutes, hasArrived } from "../lib/eta";
+import type { MeetingBasis, RouteInfo, TravelProfile } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { NavigateGlyph } from "./icons";
 import "../styles/live-midpoint.css";
@@ -32,6 +32,13 @@ interface MidpointCardProps {
   travelProfile: TravelProfile;
   onProfileChange: (profile: TravelProfile) => void;
   selectedVenueName: string | null;
+  /**
+   * What the meeting point is halfway in. The card names it, because the two
+   * are different promises: "Fair meeting point" says nobody's trip is much
+   * longer than anyone else's, "Midpoint" only that it is the middle of the
+   * map.
+   */
+  meetingBasis: MeetingBasis;
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
 }
@@ -64,6 +71,7 @@ export default memo(function MidpointCard({
   travelProfile,
   onProfileChange,
   selectedVenueName,
+  meetingBasis,
   routesStale,
 }: MidpointCardProps) {
   const { t } = useTranslation();
@@ -104,7 +112,7 @@ export default memo(function MidpointCard({
           <span className="live-trip-dest">
             {selectedVenueName
               ? t("live.meetAt", { name: selectedVenueName })
-              : t("live.midpoint")}
+              : t(meetingBasis === "time" ? "live.fairPoint" : "live.midpoint")}
           </span>
           {spread !== null && (
             <span className="live-trip-spread">
@@ -153,7 +161,14 @@ export default memo(function MidpointCard({
               <span className="live-eta-tag">{t("live.staleTag")}</span>
             )}
             <span className={`live-eta-time live-eta-time--p${row.index}`}>
-              {row.route ? eta(row.route.duration) : "—"}
+              {/* Arrival is read off the position, not the route: a route
+                  refreshes every few seconds at best, and the last one fetched
+                  still says "1 min" to someone standing at the door. */}
+              {hasArrived(row.position, destination)
+                ? t("live.arrived")
+                : row.route
+                  ? eta(row.route.duration)
+                  : "—"}
             </span>
             {/* bdi: "40.6 km" is a left-to-right run, and inside a Hebrew
                 row the bidi algorithm laid it out as "km 40.6". */}

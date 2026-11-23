@@ -21,6 +21,7 @@
     "participantNamed": "{{name}}",
     "offline": "לא מחובר",
     "midpoint": "נקודת אמצע",
+    "fairPoint": "נקודת מפגש הוגנת",
     "mapUnavailable": "לא ניתן להציג את המפה במכשיר הזה. המרחקים והניווט עדיין עובדים.",
     "mapLabel": "מפה חיה של כל המשתתפים ונקודת המפגש",
     "fitAll": "הצג את כולם",
@@ -78,6 +79,7 @@
     "spread": "הפרש של {{minutes}} דק׳",
     "spreadEven": "מגיעים יחד",
     "staleTag": "לא עדכני",
+    "arrived": "ביעד",
     "waze": "Waze",
     "googleMaps": "Google Maps"
   },

@@ -42,6 +42,9 @@ export const DATA_COLLECTION = {
 const REDACTIONS: readonly (readonly [RegExp, string])[] = [
   // `/directions/v5/mapbox/{profile}/{lng},{lat};{lng},{lat}`
   [/(\/directions\/v5\/[^/]+\/[^/]+\/)[^?#\s"']+/g, "$1[redacted]"],
+  // `/directions-matrix/v1/mapbox/{profile}/{lng},{lat};…` — the same people,
+  // and every candidate meeting point besides.
+  [/(\/directions-matrix\/v1\/[^/]+\/[^/]+\/)[^?#\s"']+/g, "$1[redacted]"],
   // Map tiles: `/{z}/{x}/{y}` before the extension or query.
   [/\/\d{1,2}\/\d{1,8}\/\d{1,8}(?=[.@?#/]|$)/g, "/[redacted]"],
   // Any other coordinate pair, raw or URL-encoded.

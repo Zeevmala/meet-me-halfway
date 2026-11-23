@@ -31,13 +31,13 @@ graph, not nodes in it.**
 SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
 
   useAuth ───────── uid ─┐
-  useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──┬──► venues ─┐
-  useLiveGeolocation ────┤   (clock)      (SoA,    │               │            │
-  ui.selectedVenueId ────┤                 stable) │               └──► destination
-  ui.travelProfile ──────┤                         │                        │
-  ui.ownName ────────────┴──► presence             └──► phase               │
-                             (RTDB write)                                   ▼
-                                                              routes ──► frame
+  useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──► meeting ──┬──► venues ─┐
+  useLiveGeolocation ────┤   (clock)      (SoA,    │   (centroid)   (matrix +  │            │
+  ui.selectedVenueId ────┤                 stable) │                RTDB write)└──► destination
+  ui.travelProfile ──────┤                         │                                    │
+  ui.ownName ────────────┴──► presence             └──► phase                           │
+                             (RTDB write)                                               ▼
+                                                                          routes ──► frame
 ```
 
 `useLiveGeolocation`, `useLiveSession`, `useAuth` and `useNetworkStatus` are
@@ -51,10 +51,51 @@ runtime walks `TOPO_ORDER`, and `assertAcyclic` runs at module load.
 ### Why the cycle check earns its place
 
 There is no cycle today. There is one waiting. Re-centring venue search on the
-selected venue, or deriving a time-balanced midpoint from route durations —
-both natural next features — close `midpoint → venues → destination →
-midpoint`. Either would ship as a hang discovered on somebody's phone. With
-the edges declared, it is a failing test that names both nodes.
+selected venue, or balancing the meeting point from the `routes` node's
+durations, close `meeting → venues → destination → meeting`. Either would ship
+as a hang discovered on somebody's phone. With the edges declared, it is a
+failing test that names both nodes.
+
+### The meeting point is fair in time, and there is one of it
+
+`midpoint` is the geographic centroid: halfway in kilometres. `meeting` is
+what people mean by halfway — nobody's trip much longer than anyone else's —
+which is the minimax problem on the road network: the place minimising the
+longest travel time. It is solved by sampling (`lib/fair-point.ts`): a centre
+and three hexagonally packed rings of candidates out to the farthest
+participant, scored by one Mapbox Matrix request (participants × candidates),
+then a second round a third the size around the first round's best. Minimising
+the *spread* of arrivals alone would be the wrong objective — somewhere an hour
+from everyone is perfectly even.
+
+It balances travel time without the cycle above because it asks a matrix of
+its own, upstream of the destination, and never reads `routes`.
+
+Three decisions carry the design:
+
+- **One writer.** Computed per device, the point differs per device: each
+  samples the others' positions at its own moment, and five people navigate to
+  five places. So the lowest counted slot computes and publishes
+  `sessions/{code}/meeting`, and every device — the leader included — uses the
+  point as read back from the database. The rules, not the client, say who
+  leads: a write is accepted only from the holder of the lowest slot named in
+  the point's occupancy mask, and a device uses a point only while that mask
+  equals the people it counts. A point nobody's rules-checked leader wrote
+  cannot be in play.
+- **Sticky by construction.** The published point rides along in the second
+  matrix as a candidate and is kept unless beaten by the larger of 90 s and a
+  tenth of the longest trip. A destination that moves while people drive to it
+  is not a destination.
+- **Admission on the centroid, not on positions.** On the way there everyone's
+  position changes constantly and the group's centre hardly at all. Admitting
+  on positions, as `routes` does, was some sixty evaluations for a half-hour
+  trip, each billed per matrix element; on the centroid it is the first, and
+  one each time the centre has genuinely shifted.
+
+When there is no accepted point — before the first lands, after the group
+changes, when the matrix or the write is refused — the meeting point *is* the
+centroid, and the card says "Midpoint" instead of "Fair meeting point". The
+matrix carries no live traffic; `routes` ETAs remain the truth per person.
 
 ---
 

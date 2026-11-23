@@ -54,6 +54,7 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownName: "Me",
     sessionStatus: "ready",
     serverTimeOffsetMs: 0,
+    publishedMeeting: null,
     ...overrides,
   };
 }

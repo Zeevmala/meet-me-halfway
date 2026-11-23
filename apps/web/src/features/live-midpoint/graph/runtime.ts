@@ -27,14 +27,28 @@ import {
   createVenuePolicy,
   createRoutePolicy,
   createPresencePolicy,
+  createFairPolicy,
   PRESENCE_HEARTBEAT_MS,
   routesAnswer,
 } from "./policies";
-import type { PresenceInput, RouteInput, VenueInput } from "./policies";
+import type {
+  FairInput,
+  PresenceInput,
+  RouteInput,
+  VenueInput,
+} from "./policies";
+import {
+  FAIR_MIN_RADIUS_M,
+  acceptsMeeting,
+  occupancyMask,
+  spreadRadius,
+} from "../lib/fair-point";
+import type { PublishedMeeting } from "../lib/fair-point";
 import type { GraphPorts } from "./ports";
 import type {
   GraphSources,
   LivenessResult,
+  MeetingBasis,
   RouteInfo,
   RouteSet,
   SessionPhase,
@@ -61,6 +75,7 @@ export const DEFAULT_SOURCES: GraphSources = {
   ownName: "",
   sessionStatus: "idle",
   serverTimeOffsetMs: 0,
+  publishedMeeting: null,
 };
 
 const NO_FLAGS: readonly boolean[] = Object.freeze(
@@ -75,7 +90,13 @@ const NO_LIVENESS: LivenessResult = Object.freeze({
 
 export interface GraphSnapshot {
   readonly slots: SlotVector;
+  /**
+   * The meeting point: the session's published time-fair point while it
+   * answers the people counted, else their geographic centroid. `meetingBasis`
+   * says which.
+   */
   readonly midpoint: LatLng | null;
+  readonly meetingBasis: MeetingBasis;
   readonly venues: readonly RankedVenue[];
   readonly venuesLoading: boolean;
   readonly selectedVenue: RankedVenue | null;
@@ -151,13 +172,21 @@ export function createRuntime(
     createPresencePolicy(ports),
     ports,
   );
+  const fair: Resource<FairInput, PublishedMeeting | null> = createResource(
+    createFairPolicy(ports),
+    ports,
+  );
 
   // Memo cells. Each holds the previous output so an unchanged computation
   // returns the identical reference and the snapshot stays stable — which
   // useSyncExternalStore requires of getSnapshot.
   let liveness: LivenessResult = NO_LIVENESS;
   let slots: SlotVector = buildSlotVector(sources, liveness);
+  // The geographic centroid, and the meeting point resolved from it: the
+  // published fair point when it is accepted, otherwise the centroid itself.
   let midpoint: LatLng | null = null;
+  let meeting: LatLng | null = null;
+  let meetingBasis: MeetingBasis = "distance";
   let phase: SessionPhase = "idle";
   // One timer for the whole liveness concern, armed at the next instant some
   // participant's staleness flips. Replaces a 10s setInterval that ran for the
@@ -183,6 +212,7 @@ export function createRuntime(
   let snapshot: GraphSnapshot = {
     slots,
     midpoint: null,
+    meetingBasis: "distance",
     venues: EMPTY_VENUES,
     venuesLoading: false,
     selectedVenue: null,
@@ -355,27 +385,71 @@ export function createRuntime(
           if (!sameLatLng(next, midpoint)) midpoint = next;
           break;
         }
+        case "meeting": {
+          const counted = positionsCounted(slots);
+          const mask = occupancyMask(counted);
+          const radiusM =
+            midpoint === null ? 0 : spreadRadius(midpoint, counted);
+          const published = sources.publishedMeeting;
+          const accepted =
+            midpoint !== null &&
+            published !== null &&
+            acceptsMeeting(published, mask, midpoint, radiusM)
+              ? published
+              : null;
+
+          // One participant computes for everyone: the lowest counted slot,
+          // which is also the only one the rules let publish under this mask.
+          // Everyone else — and anyone within a short walk of everyone, where
+          // the centroid cannot be improved on — offers nothing.
+          const code = sources.sessionCode;
+          const leads =
+            slots.counted.length >= 2 && slots.counted[0] === slots.ownSlot;
+          if (
+            leads &&
+            code !== null &&
+            midpoint !== null &&
+            radiusM >= FAIR_MIN_RADIUS_M
+          ) {
+            fair.request({
+              code,
+              slots: counted,
+              mask,
+              profile: sources.travelProfile,
+              centroid: midpoint,
+              radiusM,
+              incumbent: accepted === null ? null : accepted.point,
+            });
+          } else {
+            fair.request(null);
+          }
+
+          const next = accepted === null ? midpoint : accepted.point;
+          if (!sameLatLng(next, meeting)) meeting = next;
+          meetingBasis = accepted === null ? "distance" : "time";
+          break;
+        }
         case "venues": {
-          if (ports.placesEnabled && midpoint !== null) {
-            venues.request({ center: midpoint });
+          if (ports.placesEnabled && meeting !== null) {
+            venues.request({ center: meeting });
           } else {
             venues.request(null);
           }
           const raw = venues.getState().value;
-          // Re-rank per tick against the live midpoint: scores are relative
+          // Re-rank per tick against the live meeting point: scores are relative
           // to the max distance within the returned set, so a ranking
           // computed for an older centre would be subtly wrong.
-          if (raw === null || midpoint === null) {
+          if (raw === null || meeting === null) {
             ranked = EMPTY_VENUES;
             rankedFromRaw = null;
             rankedAtCenter = null;
           } else if (
             raw !== rankedFromRaw ||
-            !sameLatLng(midpoint, rankedAtCenter)
+            !sameLatLng(meeting, rankedAtCenter)
           ) {
-            ranked = rankVenues(raw, midpoint, TOP_VENUES);
+            ranked = rankVenues(raw, meeting, TOP_VENUES);
             rankedFromRaw = raw;
-            rankedAtCenter = midpoint;
+            rankedAtCenter = meeting;
           }
           break;
         }
@@ -383,7 +457,7 @@ export function createRuntime(
           const result = deriveDestination(
             ranked,
             sources.selectedVenueId,
-            midpoint,
+            meeting,
           );
           nextDestination = result.destination;
           nextSelected = result.selectedVenue;
@@ -407,7 +481,8 @@ export function createRuntime(
           const presenceState = presence.getState();
           const next: GraphSnapshot = {
             slots,
-            midpoint,
+            midpoint: meeting,
+            meetingBasis,
             venues: ranked,
             venuesLoading: venueState.status === "pending",
             selectedVenue: nextSelected,
@@ -423,6 +498,7 @@ export function createRuntime(
           if (
             next.slots !== snapshot.slots ||
             next.midpoint !== snapshot.midpoint ||
+            next.meetingBasis !== snapshot.meetingBasis ||
             next.venues !== snapshot.venues ||
             next.venuesLoading !== snapshot.venuesLoading ||
             next.selectedVenue !== snapshot.selectedVenue ||
@@ -497,6 +573,7 @@ export function createRuntime(
       venues.dispose();
       routes.dispose();
       presence.dispose();
+      fair.dispose();
       listeners.clear();
     },
     isDisposed: () => disposed,

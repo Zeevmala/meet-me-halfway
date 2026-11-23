@@ -5,7 +5,7 @@ import { ServicesProvider } from "../../components/ServicesProvider";
 import type { Services } from "../../lib/services";
 import type { GraphPorts } from "./graph/ports";
 import LiveMidpointPage from "./LiveMidpointPage";
-import { ok } from "../../core/dag/result";
+import { ok, err } from "../../core/dag/result";
 
 /**
  * The page as `main.tsx` mounts it — inside <StrictMode> — with the *real*
@@ -39,6 +39,7 @@ vi.mock("./hooks/useLiveSession", () => ({
     ownIndex: 0,
     ownName: "Me",
     participants: [],
+    meeting: null,
     error: null,
     errorDetails: null,
     creatorUid: "test-uid",
@@ -59,6 +60,10 @@ const testPorts: GraphPorts = {
   searchVenues: vi.fn(),
   fetchRoute: vi.fn(),
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
+  // No matrix by default: the meeting point is the centroid unless a test
+  // supplies one.
+  fetchMatrix: vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 422 })),
+  writeMeeting: vi.fn().mockResolvedValue(ok(undefined)),
   placesEnabled: false,
 };
 

@@ -632,3 +632,106 @@ describe("timestamps — the server's clock, not the device's", () => {
     );
   });
 });
+
+describe("meeting — one point for the session, published by its leader", () => {
+  const meeting = (mask = "11000") => ({
+    lat: 31.9,
+    lng: 35.0,
+    mask,
+    ts: SERVER_NOW,
+  });
+  const path = `sessions/${CODE}/meeting`;
+
+  /** Slots 0–2 held: the creator, j1 and j2. */
+  beforeEach(async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+    await as(JOINERS[1]).ref(`sessions/${CODE}/slots/2`).set(JOINERS[1]);
+  });
+
+  it("lets the holder of the lowest slot in the mask publish", async () => {
+    await assertSucceeds(as(CREATOR).ref(path).set(meeting("11000")));
+  });
+
+  // Computed per device the point would differ per device. Only the leader's
+  // is ever accepted, and who leads is the database's to say.
+  it("refuses a holder who is not the lowest slot in the mask", async () => {
+    await assertFails(as(JOINERS[0]).ref(path).set(meeting("11000")));
+    await assertFails(as(JOINERS[1]).ref(path).set(meeting("11100")));
+  });
+
+  it("hands the lead to the next slot once the mask no longer counts the first", async () => {
+    await assertSucceeds(as(JOINERS[0]).ref(path).set(meeting("01100")));
+    await assertFails(as(JOINERS[1]).ref(path).set(meeting("01100")));
+    await assertFails(as(CREATOR).ref(path).set(meeting("01100")));
+  });
+
+  it("refuses someone who holds no slot", async () => {
+    await assertFails(as(SIXTH).ref(path).set(meeting("11000")));
+    await assertFails(
+      testEnv.unauthenticatedContext().database().ref(path).set(meeting()),
+    );
+  });
+
+  it("refuses a mask that is not five slots, or names fewer than two people", async () => {
+    await assertFails(as(CREATOR).ref(path).set(meeting("1100")));
+    await assertFails(as(CREATOR).ref(path).set(meeting("110000")));
+    await assertFails(as(CREATOR).ref(path).set(meeting("1x000")));
+    await assertFails(as(CREATOR).ref(path).set(meeting("10000")));
+  });
+
+  it("refuses coordinates out of range, a device timestamp and extra fields", async () => {
+    await assertFails(
+      as(CREATOR)
+        .ref(path)
+        .set({ ...meeting(), lat: 91 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(path)
+        .set({ ...meeting(), lng: -181 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(path)
+        .set({ ...meeting(), ts: Date.now() - 60_000 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(path)
+        .set({ ...meeting(), note: "here" }),
+    );
+    await assertFails(as(CREATOR).ref(path).set({ lat: 31.9, lng: 35.0 }));
+  });
+
+  it("refuses a second point within two seconds of the last", async () => {
+    await assertSucceeds(as(CREATOR).ref(path).set(meeting()));
+    await assertFails(
+      as(CREATOR)
+        .ref(path)
+        .set({ ...meeting(), lat: 31.95 }),
+    );
+  });
+
+  it("cannot be deleted", async () => {
+    await assertSucceeds(as(CREATOR).ref(path).set(meeting()));
+    await assertFails(as(CREATOR).ref(path).remove());
+  });
+
+  // It is derived from everyone's location, so it is theirs alone to read.
+  it("is readable by slot holders only", async () => {
+    await assertSucceeds(as(CREATOR).ref(path).set(meeting()));
+    await assertSucceeds(as(JOINERS[1]).ref(path).get());
+    await assertFails(as(SIXTH).ref(path).get());
+  });
+
+  it("is closed, to read and to write, once the session is over 24 hours old", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .database()
+        .ref(`sessions/${CODE}/created`)
+        .set(Date.now() - 25 * 60 * 60 * 1000);
+    });
+    await assertFails(as(CREATOR).ref(path).set(meeting()));
+    await assertFails(as(CREATOR).ref(path).get());
+  });
+});

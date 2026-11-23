@@ -20,7 +20,8 @@
 
 - **Multi-Participant** — Up to 5 participants per session with color-coded markers (green, blue, orange, purple, pink)
 - **Live Location Streaming** — All participants stream GPS coords via Firebase RTDB in real-time
-- **Geographic Centroid** — Cartesian mean on unit sphere updates live as any participant moves
+- **Fair Meeting Point** — halfway in *travel time*, not kilometres: the point that minimises the longest trip (minimax over a Mapbox travel-time matrix, coarse-to-fine), computed once for the session and shared, so everyone navigates to the same place. Falls back to the geographic centroid (Cartesian mean on unit sphere) when the matrix is unreachable
+- **Arrivals & Awake Screen** — each person is marked "Arrived" within 75 m of the destination, and the screen stays awake during a session so the phone keeps reporting
 - **Venue Search** — Google Places API finds nearby restaurants, cafes, and bars ranked by rating, proximity, popularity, and open status
 - **N-Participant Routing** — Mapbox Directions API shows driving or walking routes for all participants to the meeting point
 - **Dark Map UI** — Mapbox GL JS 3.x dark basemap with glass-morphism cards, accuracy circles, and smooth transitions
@@ -73,13 +74,15 @@ graph TB
     A -.->|venue search| GP
 ```
 
-All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed.
+The meeting point needs no server either. Every browser computes the geographic centroid (Cartesian mean on unit sphere); one — the lowest slot still sharing — also asks Mapbox's Matrix API for travel times to candidate points around it and publishes the fairest to the session, which is what everyone then uses.
 
 Within each browser the derived work runs as a declared graph:
 
 ```mermaid
 graph LR
-    S[slots] --> M[midpoint]
+    S[slots] --> C[midpoint]
+    S --> M[meeting]
+    C --> M
     M --> V[venues]
     M --> D[destination]
     V --> D
@@ -191,7 +194,7 @@ meet-me-halfway/
 2. **Create** — 6-character session code generated, URL becomes `/?code=XXXXX`
 3. **Join** — Up to 4 others open the shared link and join the session
 4. **Stream** — All locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
-5. **Midpoint** — Client computes geographic centroid in real-time
+5. **Meeting point** — the geographic centroid at first; then the time-fair point one participant computes and publishes for everyone
 6. **Routes** — Mapbox Directions API fetches driving/walking routes for all participants
 7. **Venues** — Google Places API searches nearby; ranked by rating, proximity, popularity, open status
 8. **Navigate** — Tap a venue to pin as meeting point; one-tap Waze/Google Maps navigation
