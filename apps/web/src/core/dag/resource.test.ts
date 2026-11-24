@@ -421,6 +421,39 @@ describe("createResource — breaker interaction", () => {
   });
 });
 
+describe("createResource — a refusal as the half-open probe's answer", () => {
+  // Offline long enough to open the breaker, then one denied write on
+  // reconnecting: the breaker stayed half-open with nothing outstanding, and
+  // refused every call for the life of the page.
+  it("closes the breaker, so a later input is tried", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "offline" }))
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "offline" }))
+      .mockResolvedValueOnce(err({ kind: "DENIED", detail: "rules" }))
+      .mockResolvedValue(ok("recovered"));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+    r.request({ at: 20, tag: "b" });
+    await t.advance(1000);
+    expect(run).toHaveBeenCalledTimes(2);
+
+    // Past the cooldown the resource sends the probe itself, and it is refused.
+    await t.advance(6000);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(r.getState().error?.kind).toBe("DENIED");
+
+    r.request({ at: 40, tag: "c" });
+    await t.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(r.getState().value).toBe("recovered");
+  });
+});
+
 describe("createResource — Retry-After", () => {
   it("waits at least as long as the server asked before retrying", async () => {
     const clock = createTestPorts();

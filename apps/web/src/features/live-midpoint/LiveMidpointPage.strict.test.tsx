@@ -61,6 +61,7 @@ const testPorts: GraphPorts = {
   fetchMatrix: vi.fn(),
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
   placesEnabled: false,
+  meetingEnabled: false,
 };
 
 const testServices = {

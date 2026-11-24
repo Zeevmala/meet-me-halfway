@@ -74,6 +74,7 @@ export function createServices(config: AppConfig): Services {
     // route fetches — peers infer staleness from how recently it landed.
     writePresence: presence.write,
     placesEnabled: config.places !== null,
+    meetingEnabled: config.balancedMeeting,
   };
 
   return { config, firebase, graphPorts, presence, requestSemaphore };

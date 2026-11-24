@@ -103,6 +103,14 @@ describe("Sentry init", () => {
     expect(span?.name).toContain("/driving-traffic/[redacted]?");
     expect(JSON.stringify([breadcrumb, span])).not.toMatch(COORDINATE_DIGITS);
     expect(event?.request?.url).toBe("https://x.web.app/?code=[redacted]");
+
+    const matrix = await matrixUrl();
+    const matrixBreadcrumb = options?.beforeBreadcrumb?.({
+      category: "fetch",
+      data: { method: "GET", url: matrix },
+    });
+    expect(matrixBreadcrumb?.data?.url).toContain("/driving/[redacted]?");
+    expect(JSON.stringify(matrixBreadcrumb)).not.toMatch(COORDINATE_DIGITS);
   });
 });
 

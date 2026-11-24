@@ -75,6 +75,7 @@ const testPorts: GraphPorts = {
   // the same contract production does.
   writePresence: mockWritePresence,
   placesEnabled: false,
+  meetingEnabled: false,
 };
 
 const testServices = {

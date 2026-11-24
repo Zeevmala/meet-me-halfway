@@ -348,6 +348,12 @@ export function createResource<I, O>(
       // token was re-sent every debounce window for as long as the page lived.
       acceptedInput = input;
       acceptedAtMs = settledAtMs;
+      // It is also proof the dependency is up — it answered. As a half-open
+      // probe's result it has to close the breaker: recording neither success
+      // nor failure left it half-open with no probe outstanding and no wake
+      // armed, refusing every later call. One denied write on reconnecting
+      // after an outage, and own location was never published again.
+      breaker.recordSuccess();
     }
     emit(degrade(result.error, settledAtMs));
     scheduleBreakerWake(settledAtMs);

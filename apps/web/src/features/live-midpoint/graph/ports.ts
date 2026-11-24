@@ -53,4 +53,6 @@ export interface GraphPorts {
     signal: AbortSignal,
   ) => Promise<Result<void, ResourceError>>;
   readonly placesEnabled: boolean;
+  /** Whether the `meeting` node asks at all — `AppConfig.balancedMeeting`. */
+  readonly meetingEnabled: boolean;
 }

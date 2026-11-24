@@ -381,7 +381,7 @@ export function createRuntime(
         case "meeting": {
           let next = centroid;
           meetingBasis = "distance";
-          if (centroid === null) {
+          if (centroid === null || !ports.meetingEnabled) {
             meeting.request(null);
           } else {
             const people = positionsCounted(slots);

@@ -247,6 +247,14 @@ const MEETING_CANDIDATES = 12;
  */
 const MEETING_ADMIT_FRACTION = 0.2;
 const MEETING_ADMIT_MIN_M = 1_000;
+/**
+ * Ask again after this long whatever has moved. Not for freshness — the
+ * matrix uses typical speeds, so the answer would be the same — but because a
+ * refusal is recorded as its input's answer (`core/dag/resource.ts`), and with
+ * no clause on age a single stray 4xx left two people standing still on the
+ * centroid for as long as they stood.
+ */
+const MEETING_TTL_MS = 10 * 60_000;
 
 function movedEnoughToRebalance(
   previous: MeetingInput,
@@ -279,9 +287,9 @@ export function meetingAnswers(
  * counted to a handful of candidate points, and the candidate whose longest
  * trip is shortest (`lib/fair-meeting.ts`).
  *
- * No refresh on age: the matrix uses typical speeds, not live traffic, so the
- * same question has the same answer until somebody moves. A long last-good
- * window for the same reason — a point that was fair ten minutes ago still is,
+ * Refreshed on age only rarely (`MEETING_TTL_MS`): the matrix uses typical
+ * speeds, not live traffic, so the same question has the same answer until
+ * somebody moves. A long last-good window for the same reason — a point that was fair ten minutes ago still is,
  * and falling back to the centroid on one failed refresh would move the place
  * people are driving to.
  */
@@ -304,10 +312,11 @@ export function createMeetingPolicy(
       maxOpenMs: 5 * 60_000,
       multiplier: 2,
     },
-    admits: (previous, next) =>
+    admits: (previous, next, previousAtMs, nowMs) =>
       previous.profile !== next.profile ||
       occupancyKey(previous.slots) !== occupancyKey(next.slots) ||
-      movedEnoughToRebalance(previous, next),
+      movedEnoughToRebalance(previous, next) ||
+      nowMs - previousAtMs >= MEETING_TTL_MS,
     identity: (input) =>
       `m:${input.profile}:${occupancyKey(input.slots)}:` +
       cellKey(input.centroid, MEETING_ADMIT_MIN_M),

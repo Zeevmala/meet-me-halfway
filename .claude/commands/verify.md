@@ -20,7 +20,7 @@ is more useful whole — but never mark a job passed that did not run.
    reports files CI never checks.
 2. **typecheck** — `npm run tsc`
 3. **test** — `npm test`
-4. **hook tests** — `node --test .claude/hooks/verify-on-stop.test.mjs`
+4. **hook tests** — `node --test .claude/hooks/verify-on-stop.test.mjs .claude/hooks/session-start.test.mjs`
 5. **rules** — needs Java:
    `npx -y firebase-tools@15.29.0 emulators:exec --only database --project demo-meet-me-halfway "npm --prefix apps/web run test:rules"`
 6. **build** — `npm run build` needs the real `VITE_*` keys. Without them run

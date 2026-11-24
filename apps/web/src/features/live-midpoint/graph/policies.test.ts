@@ -38,6 +38,7 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     ),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
+    meetingEnabled: true,
     ...overrides,
   };
 }
@@ -414,9 +415,13 @@ describe("meeting policy", () => {
     });
 
     // Typical speeds, not live traffic: the same question, the same answer.
-    it("never on age alone", () => {
-      expect(policy.admits(before, meetingInput(PAIR), 0, 24 * 3_600_000)).toBe(
+    // The rare refresh is what lets a refused request be asked again.
+    it("on age only after ten minutes", () => {
+      expect(policy.admits(before, meetingInput(PAIR), 0, 9 * 60_000)).toBe(
         false,
+      );
+      expect(policy.admits(before, meetingInput(PAIR), 0, 10 * 60_000)).toBe(
+        true,
       );
     });
 

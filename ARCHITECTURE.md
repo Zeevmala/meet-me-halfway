@@ -77,7 +77,20 @@ alone (below).
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
 
-### The meeting point is balanced by travel time
+### The meeting point balanced by travel time — built, and switched off
+
+> **Off in production** (`VITE_BALANCED_MEETING`, on in the e2e build only).
+> What follows describes the node as built. It is not shipped because its
+> answer is not one point per session: it depends on the device's own travel
+> mode, on the positions that device last asked about, and on the point it
+> already shows. Review measured two phones 4 km apart on identical positions
+> — one had asked before somebody moved 5 km, under its re-ask threshold, the
+> other after. Each would have navigated to its own point. The centroid has no
+> such history. The fix is one writer: the lowest counted slot computes the
+> point and the session reads it from the database, which is a schema change
+> (a new field, rules, a retention decision for the privacy policy) and is
+> made by expand/contract. Toggling the travel mode also drops the answer for
+> a second, which re-centres venue search and can lose a picked venue.
 
 The centroid is halfway in distance. One person on a motorway and one crossing
 a city reach it half an hour apart, and the card used to report that gap
@@ -96,12 +109,14 @@ an hour beyond everyone has a gap of zero.
   incumbent, and a new one must beat it by a minute and 5%. Admission is
   relative — a fifth of somebody's distance to the centroid, never under 1 km —
   so people driving towards the point do not move it, or pay for the question.
-  There is no refresh on age: the matrix uses typical speeds, so the same
-  question has the same answer.
+  It is refreshed on age only every ten minutes: the matrix uses typical
+  speeds, so the same question has the same answer.
 - **It degrades to the centroid**, shown at once and whenever the matrix
   cannot answer; `meetingBasis` in the snapshot says which is on screen, and
   the card's title follows it. Its debounce (1 s) sits inside the routes' (3 s)
-  and the venues' (5 s), so neither is fetched for the centroid first.
+  and the venues' (5 s), so neither is fetched for the centroid first — while
+  the matrix answers within about two seconds. A slow answer (measured at 6 s)
+  means routes to the centroid, then a second set.
 - **Cost:** people × candidates elements per request — 24 for two people, 60
   for five — and one request per roster or travel-mode change plus the rare
   re-balance.

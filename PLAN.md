@@ -25,8 +25,13 @@
 
 ## v2 Roadmap
 
-- [x] Meeting point balanced by travel time (Mapbox Matrix, minimax) — see
-      `ARCHITECTURE.md`
+- [ ] Meeting point balanced by travel time (Mapbox Matrix, minimax) — built
+      behind `VITE_BALANCED_MEETING`, off: each device works out its own. Ships
+      when the lowest counted slot computes it and the session reads it from
+      the database (schema change by expand/contract; decide whether the point
+      is cleared on disconnect, and say so in the privacy policy). Then: hold
+      the previous point across a travel-mode toggle so a picked venue
+      survives it
 - [ ] Rank venues by the same matrix (fairness of the trip to each venue,
       not straight-line distance from the meeting point)
 - [ ] One destination for the whole session: the picked venue and travel mode

@@ -4,16 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added — a meeting point balanced by travel time
+### Added
 
-- **The midpoint is now halfway in time, not in distance.** It was the
-  geographic centroid, which one person on a motorway and one crossing a city
-  reach half an hour apart; the card said so ("N min apart") and did nothing
-  about it. One Mapbox Matrix request now asks how long everyone would take to
-  reach a dozen points between them, and the meeting point is the one whose
-  longest trip is shortest — snapped to a road, where the centroid was often a
-  field. It holds still while people drive to it, and falls back to the
-  centroid whenever the matrix cannot answer. The card's title says which it is
+- **A meeting point balanced by travel time — built, behind a flag, off.**
+  The midpoint is the geographic centroid, which one person on a motorway and
+  one crossing a city reach half an hour apart. A `meeting` node now asks the
+  Mapbox Matrix API how long everyone would take to reach a dozen points
+  between them and takes the one whose longest trip is shortest, snapped to a
+  road. It is off (`VITE_BALANCED_MEETING`) because review found it is not one
+  point per session: worked out on each device from its own history, two
+  phones showed points 4 km apart on the same positions. It ships once the
+  session shares one through the database
 - **Driving ETAs use live traffic.** Routes were asked for with Mapbox's
   `driving` profile, which answers from typical speeds, and then refreshed
   every minute "because traffic moves" — re-fetching an answer that could not
@@ -27,6 +28,11 @@ All notable changes to this project will be documented in this file.
   meant up to five route requests every three seconds from every open tab.
   A refusal is now that input's answer, and the next attempt waits for the
   input to change or the answer to age, as after a success
+- **One denied write after an outage stopped location sharing for good.** A
+  refusal answering the circuit breaker's probe was recorded as neither a
+  success nor a failure, leaving the breaker half-open with nothing
+  outstanding: every later call refused, for the life of the page. A refusal
+  is an answer, and closes it
 - **Every accuracy circle was rebuilt on every GPS fix.** One fix a second
   from anyone moving redrew all five — 320 points of trigonometry and five
   uploads to the map's worker. Only the circle that changed is redrawn

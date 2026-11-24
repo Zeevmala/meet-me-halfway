@@ -41,6 +41,21 @@ export interface AppConfig {
   readonly recaptchaSiteKey: string | null;
   readonly sentryDsn: string | null;
   /**
+   * Balance the meeting point by travel time (the graph's `meeting` node).
+   *
+   * Off unless `VITE_BALANCED_MEETING` is `true`, and it stays off in
+   * production until the point is one the whole session shares. Each device
+   * works it out for itself, from the positions it last asked about and the
+   * point it already shows, so two phones in one session can show — and
+   * navigate to — points kilometres apart. The centroid has no history: every
+   * device derives the same one.
+   *
+   * Turning it on in production also sends everyone's position to Mapbox for
+   * a second purpose — the Matrix request — which `public/privacy.html` must
+   * then say, in its summary and under Mapbox, in the same commit.
+   */
+  readonly balancedMeeting: boolean;
+  /**
    * `host:port` of a Realtime Database emulator, for end-to-end tests only.
    *
    * The e2e suite drives the real client against the emulator loaded with the
@@ -70,6 +85,7 @@ export function createAppConfig(): AppConfig {
     },
     recaptchaSiteKey: orNull(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
     sentryDsn: orNull(import.meta.env.VITE_SENTRY_DSN),
+    balancedMeeting: import.meta.env.VITE_BALANCED_MEETING === "true",
     rtdbEmulatorHost: orNull(import.meta.env.VITE_RTDB_EMULATOR_HOST),
   };
 }

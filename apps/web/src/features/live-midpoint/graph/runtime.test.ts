@@ -93,6 +93,7 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     ),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
+    meetingEnabled: true,
     ...overrides,
   };
 
@@ -841,6 +842,21 @@ describe("createRuntime — meeting point balanced by travel time", () => {
 
     expect(fetchMatrix).toHaveBeenCalledTimes(2);
     expect(fetchMatrix.mock.calls[1]?.[1][0]).toEqual(FAIR);
+  });
+
+  // Off in production until the point is shared by the session: worked out
+  // per device, two phones can show points kilometres apart.
+  it("asks nothing and keeps the centroid when it is switched off", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix, meetingEnabled: false });
+    const r = createRuntime(h.ports, PAIR);
+    const centroid = r.getSnapshot().midpoint;
+
+    await h.advance(20_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
+    expect(r.getSnapshot().midpoint).toBe(centroid);
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
   });
 
   it("asks nothing with nobody to meet", async () => {
