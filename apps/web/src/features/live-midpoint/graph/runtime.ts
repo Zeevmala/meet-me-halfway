@@ -424,8 +424,10 @@ export function createRuntime(
             // Everyone else shows what the creator published, while the
             // creator is still counted. With no creator there is no point,
             // and every device falls back to the same centroid.
+            // Behind the same switch as the writing: off means off, whatever
+            // a record holds.
             meeting.request(null);
-            if (slots.counted.includes(CREATOR_SLOT)) {
+            if (ports.meetingEnabled && slots.counted.includes(CREATOR_SLOT)) {
               published =
                 sources.participants.find((p) => p.index === CREATOR_SLOT)
                   ?.meet ?? null;

@@ -298,6 +298,22 @@ describe("participants — the meeting point a holder may publish", () => {
     );
   });
 
+  // "Only the creator publishes one" is the rule's to keep, not the client's.
+  it("refuses a meeting point from anyone but the creator", async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+
+    await assertFails(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/participants/1`)
+        .set({ ...position(JOINERS[0]), mlat: 31.9, mlng: 35.0 }),
+    );
+    await assertSucceeds(
+      as(JOINERS[0])
+        .ref(`sessions/${CODE}/participants/1`)
+        .set(position(JOINERS[0])),
+    );
+  });
+
   // The position has not changed, so the 2 s throttle does not apply: a new
   // point reaches the session as soon as it is known.
   it("lets the point change while the holder stands still", async () => {

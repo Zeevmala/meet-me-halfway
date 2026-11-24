@@ -929,6 +929,18 @@ describe("createRuntime — meeting point balanced by travel time", () => {
       expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
     });
 
+    it("ignores a published point while the feature is switched off", () => {
+      const h = createHarness({ meetingEnabled: false });
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [{ ...peer(0, TEL_AVIV), meet: FAIR }],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+      expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+    });
+
     it("ignores a point published by anyone but the creator", () => {
       const h = createHarness();
       const r = createRuntime(h.ports, {

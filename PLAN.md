@@ -29,7 +29,9 @@
       the creator computes it and publishes it in `participants/0`. Next
       release: set `VITE_BALANCED_MEETING=true` in the deploy job, once this
       release's rules are live, and add the Matrix request and the published
-      point to `privacy.html` in that commit
+      point to `privacy.html` in that commit. Tabs still on a bundle older
+      than this release cannot read the point and will show the centroid
+      until they reload — leave a full release between the two steps
 - [ ] Rank venues by the same matrix (fairness of the trip to each venue,
       not straight-line distance from the meeting point)
 - [ ] One destination for the whole session: the picked venue is per device

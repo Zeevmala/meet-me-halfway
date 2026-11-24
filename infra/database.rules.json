@@ -62,10 +62,10 @@
               ".validate": "newData.isString() && newData.val().length <= 30"
             },
             "mlat": {
-              ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+              ".validate": "$slot === '0' && newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
             },
             "mlng": {
-              ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+              ".validate": "$slot === '0' && newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
             },
             "$other": { ".validate": false }
           }

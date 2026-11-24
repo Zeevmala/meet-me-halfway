@@ -90,7 +90,13 @@ export function createMatrixClient(accessToken: string): FetchMatrix {
 
       const snapped = destinations.map((asked, i) => {
         const location = data.destinations?.[i]?.location;
-        return location ? { lat: location[1], lng: location[0] } : asked;
+        // Checked: this point is published to the session, and a record
+        // with a bad number in it is refused whole — position included.
+        return location !== undefined &&
+          Number.isFinite(location[0]) &&
+          Number.isFinite(location[1])
+          ? { lat: location[1], lng: location[0] }
+          : asked;
       });
       return ok({ durations: rows, snapped });
     } catch (thrown) {

@@ -137,7 +137,7 @@ Tests are typechecked. Vitest strips types without checking them, so `tsc` is th
   creatorUid: string (write-once, must match auth.uid)
   slots/{0..4}: uid (write-once; exactly five keys may ever exist)
   participants/{slot}: { uid, lat, lng, accuracy, ts, name, mlat?, mlng? }   # ts: server timestamp
-                                                 # mlat/mlng: the meeting point, both or neither; read from slot 0 only
+                                                 # mlat/mlng: the meeting point, both or neither; slot 0 only
 /probe   (never holds data; readable by anyone signed in, writable by nobody)
 ```
 
