@@ -741,7 +741,16 @@ describe("createRuntime — meeting point balanced by travel time", () => {
     );
   }
 
+  const SESSION = {
+    sessionCode: "ABC234",
+    ownUid: "own-uid",
+    ownName: "Me",
+    sessionStatus: "ready" as const,
+  };
+
+  /** The creator's device, in a session it can publish to. */
   const PAIR = {
+    ...SESSION,
     ownSlot: 0 as const,
     ownPosition: TEL_AVIV,
     participants: [peer(1, JERUSALEM)],
@@ -807,11 +816,12 @@ describe("createRuntime — meeting point balanced by travel time", () => {
     expect(h.ports.fetchRoute).toHaveBeenCalled();
   });
 
-  // The point balanced for two is not the point for three.
-  it("returns to the centroid when someone joins, until the matrix answers for them", async () => {
+  // Dropping to the centroid while the matrix was asked again moved every
+  // device twice, and the joiners a write later than the creator.
+  it("keeps its point when someone joins, until the matrix answers for them", async () => {
     const fetchMatrix = matrixAnswering(FAIR);
     const h = createHarness({ fetchMatrix });
-    const r = createRuntime(h.ports, PAIR);
+    const r = createRuntime(h.ports, { ...PAIR, ...SESSION });
     await h.advance(1_500);
     expect(r.getSnapshot().meetingBasis).toBe("time");
 
@@ -820,14 +830,31 @@ describe("createRuntime — meeting point balanced by travel time", () => {
       participants: [peer(1, JERUSALEM), peer(2, { lat: 32.79, lng: 34.99 })],
     });
 
-    expect(r.getSnapshot().meetingBasis).toBe("distance");
-    expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
 
     await h.advance(1_500);
 
     expect(r.getSnapshot().midpoint).toEqual(FAIRER);
-    expect(r.getSnapshot().meetingBasis).toBe("time");
     expect(fetchMatrix.mock.calls[1]?.[0]).toHaveLength(3);
+  });
+
+  // A point adopted but not written — no fix yet, location denied — was one
+  // nobody else in the session had.
+  it("works nothing out on a creator that cannot publish", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, {
+      ...SESSION,
+      ownSlot: 0,
+      ownPosition: null,
+      participants: [peer(1, JERUSALEM), peer(2, { lat: 32.79, lng: 34.99 })],
+    });
+
+    await h.advance(20_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
   });
 
   it("offers the point it is showing as the incumbent of the next question", async () => {
@@ -860,12 +887,7 @@ describe("createRuntime — meeting point balanced by travel time", () => {
   });
 
   describe("one point for the whole session", () => {
-    const session = {
-      sessionCode: "ABC234",
-      ownUid: "own-uid",
-      ownName: "Me",
-      sessionStatus: "ready" as const,
-    };
+    const session = SESSION;
 
     it("is published by the creator, in the record it already writes", async () => {
       const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });

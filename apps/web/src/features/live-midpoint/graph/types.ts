@@ -25,14 +25,8 @@ export interface RouteSet {
  */
 export type MeetingBasis = "time" | "distance";
 
-/**
- * The matrix's answer, tagged with what it answers — like `RouteSet` — so the
- * graph can tell when it no longer does.
- */
+/** The matrix's answer. */
 export interface MeetingAnswer {
-  readonly profile: TravelProfile;
-  /** Which slots it was computed for (`occupancyKey`). */
-  readonly occupancy: string;
   /** Snapped to the road network; `null` when nowhere is reachable by all. */
   readonly point: LatLng | null;
   /** The longest trip to `point`, seconds. */

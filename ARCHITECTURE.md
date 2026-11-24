@@ -110,12 +110,18 @@ an hour beyond everyone has a gap of zero.
   so people driving towards the point do not move it, or pay for the question.
   It is refreshed on age only every ten minutes: the matrix uses typical
   speeds, so the same question has the same answer.
-- **It degrades to the centroid**, shown at once and whenever the matrix
-  cannot answer; `meetingBasis` in the snapshot says which is on screen, and
-  the card's title follows it. Its debounce (1 s) sits inside the routes' (3 s)
-  and the venues' (5 s), so neither is fetched for the centroid first — while
-  the matrix answers within about two seconds. A slow answer (measured at 6 s)
-  means routes to the centroid, then a second set.
+- **It moves once, and together.** The last answer stands through a change of
+  roster or travel mode until the matrix answers again, so nobody sees the
+  centroid in between and the joiners, who hear of a new point one write
+  later, are never on a different one for longer than that write. The
+  centroid is the fallback only when there is no answer at all: at first,
+  when the matrix cannot answer, or when the creator cannot publish (no fix,
+  location denied) — a point it could not write was one nobody else had.
+  `meetingBasis` says which is on screen. On the creator the answer lands
+  inside the routes' debounce, so they are fetched once; a joiner learns of
+  the point about six seconds after joining, and has fetched routes to the
+  centroid by then — one extra set per joiner, for one matrix request per
+  session instead of one per device.
 - **Cost:** people × candidates elements per request — 24 for two people, 60
   for five — and one request per roster or travel-mode change plus the rare
   re-balance.

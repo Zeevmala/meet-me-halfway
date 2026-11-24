@@ -285,15 +285,6 @@ function movedEnoughToRebalance(
   return false;
 }
 
-/** Whether a matrix answer is for the people and travel mode now counted. */
-export function meetingAnswers(
-  answer: MeetingAnswer,
-  slots: readonly (LatLng | null)[],
-  profile: TravelProfile,
-): boolean {
-  return answer.profile === profile && answer.occupancy === occupancyKey(slots);
-}
-
 /**
  * The meeting point balanced by travel time: one Matrix request from everyone
  * counted to a handful of candidate points, and the candidate whose longest
@@ -315,7 +306,9 @@ export function createMeetingPolicy(
     debounceMs: 1_000,
     maxWaitMs: 3_000,
     timeoutMs: 8_000,
-    staleAfterMs: 10 * 60_000,
+    // Longer than the refresh: one failed refresh must not send the whole
+    // session back to the centroid, and with the two equal it always did.
+    staleAfterMs: 3 * MEETING_TTL_MS,
     retryAttempts: 2,
     retryBaseMs: 1_000,
     breaker: {
@@ -360,8 +353,6 @@ export function createMeetingPolicy(
         hasIncumbent ? 0 : null,
       );
       return ok({
-        profile: input.profile,
-        occupancy: occupancyKey(input.slots),
         point:
           choice === null ? null : (matrix.value.snapped[choice.index] ?? null),
         worstSeconds: choice?.worstSeconds ?? 0,

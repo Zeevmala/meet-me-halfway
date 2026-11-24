@@ -35,7 +35,8 @@ one rather than pattern-matching:
    the acyclicity test will not see unless the edge is declared.
 6. **Stale answers.** A resource keeps its last value through any change of
    input. Whatever reads `getState().value` checks that the value still answers
-   the current input (`routesAnswer`, `meetingAnswers`).
+   the current input (`routesAnswer`), or the code says why a held value is
+   right (the meeting point stands until its successor arrives).
 7. **Slot indexing.** Anything keyed by participant uses the slot index — never
    an array position after a `filter`.
 8. **I/O seam.** New I/O arrives through `graph/ports.ts`, is wrapped in the

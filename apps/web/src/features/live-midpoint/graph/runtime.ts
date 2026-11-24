@@ -28,7 +28,6 @@ import {
   createRoutePolicy,
   createPresencePolicy,
   createMeetingPolicy,
-  meetingAnswers,
   PRESENCE_HEARTBEAT_MS,
   routesAnswer,
 } from "./policies";
@@ -399,19 +398,25 @@ export function createRuntime(
             // out on every device it was a different point on each: it depends
             // on that device's travel mode, on the positions it last asked
             // about, and on the point it already shows.
-            if (ports.meetingEnabled) {
-              const people = positionsCounted(slots);
-              // The resource keeps its value through any change of input, so
-              // an answer is used only while it is for the people now counted:
-              // the point balanced for two is not the point for three.
-              const answer = meeting.getState().value;
-              const point =
-                answer !== null &&
-                meetingAnswers(answer, people, sources.travelProfile)
-                  ? answer.point
-                  : null;
+            // And only while it can publish: a point this device adopted but
+            // could not write — no fix yet, location denied — was one nobody
+            // else had.
+            if (
+              ports.meetingEnabled &&
+              sources.sessionCode !== null &&
+              sources.ownUid !== null &&
+              sources.ownPosition !== null
+            ) {
+              // The last answer stands until the next one replaces it, through
+              // a change of roster or travel mode. Dropping to the centroid
+              // while the matrix was asked again moved every device twice —
+              // each fetching routes twice — and for those seconds the creator
+              // and the joiners, who hear of it a write later, disagreed. An
+              // answer the matrix can no longer refresh ages out with the
+              // resource's last-good window.
+              const point = meeting.getState().value?.point ?? null;
               meeting.request({
-                slots: people,
+                slots: positionsCounted(slots),
                 centroid,
                 profile: sources.travelProfile,
                 incumbent: point,

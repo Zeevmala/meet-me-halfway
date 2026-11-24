@@ -3,7 +3,6 @@ import {
   createMeetingPolicy,
   createVenuePolicy,
   createRoutePolicy,
-  meetingAnswers,
   routesAnswer,
 } from "./policies";
 import type { MeetingInput, RouteInput, VenueInput } from "./policies";
@@ -327,8 +326,6 @@ describe("meeting policy", () => {
     expect(result.ok).toBe(true);
     if (!result.ok || asked === undefined) return;
     expect(result.value).toEqual({
-      profile: "driving",
-      occupancy: "xx---",
       point: { lat: asked.lat + 0.001, lng: asked.lng },
       worstSeconds: 600,
     });
@@ -434,36 +431,5 @@ describe("meeting policy", () => {
         policy.identity(before),
       );
     });
-  });
-});
-
-describe("meetingAnswers", () => {
-  const answer = {
-    profile: "driving" as const,
-    occupancy: "xx---",
-    point: FAR,
-    worstSeconds: 600,
-  };
-
-  it("holds for the same people and travel mode, wherever they have moved", () => {
-    expect(
-      meetingAnswers(answer, [NEARBY, JERUSALEM, null, null, null], "driving"),
-    ).toBe(true);
-  });
-
-  it("lapses when someone joins or leaves, or the mode changes", () => {
-    expect(
-      meetingAnswers(answer, [TEL_AVIV, JERUSALEM, FAR, null, null], "driving"),
-    ).toBe(false);
-    expect(
-      meetingAnswers(answer, [TEL_AVIV, null, null, null, null], "driving"),
-    ).toBe(false);
-    expect(
-      meetingAnswers(
-        answer,
-        [TEL_AVIV, JERUSALEM, null, null, null],
-        "walking",
-      ),
-    ).toBe(false);
   });
 });
