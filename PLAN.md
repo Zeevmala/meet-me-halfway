@@ -25,17 +25,16 @@
 
 ## v2 Roadmap
 
-- [ ] Meeting point balanced by travel time (Mapbox Matrix, minimax) — built
-      behind `VITE_BALANCED_MEETING`, off: each device works out its own. Ships
-      when the lowest counted slot computes it and the session reads it from
-      the database (schema change by expand/contract; decide whether the point
-      is cleared on disconnect, and say so in the privacy policy). Then: hold
-      the previous point across a travel-mode toggle so a picked venue
-      survives it
+- [ ] Meeting point balanced by travel time (Mapbox Matrix, minimax) — built;
+      the creator computes it and publishes it in `participants/0`. Next
+      release: set `VITE_BALANCED_MEETING=true` in the deploy job, once this
+      release's rules are live, and add the Matrix request and the published
+      point to `privacy.html` in that commit
 - [ ] Rank venues by the same matrix (fairness of the trip to each venue,
       not straight-line distance from the meeting point)
-- [ ] One destination for the whole session: the picked venue and travel mode
-      are per device today, so two people can navigate to different places
+- [ ] One destination for the whole session: the picked venue is per device
+      today, so two people can navigate to different places. The same move
+      fixes it — the creator's record carries the pick
 - [ ] WhatsApp bot for session creation and invites
 - [ ] Transit/cycling travel profiles
 - [ ] Session history and favorite venues

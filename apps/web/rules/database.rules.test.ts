@@ -249,6 +249,68 @@ describe("participants — payload validation (regression)", () => {
   });
 });
 
+// The creator publishes the meeting point it worked out inside its own
+// record, so the whole session shows one. Same holder-only write, same
+// holder-only read, same removal on disconnect as the position beside it.
+describe("participants — the meeting point a holder may publish", () => {
+  const record = `sessions/${CODE}/participants/0`;
+
+  it("accepts a record carrying a meeting point", async () => {
+    await assertSucceeds(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: 31.9, mlng: 35.0 }),
+    );
+  });
+
+  it("still accepts a record without one", async () => {
+    await assertSucceeds(as(CREATOR).ref(record).set(position(CREATOR)));
+  });
+
+  it("refuses half a point", async () => {
+    await assertFails(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: 31.9 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlng: 35.0 }),
+    );
+  });
+
+  it("refuses a point that is not on the planet, or not a number", async () => {
+    await assertFails(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: 91, mlng: 35.0 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: 31.9, mlng: 181 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: "31.9", mlng: 35.0 }),
+    );
+  });
+
+  // The position has not changed, so the 2 s throttle does not apply: a new
+  // point reaches the session as soon as it is known.
+  it("lets the point change while the holder stands still", async () => {
+    await as(CREATOR).ref(record).set(position(CREATOR));
+
+    await assertSucceeds(
+      as(CREATOR)
+        .ref(record)
+        .set({ ...position(CREATOR), mlat: 31.9, mlng: 35.0 }),
+    );
+  });
+});
+
 describe("session metadata", () => {
   it("keeps created and creatorUid write-once", async () => {
     await assertFails(

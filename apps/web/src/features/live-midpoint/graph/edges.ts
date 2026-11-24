@@ -36,12 +36,14 @@ export const EDGES: EdgeMap = {
   // heartbeat from a stationary participant as no change at all.
   liveness: [],
   slots: ["liveness"],
-  // A write, and a sink: it reads sources, and nothing derives from its value.
-  presence: [],
+  // A write, and a sink: nothing derives from its value. It follows `meeting`
+  // because the creator's record carries the point that node worked out.
+  presence: ["meeting"],
   midpoint: ["slots"],
   phase: ["slots", "liveness", "presence"],
-  // The point balanced by travel time, falling back to the centroid `midpoint`
-  // derives. It reads people's positions, never route durations or the
+  // The point balanced by travel time — worked out by the creator's device,
+  // read by everyone else from the creator's record — falling back to the
+  // centroid `midpoint` derives. It reads people's positions, never route durations or the
   // destination, which is what keeps the cycle the header warns of open:
   // nothing downstream of `meeting` feeds it.
   meeting: ["slots", "midpoint"],

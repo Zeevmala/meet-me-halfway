@@ -48,6 +48,13 @@ interface ParticipantData {
   accuracy: number;
   ts: number;
   name?: string;
+  mlat?: number;
+  mlng?: number;
+}
+
+/** A snapshot is untrusted input: the rules bound these, and so does this. */
+function isCoordinate(value: unknown, limit: number): value is number {
+  return typeof value === "number" && Math.abs(value) <= limit;
 }
 
 /**
@@ -64,6 +71,8 @@ export interface ParticipantInfo {
   lastSeen: number;
   index: ParticipantIndex;
   name: string | null;
+  /** The meeting point they published for the session, if any. */
+  meet: LatLng | null;
 }
 
 /** Why a session handshake failed, and what the raw error said. */
@@ -365,6 +374,11 @@ export function useLiveSession(uid: string): LiveSessionState {
               lastSeen: participant.ts,
               index: slot as ParticipantIndex,
               name: sanitizeName(participant.name),
+              meet:
+                isCoordinate(participant.mlat, 90) &&
+                isCoordinate(participant.mlng, 180)
+                  ? { lat: participant.mlat, lng: participant.mlng }
+                  : null,
             });
           }
 

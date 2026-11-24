@@ -65,6 +65,34 @@ describe("createPresenceWriter", () => {
     );
   });
 
+  // The rules name two fields, and refuse a record with any other.
+  it("writes a meeting point as the two fields the rules accept", async () => {
+    const writer = createPresenceWriter(db);
+
+    await writer.write(
+      "ABC234",
+      SLOT,
+      { ...VALUE, meet: { lat: 31.9, lng: 35.0 } },
+      live(),
+    );
+
+    expect(mockSet).toHaveBeenCalledWith(
+      { path: PATH },
+      { ...VALUE, mlat: 31.9, mlng: 35.0, ts: SERVER_TIMESTAMP },
+    );
+  });
+
+  it("writes no meeting fields when there is no point", async () => {
+    const writer = createPresenceWriter(db);
+
+    await writer.write("ABC234", SLOT, { ...VALUE, meet: null }, live());
+
+    expect(mockSet).toHaveBeenCalledWith(
+      { path: PATH },
+      { ...VALUE, ts: SERVER_TIMESTAMP },
+    );
+  });
+
   // Peers judge staleness from `ts`, and device clocks disagree by minutes on
   // some phones. A device-stamped `ts` made a participant with a slow clock
   // look stale to everyone, and one with a fast clock look live after leaving.

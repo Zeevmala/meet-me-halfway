@@ -43,16 +43,18 @@ export interface AppConfig {
   /**
    * Balance the meeting point by travel time (the graph's `meeting` node).
    *
-   * Off unless `VITE_BALANCED_MEETING` is `true`, and it stays off in
-   * production until the point is one the whole session shares. Each device
-   * works it out for itself, from the positions it last asked about and the
-   * point it already shows, so two phones in one session can show — and
-   * navigate to — points kilometres apart. The centroid has no history: every
-   * device derives the same one.
+   * Off unless `VITE_BALANCED_MEETING` is `true`. The creator's device works
+   * the point out and publishes it in its participant record as `mlat`/`mlng`;
+   * the others read it.
    *
-   * Turning it on in production also sends everyone's position to Mapbox for
-   * a second purpose — the Matrix request — which `public/privacy.html` must
-   * then say, in its summary and under Mapbox, in the same commit.
+   * Not before the rules that accept those fields are live: a participant
+   * record with a field the rules do not name is refused whole, so against
+   * the old rules the creator's position would stop being written.
+   *
+   * Turning it on also sends everyone's position to Mapbox for a second
+   * purpose — the Matrix request — and stores the meeting point in the
+   * creator's record until they disconnect. `public/privacy.html` must say
+   * both, in its summary and under Mapbox, in the same commit.
    */
   readonly balancedMeeting: boolean;
   /**

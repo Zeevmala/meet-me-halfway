@@ -645,6 +645,7 @@ describe("LiveMidpointPage — render-path stability", () => {
         accuracy: 12,
         lastSeen: Date.now(),
         name: "Peer",
+        meet: null,
       },
     ];
   }

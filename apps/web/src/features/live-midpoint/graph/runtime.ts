@@ -52,6 +52,8 @@ import type {
 } from "./types";
 
 const TOP_VENUES = 5;
+/** The creator's slot — a server invariant (`slots/0` validates `creatorUid`). */
+const CREATOR_SLOT: ParticipantIndex = 0;
 
 const EMPTY_VENUES: readonly RankedVenue[] = Object.freeze([]);
 const EMPTY_ROUTES: readonly (RouteInfo | null)[] = Object.freeze(
@@ -180,6 +182,11 @@ export function createRuntime(
   /** What is published as the midpoint — the `meeting` node. */
   let midpoint: LatLng | null = null;
   let meetingBasis: MeetingBasis = "distance";
+  /**
+   * The balanced point the session shares this tick: the creator's own answer
+   * on the creator's device, what the creator published on everyone else's.
+   */
+  let published: LatLng | null = null;
   let phase: SessionPhase = "idle";
   // One timer for the whole liveness concern, armed at the next instant some
   // participant's staleness flips. Replaces a 10s setInterval that ran for the
@@ -361,6 +368,8 @@ export function createRuntime(
               position,
               accuracy: sources.ownAccuracy ?? 0,
               name: sources.ownName,
+              // Only the creator publishes one; a joiner holds the creator's.
+              meet: slot === CREATOR_SLOT ? published : null,
             });
             armHeartbeat(true);
           } else {
@@ -381,29 +390,50 @@ export function createRuntime(
         case "meeting": {
           let next = centroid;
           meetingBasis = "distance";
-          if (centroid === null || !ports.meetingEnabled) {
+          published = null;
+          if (centroid === null) {
             meeting.request(null);
-          } else {
-            const people = positionsCounted(slots);
-            // The resource keeps its value through any change of input, so an
-            // answer is used only while it is for the people now counted: the
-            // point balanced for two is not the point for three.
-            const answer = meeting.getState().value;
-            const point =
-              answer !== null &&
-              meetingAnswers(answer, people, sources.travelProfile)
-                ? answer.point
-                : null;
-            meeting.request({
-              slots: people,
-              centroid,
-              profile: sources.travelProfile,
-              incumbent: point,
-            });
-            if (point !== null) {
-              next = point;
-              meetingBasis = "time";
+          } else if (slots.ownSlot === CREATOR_SLOT) {
+            // One device works the point out — the creator's, which the rules
+            // already single out — and publishes it in its own record. Worked
+            // out on every device it was a different point on each: it depends
+            // on that device's travel mode, on the positions it last asked
+            // about, and on the point it already shows.
+            if (ports.meetingEnabled) {
+              const people = positionsCounted(slots);
+              // The resource keeps its value through any change of input, so
+              // an answer is used only while it is for the people now counted:
+              // the point balanced for two is not the point for three.
+              const answer = meeting.getState().value;
+              const point =
+                answer !== null &&
+                meetingAnswers(answer, people, sources.travelProfile)
+                  ? answer.point
+                  : null;
+              meeting.request({
+                slots: people,
+                centroid,
+                profile: sources.travelProfile,
+                incumbent: point,
+              });
+              published = point;
+            } else {
+              meeting.request(null);
             }
+          } else {
+            // Everyone else shows what the creator published, while the
+            // creator is still counted. With no creator there is no point,
+            // and every device falls back to the same centroid.
+            meeting.request(null);
+            if (slots.counted.includes(CREATOR_SLOT)) {
+              published =
+                sources.participants.find((p) => p.index === CREATOR_SLOT)
+                  ?.meet ?? null;
+            }
+          }
+          if (published !== null) {
+            next = published;
+            meetingBasis = "time";
           }
           if (!sameLatLng(next, midpoint)) midpoint = next;
           break;

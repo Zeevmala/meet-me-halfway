@@ -61,6 +61,8 @@ export interface ParticipantSource {
   /** Server-clock epoch ms of this participant's most recent RTDB write. */
   readonly lastSeen: number;
   readonly name: string | null;
+  /** The meeting point this participant published for the session, if any. */
+  readonly meet?: LatLng | null;
 }
 
 /**

@@ -11,10 +11,10 @@ All notable changes to this project will be documented in this file.
   one crossing a city reach half an hour apart. A `meeting` node now asks the
   Mapbox Matrix API how long everyone would take to reach a dozen points
   between them and takes the one whose longest trip is shortest, snapped to a
-  road. It is off (`VITE_BALANCED_MEETING`) because review found it is not one
-  point per session: worked out on each device from its own history, two
-  phones showed points 4 km apart on the same positions. It ships once the
-  session shares one through the database
+  road. One device works it out — the creator's — and publishes it in the
+  record it already writes, so the session shows one point and it is deleted
+  with the creator's position. Off (`VITE_BALANCED_MEETING`) for one release:
+  the rules accepting the two new fields deploy first
 - **Driving ETAs use live traffic.** Routes were asked for with Mapbox's
   `driving` profile, which answers from typical speeds, and then refreshed
   every minute "because traffic moves" — re-fetching an answer that could not

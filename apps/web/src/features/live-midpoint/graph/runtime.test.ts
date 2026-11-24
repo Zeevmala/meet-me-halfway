@@ -859,6 +859,91 @@ describe("createRuntime — meeting point balanced by travel time", () => {
     expect(r.getSnapshot().meetingBasis).toBe("distance");
   });
 
+  describe("one point for the whole session", () => {
+    const session = {
+      sessionCode: "ABC234",
+      ownUid: "own-uid",
+      ownName: "Me",
+      sessionStatus: "ready" as const,
+    };
+
+    it("is published by the creator, in the record it already writes", async () => {
+      const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+      createRuntime(h.ports, { ...PAIR, ...session });
+
+      await h.advance(10_000);
+
+      const writes = vi.mocked(h.ports.writePresence).mock.calls;
+      expect(writes[writes.length - 1]?.[2].meet).toEqual(FAIR);
+    });
+
+    // Worked out on every device it was a different point on each.
+    it("is read, never worked out, by everyone else", async () => {
+      const fetchMatrix = matrixAnswering(FAIRER);
+      const h = createHarness({ fetchMatrix });
+      const r = createRuntime(h.ports, {
+        ...session,
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [{ ...peer(0, TEL_AVIV), meet: FAIR }],
+      });
+
+      await h.advance(10_000);
+
+      expect(fetchMatrix).not.toHaveBeenCalled();
+      expect(r.getSnapshot().midpoint).toEqual(FAIR);
+      expect(r.getSnapshot().meetingBasis).toBe("time");
+      const writes = vi.mocked(h.ports.writePresence).mock.calls;
+      expect(writes[writes.length - 1]?.[2].meet).toBeNull();
+    });
+
+    it("is the same centroid on every device while the creator has published none", () => {
+      const h = createHarness();
+      const creator = createRuntime(h.ports, PAIR);
+      const joiner = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [peer(0, TEL_AVIV)],
+      });
+
+      expect(joiner.getSnapshot().meetingBasis).toBe("distance");
+      expect(joiner.getSnapshot().midpoint).toEqual(
+        creator.getSnapshot().midpoint,
+      );
+    });
+
+    // A point left in the record of a creator who has gone silent is for a
+    // group that no longer exists.
+    it("is dropped once the creator has departed", () => {
+      const h = createHarness();
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [
+          { ...peer(0, TEL_AVIV, -DEPARTED_THRESHOLD_MS), meet: FAIR },
+          peer(2, { lat: 32.79, lng: 34.99 }),
+        ],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+      expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+    });
+
+    it("ignores a point published by anyone but the creator", () => {
+      const h = createHarness();
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [
+          peer(0, TEL_AVIV),
+          { ...peer(2, { lat: 32.79, lng: 34.99 }), meet: FAIR },
+        ],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+    });
+  });
+
   it("asks nothing with nobody to meet", async () => {
     const fetchMatrix = matrixAnswering(FAIR);
     const h = createHarness({ fetchMatrix });

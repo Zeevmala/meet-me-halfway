@@ -68,9 +68,9 @@ alone (below).
 |---|---|---|---|---|
 | `liveness` | pure | participants, server clock | `stale[]` + `departed[]` + `nextFlipAtMs` | — |
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
-| `presence` | effectful | session + own position | RTDB write | report failed |
+| `presence` | effectful | session + own position, and on the creator's device the `meeting` point | RTDB write | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
-| `meeting` | effectful | counted `slots`, `midpoint`, profile | `MeetingAnswer`: the point balanced by travel time, tagged with the people and profile it answers | fall back to `midpoint` |
+| `meeting` | effectful on the creator's device, a read of `participants/0` elsewhere | counted `slots`, `midpoint`, profile | `MeetingAnswer`: the point balanced by travel time, tagged with the people and profile it answers | fall back to `midpoint` |
 | `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `meeting` | raw `PlaceResult[]` | degrade to empty |
 | `destination` | pure | `meeting`, `venues`, selection | `LatLng \| null` | — |
@@ -79,22 +79,21 @@ alone (below).
 
 ### The meeting point balanced by travel time — built, and switched off
 
-> **Off in production** (`VITE_BALANCED_MEETING`, on in the e2e build only).
-> What follows describes the node as built. It is not shipped because its
-> answer is not one point per session: it depends on the device's own travel
-> mode, on the positions that device last asked about, and on the point it
-> already shows. Review measured two phones 4 km apart on identical positions
-> — one had asked before somebody moved 5 km, under its re-ask threshold, the
-> other after. Each would have navigated to its own point. The centroid has no
-> such history. The fix is one writer: the lowest counted slot computes the
-> point and the session reads it from the database, which is a schema change
-> (a new field, rules, a retention decision for the privacy policy) and is
-> made by expand/contract. Toggling the travel mode also drops the answer for
-> a second, which re-centres venue search and can lose a picked venue.
+> **Off in production** (`VITE_BALANCED_MEETING`, on in the e2e build) for one
+> more release: the rules that accept the two new fields deploy first.
 
-The centroid is halfway in distance. One person on a motorway and one crossing
-a city reach it half an hour apart, and the card used to report that gap
-("N min apart") without doing anything about it.
+**One point per session.** The creator's device works it out and publishes it
+inside the record it already writes, `participants/0`, as `mlat`/`mlng`.
+Everyone else reads it there and never asks the matrix. That reuses everything
+the position already has — holders-only read, holder-only write, removal on
+disconnect, the one listener — and costs one matrix request per session where
+one per device would have been five. With no creator, or nothing published,
+every device falls back to the same centroid; the creator's travel mode
+decides the point.
+
+It was first built to run on every device, and review measured two phones
+4 km apart on identical positions: the answer depends on the device's travel
+mode, on the positions it last asked about and on the point it already shows.
 
 `meeting` closes it with one Mapbox Matrix request: from everyone counted, to
 about a dozen candidate points — the centroid, and points on the way from it to

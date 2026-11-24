@@ -104,6 +104,13 @@ export interface PresenceInput {
   readonly position: LatLng;
   readonly accuracy: number;
   readonly name: string;
+  /** The meeting point to publish with it — the creator's, else `null`. */
+  readonly meet: LatLng | null;
+}
+
+function samePoint(a: LatLng | null, b: LatLng | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.lat === b.lat && a.lng === b.lng;
 }
 
 /** One RTDB write per this window, matching the old WRITE_THROTTLE_MS. */
@@ -170,13 +177,17 @@ export function createPresencePolicy(
       previous.slot !== next.slot ||
       previous.uid !== next.uid ||
       previous.name !== next.name ||
+      // The session is waiting on it: everyone else shows the point this
+      // record carries.
+      !samePoint(previous.meet, next.meet) ||
       haversineDistance(previous.position, next.position) >= PRESENCE_ADMIT_M ||
       // The heartbeat: peers infer staleness from the age of this write, so it
       // has to keep landing even for someone standing still.
       nowMs - previousAtMs >= PRESENCE_WRITE_MS,
     identity: (input) =>
       `pr:${input.code}:${input.slot}:${input.uid}:${input.name}:` +
-      cellKey(input.position, PRESENCE_ADMIT_M),
+      cellKey(input.position, PRESENCE_ADMIT_M) +
+      (input.meet === null ? "" : `:${input.meet.lat},${input.meet.lng}`),
     run: async (input, signal) => {
       const result = await ports.writePresence(
         input.code,
@@ -187,6 +198,7 @@ export function createPresencePolicy(
           lng: input.position.lng,
           accuracy: input.accuracy,
           name: input.name,
+          meet: input.meet,
         },
         signal,
       );
