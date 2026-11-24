@@ -500,6 +500,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
                 travelProfile={graph.travelProfile}
                 onProfileChange={handleProfileChange}
                 selectedVenueName={graph.selectedVenue?.displayName ?? null}
+                meetingBasis={graph.meetingBasis}
                 routesStale={graph.routesDegraded}
               />
             </>

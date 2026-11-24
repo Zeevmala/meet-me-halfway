@@ -22,12 +22,15 @@
       `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
       the rules can no longer reach production independently
 - [ ] Custom domain + SSL
-- [ ] Route geometry: request `overview=simplified` for non-local slots — the
-      last-known-good buffer doubles retained geometry, and full overview is
-      ~150–400 KB per route
 
 ## v2 Roadmap
 
+- [x] Meeting point balanced by travel time (Mapbox Matrix, minimax) — see
+      `ARCHITECTURE.md`
+- [ ] Rank venues by the same matrix (fairness of the trip to each venue,
+      not straight-line distance from the meeting point)
+- [ ] One destination for the whole session: the picked venue and travel mode
+      are per device today, so two people can navigate to different places
 - [ ] WhatsApp bot for session creation and invites
 - [ ] Transit/cycling travel profiles
 - [ ] Session history and favorite venues

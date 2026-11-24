@@ -11,6 +11,7 @@ import { createFirebaseServices } from "./firebase-factory";
 import type { FirebaseServices } from "./firebase-factory";
 import { createPlacesClient } from "../features/live-midpoint/lib/places-api";
 import { createDirectionsClient } from "../features/live-midpoint/lib/directions-api";
+import { createMatrixClient } from "../features/live-midpoint/lib/matrix-api";
 import { createPresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
 import type { GraphPorts } from "../features/live-midpoint/graph/ports";
 import type { PresenceWriter } from "../features/live-midpoint/lib/presence-rtdb";
@@ -56,12 +57,18 @@ export function createServices(config: AppConfig): Services {
     createDirectionsClient(config.mapboxToken),
   );
 
+  const fetchMatrix = withPermit(
+    requestSemaphore,
+    createMatrixClient(config.mapboxToken),
+  );
+
   const graphPorts: GraphPorts = {
     now: () => Date.now(),
     schedule: (fn, ms) => setTimeout(fn, ms),
     cancel: (id) => clearTimeout(id),
     searchVenues,
     fetchRoute,
+    fetchMatrix,
     // Not semaphore-wrapped: presence rides the already-open RTDB
     // WebSocket, so it costs no HTTP connection and must not queue behind
     // route fetches — peers infer staleness from how recently it landed.

@@ -7,7 +7,8 @@ import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
-import { ok } from "../../../core/dag/result";
+import type { FetchMatrix } from "../lib/matrix-api";
+import { ok, err } from "../../../core/dag/result";
 import type { TimerId } from "../../../core/dag/resource";
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
@@ -82,6 +83,14 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     },
     searchVenues: vi.fn().mockResolvedValue(ok(PLACES)),
     fetchRoute: vi.fn().mockResolvedValue(ok(route(1000))),
+    // No candidate reachable: the meeting point stays the centroid, which is
+    // what every case here that does not override this is about.
+    fetchMatrix: vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() => destinations.map(() => null)),
+        snapped: destinations,
+      }),
+    ),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     ...overrides,
@@ -708,5 +717,139 @@ describe("createRuntime — departed peers and stale routes", () => {
     await h.advance(10_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
     r.dispose();
+  });
+});
+
+describe("createRuntime — meeting point balanced by travel time", () => {
+  const FAIR: LatLng = { lat: 31.85, lng: 35.1 };
+  const FAIRER: LatLng = { lat: 31.8, lng: 35.15 };
+
+  /** A matrix whose last candidate is quick for everyone, snapped to `at`. */
+  function matrixAnswering(at: LatLng) {
+    return vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() =>
+          destinations.map((_, i) =>
+            i === destinations.length - 1 ? 600 : 3000,
+          ),
+        ),
+        snapped: destinations.map((d, i) =>
+          i === destinations.length - 1 ? at : d,
+        ),
+      }),
+    );
+  }
+
+  const PAIR = {
+    ownSlot: 0 as const,
+    ownPosition: TEL_AVIV,
+    participants: [peer(1, JERUSALEM)],
+  };
+
+  it("shows the centroid at once, then the balanced point when it arrives", async () => {
+    const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+    const r = createRuntime(h.ports, PAIR);
+
+    const centroid = r.getSnapshot().midpoint;
+    expect(centroid).not.toBeNull();
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+
+    await h.advance(1_500);
+
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+  });
+
+  // The answer lands inside the routes' and venues' debounce, so neither is
+  // fetched for the centroid first.
+  it("routes and searches once, to the balanced point", async () => {
+    const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+    createRuntime(h.ports, PAIR);
+
+    await h.advance(20_000);
+
+    expect(h.ports.searchVenues).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.ports.searchVenues).mock.calls[0]?.[0]).toEqual(FAIR);
+    expect(h.ports.fetchRoute).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(h.ports.fetchRoute).mock.calls) {
+      expect(call[1]).toEqual(FAIR);
+    }
+  });
+
+  it("asks once while nobody moves, however often the graph ticks", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, PAIR);
+
+    await h.advance(1_500);
+    r.setSources({ participants: [peer(1, { ...JERUSALEM }, 5)] });
+    r.setSources({ serverTimeOffsetMs: 40 });
+    await h.advance(20_000);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the centroid when the matrix fails, and says the basis is distance", async () => {
+    const h = createHarness({
+      fetchMatrix: vi
+        .fn<FetchMatrix>()
+        .mockResolvedValue(err({ kind: "HTTP", status: 401 })),
+    });
+    const r = createRuntime(h.ports, PAIR);
+    const centroid = r.getSnapshot().midpoint;
+
+    await h.advance(10_000);
+
+    expect(r.getSnapshot().midpoint).toBe(centroid);
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    // Everything downstream still runs, to the centroid.
+    expect(h.ports.fetchRoute).toHaveBeenCalled();
+  });
+
+  // The point balanced for two is not the point for three.
+  it("returns to the centroid when someone joins, until the matrix answers for them", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, PAIR);
+    await h.advance(1_500);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+
+    fetchMatrix.mockImplementation(matrixAnswering(FAIRER));
+    r.setSources({
+      participants: [peer(1, JERUSALEM), peer(2, { lat: 32.79, lng: 34.99 })],
+    });
+
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+
+    await h.advance(1_500);
+
+    expect(r.getSnapshot().midpoint).toEqual(FAIRER);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+    expect(fetchMatrix.mock.calls[1]?.[0]).toHaveLength(3);
+  });
+
+  it("offers the point it is showing as the incumbent of the next question", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, PAIR);
+    await h.advance(1_500);
+
+    // Far enough to be worth asking again.
+    r.setSources({ ownPosition: { lat: 31.95, lng: 34.8 } });
+    await h.advance(1_500);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(2);
+    expect(fetchMatrix.mock.calls[1]?.[1][0]).toEqual(FAIR);
+  });
+
+  it("asks nothing with nobody to meet", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    createRuntime(h.ports, { ownSlot: 0, ownPosition: TEL_AVIV });
+
+    await h.advance(10_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
   });
 });

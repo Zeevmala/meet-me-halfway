@@ -27,14 +27,23 @@ import {
   createVenuePolicy,
   createRoutePolicy,
   createPresencePolicy,
+  createMeetingPolicy,
+  meetingAnswers,
   PRESENCE_HEARTBEAT_MS,
   routesAnswer,
 } from "./policies";
-import type { PresenceInput, RouteInput, VenueInput } from "./policies";
+import type {
+  MeetingInput,
+  PresenceInput,
+  RouteInput,
+  VenueInput,
+} from "./policies";
 import type { GraphPorts } from "./ports";
 import type {
   GraphSources,
   LivenessResult,
+  MeetingAnswer,
+  MeetingBasis,
   RouteInfo,
   RouteSet,
   SessionPhase,
@@ -75,7 +84,12 @@ const NO_LIVENESS: LivenessResult = Object.freeze({
 
 export interface GraphSnapshot {
   readonly slots: SlotVector;
+  /**
+   * The meeting point: balanced by travel time when `meetingBasis` says so,
+   * the geographic centroid otherwise.
+   */
   readonly midpoint: LatLng | null;
+  readonly meetingBasis: MeetingBasis;
   readonly venues: readonly RankedVenue[];
   readonly venuesLoading: boolean;
   readonly selectedVenue: RankedVenue | null;
@@ -151,13 +165,21 @@ export function createRuntime(
     createPresencePolicy(ports),
     ports,
   );
+  const meeting: Resource<MeetingInput, MeetingAnswer> = createResource(
+    createMeetingPolicy(ports),
+    ports,
+  );
 
   // Memo cells. Each holds the previous output so an unchanged computation
   // returns the identical reference and the snapshot stays stable — which
   // useSyncExternalStore requires of getSnapshot.
   let liveness: LivenessResult = NO_LIVENESS;
   let slots: SlotVector = buildSlotVector(sources, liveness);
+  /** The geographic centroid — the `midpoint` node. */
+  let centroid: LatLng | null = null;
+  /** What is published as the midpoint — the `meeting` node. */
   let midpoint: LatLng | null = null;
+  let meetingBasis: MeetingBasis = "distance";
   let phase: SessionPhase = "idle";
   // One timer for the whole liveness concern, armed at the next instant some
   // participant's staleness flips. Replaces a 10s setInterval that ran for the
@@ -183,6 +205,7 @@ export function createRuntime(
   let snapshot: GraphSnapshot = {
     slots,
     midpoint: null,
+    meetingBasis: "distance",
     venues: EMPTY_VENUES,
     venuesLoading: false,
     selectedVenue: null,
@@ -352,6 +375,36 @@ export function createRuntime(
         }
         case "midpoint": {
           const next = deriveMidpoint(slots);
+          if (!sameLatLng(next, centroid)) centroid = next;
+          break;
+        }
+        case "meeting": {
+          let next = centroid;
+          meetingBasis = "distance";
+          if (centroid === null) {
+            meeting.request(null);
+          } else {
+            const people = positionsCounted(slots);
+            // The resource keeps its value through any change of input, so an
+            // answer is used only while it is for the people now counted: the
+            // point balanced for two is not the point for three.
+            const answer = meeting.getState().value;
+            const point =
+              answer !== null &&
+              meetingAnswers(answer, people, sources.travelProfile)
+                ? answer.point
+                : null;
+            meeting.request({
+              slots: people,
+              centroid,
+              profile: sources.travelProfile,
+              incumbent: point,
+            });
+            if (point !== null) {
+              next = point;
+              meetingBasis = "time";
+            }
+          }
           if (!sameLatLng(next, midpoint)) midpoint = next;
           break;
         }
@@ -408,6 +461,7 @@ export function createRuntime(
           const next: GraphSnapshot = {
             slots,
             midpoint,
+            meetingBasis,
             venues: ranked,
             venuesLoading: venueState.status === "pending",
             selectedVenue: nextSelected,
@@ -423,6 +477,7 @@ export function createRuntime(
           if (
             next.slots !== snapshot.slots ||
             next.midpoint !== snapshot.midpoint ||
+            next.meetingBasis !== snapshot.meetingBasis ||
             next.venues !== snapshot.venues ||
             next.venuesLoading !== snapshot.venuesLoading ||
             next.selectedVenue !== snapshot.selectedVenue ||
@@ -462,6 +517,7 @@ export function createRuntime(
   venues.subscribe(tick);
   routes.subscribe(tick);
   presence.subscribe(tick);
+  meeting.subscribe(tick);
 
   function setSources(patch: Partial<GraphSources>): void {
     if (disposed) return;
@@ -497,6 +553,7 @@ export function createRuntime(
       venues.dispose();
       routes.dispose();
       presence.dispose();
+      meeting.dispose();
       listeners.clear();
     },
     isDisposed: () => disposed,

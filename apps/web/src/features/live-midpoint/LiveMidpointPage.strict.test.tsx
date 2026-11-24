@@ -58,6 +58,7 @@ const testPorts: GraphPorts = {
   cancel: () => {},
   searchVenues: vi.fn(),
   fetchRoute: vi.fn(),
+  fetchMatrix: vi.fn(),
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
   placesEnabled: false,
 };

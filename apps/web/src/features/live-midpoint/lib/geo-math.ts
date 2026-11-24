@@ -67,6 +67,32 @@ export function geographicCentroid(points: LatLng[]): LatLng {
   return { lat: toDeg(lat), lng: toDeg(lng) };
 }
 
+/**
+ * The point a fraction `t` of the way from `a` to `b` (0 = a, 1 = b).
+ *
+ * Interpolated between unit vectors and renormalised rather than linearly in
+ * degrees, which sends the halfway point between 179°E and 179°W to Greenwich.
+ * Not constant-speed along the great circle, which at meetup distances is a
+ * difference of metres.
+ */
+export function interpolate(a: LatLng, b: LatLng, t: number): LatLng {
+  const phiA = toRad(a.lat);
+  const lamA = toRad(a.lng);
+  const phiB = toRad(b.lat);
+  const lamB = toRad(b.lng);
+  const x =
+    (1 - t) * Math.cos(phiA) * Math.cos(lamA) +
+    t * Math.cos(phiB) * Math.cos(lamB);
+  const y =
+    (1 - t) * Math.cos(phiA) * Math.sin(lamA) +
+    t * Math.cos(phiB) * Math.sin(lamB);
+  const z = (1 - t) * Math.sin(phiA) + t * Math.sin(phiB);
+  return {
+    lat: toDeg(Math.atan2(z, Math.sqrt(x * x + y * y))),
+    lng: toDeg(Math.atan2(y, x)),
+  };
+}
+
 /** Haversine distance in meters between two WGS84 points. */
 export function haversineDistance(a: LatLng, b: LatLng): number {
   const dPhi = toRad(b.lat - a.lat);

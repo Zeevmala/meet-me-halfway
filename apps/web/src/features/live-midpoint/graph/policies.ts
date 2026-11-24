@@ -16,7 +16,14 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
-import type { RouteInfo, RouteSet, TravelProfile } from "./types";
+import { candidatePoints, pickFairest } from "../lib/fair-meeting";
+import { MATRIX_MAX_COORDINATES } from "../lib/matrix-api";
+import type {
+  MeetingAnswer,
+  RouteInfo,
+  RouteSet,
+  TravelProfile,
+} from "./types";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -195,7 +202,7 @@ export interface RouteInput {
   readonly profile: TravelProfile;
 }
 
-function occupancyKey(slots: readonly (LatLng | null)[]): string {
+export function occupancyKey(slots: readonly (LatLng | null)[]): string {
   return slots.map((slot) => (slot === null ? "-" : "x")).join("");
 }
 
@@ -211,6 +218,135 @@ function anySlotMoved(
     if (haversineDistance(a, b) >= thresholdM) return true;
   }
   return false;
+}
+
+export interface MeetingInput {
+  /** Slot-keyed positions; `null` is a slot not counted. */
+  readonly slots: readonly (LatLng | null)[];
+  readonly centroid: LatLng;
+  readonly profile: TravelProfile;
+  /**
+   * The meeting point now shown, if it is the matrix's. Asked about again so a
+   * new point has to beat it (`pickFairest`). Never read by `admits` or
+   * `identity`: it changes with every answer, and an answer must not be a
+   * reason to ask again.
+   */
+  readonly incumbent: LatLng | null;
+}
+
+/** Most candidate points per request, the incumbent included. */
+const MEETING_CANDIDATES = 12;
+/**
+ * How far someone has to move before the meeting point is worked out again:
+ * this fraction of their distance to the centroid, and never less than the
+ * floor. Relative, because what shifts a time-balanced point is a change in
+ * somebody's share of the trip — 500 m matters two kilometres out and not at
+ * forty — and because people driving towards it would otherwise re-ask every
+ * few seconds, for a point that should hold still while they are on their way.
+ * The matrix is billed per source × destination.
+ */
+const MEETING_ADMIT_FRACTION = 0.2;
+const MEETING_ADMIT_MIN_M = 1_000;
+
+function movedEnoughToRebalance(
+  previous: MeetingInput,
+  next: MeetingInput,
+): boolean {
+  for (let i = 0; i < next.slots.length; i++) {
+    const a = previous.slots[i];
+    const b = next.slots[i];
+    if (a == null || b == null) continue;
+    const threshold = Math.max(
+      MEETING_ADMIT_MIN_M,
+      MEETING_ADMIT_FRACTION * haversineDistance(a, previous.centroid),
+    );
+    if (haversineDistance(a, b) >= threshold) return true;
+  }
+  return false;
+}
+
+/** Whether a matrix answer is for the people and travel mode now counted. */
+export function meetingAnswers(
+  answer: MeetingAnswer,
+  slots: readonly (LatLng | null)[],
+  profile: TravelProfile,
+): boolean {
+  return answer.profile === profile && answer.occupancy === occupancyKey(slots);
+}
+
+/**
+ * The meeting point balanced by travel time: one Matrix request from everyone
+ * counted to a handful of candidate points, and the candidate whose longest
+ * trip is shortest (`lib/fair-meeting.ts`).
+ *
+ * No refresh on age: the matrix uses typical speeds, not live traffic, so the
+ * same question has the same answer until somebody moves. A long last-good
+ * window for the same reason — a point that was fair ten minutes ago still is,
+ * and falling back to the centroid on one failed refresh would move the place
+ * people are driving to.
+ */
+export function createMeetingPolicy(
+  ports: GraphPorts,
+): ResourcePolicy<MeetingInput, MeetingAnswer> {
+  return {
+    id: "meeting",
+    // Short, so the answer lands inside the routes' and venues' own debounce:
+    // they then fetch once, for the balanced point, not for the centroid first.
+    debounceMs: 1_000,
+    maxWaitMs: 3_000,
+    timeoutMs: 8_000,
+    staleAfterMs: 10 * 60_000,
+    retryAttempts: 2,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 4,
+      baseOpenMs: 30_000,
+      maxOpenMs: 5 * 60_000,
+      multiplier: 2,
+    },
+    admits: (previous, next) =>
+      previous.profile !== next.profile ||
+      occupancyKey(previous.slots) !== occupancyKey(next.slots) ||
+      movedEnoughToRebalance(previous, next),
+    identity: (input) =>
+      `m:${input.profile}:${occupancyKey(input.slots)}:` +
+      cellKey(input.centroid, MEETING_ADMIT_MIN_M),
+    run: async (
+      input,
+      signal,
+    ): Promise<Result<MeetingAnswer, ResourceError>> => {
+      const people = input.slots.filter(
+        (position): position is LatLng => position !== null,
+      );
+      const hasIncumbent = input.incumbent !== null;
+      const budget =
+        Math.min(MEETING_CANDIDATES, MATRIX_MAX_COORDINATES - people.length) -
+        (hasIncumbent ? 1 : 0);
+      const sampled = candidatePoints(people, input.centroid, budget);
+      const candidates =
+        input.incumbent === null ? sampled : [input.incumbent, ...sampled];
+
+      const matrix = await ports.fetchMatrix(
+        people,
+        candidates,
+        input.profile,
+        signal,
+      );
+      if (!matrix.ok) return err(matrix.error);
+
+      const choice = pickFairest(
+        matrix.value.durations,
+        hasIncumbent ? 0 : null,
+      );
+      return ok({
+        profile: input.profile,
+        occupancy: occupancyKey(input.slots),
+        point:
+          choice === null ? null : (matrix.value.snapped[choice.index] ?? null),
+        worstSeconds: choice?.worstSeconds ?? 0,
+      });
+    },
+  };
 }
 
 /**

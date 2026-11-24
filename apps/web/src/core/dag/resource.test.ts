@@ -296,6 +296,38 @@ describe("createResource", () => {
     expect(r.getState().status).toBe("failed");
   });
 
+  // A consumer re-offers its input whenever it is notified, the graph runtime
+  // included. With a revoked token that was a request every debounce window,
+  // forever: the breaker does not count a 4xx, and nothing else stood in the
+  // way.
+  it("does not re-send a refused request because its consumer asks again", async () => {
+    const run = vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 401 }));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+    const input = { at: 0, tag: "a" };
+    r.subscribe(() => r.request(input));
+
+    r.request(input);
+    await t.advance(60_000);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(r.getState().status).toBe("failed");
+    expect(t.pending()).toBe(0);
+  });
+
+  it("asks again after a refusal once the input is worth a new call", async () => {
+    const run = vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 401 }));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+    r.request({ at: 50, tag: "b" });
+    await t.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a timeout when the call outlives its deadline", async () => {
     const run = vi.fn().mockImplementation(() => new Promise(() => {}));
     const t = createTestPorts();

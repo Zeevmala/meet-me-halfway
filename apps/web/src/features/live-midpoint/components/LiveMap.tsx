@@ -243,6 +243,8 @@ function LiveMap({
   const [unavailable, setUnavailable] = useState(false);
   const lastFitRef = useRef<FitSignature>(new Map<string, LatLng>());
   const lastInsetsRef = useRef<Insets>(NO_INSETS);
+  /** What each slot's accuracy source last drew, as a key; `""` is empty. */
+  const drawnAccuracyRef = useRef<string[]>([]);
 
   // Whether the map frames everyone by itself. A gesture hands the camera to
   // the user — a refit every time someone moved 50m used to yank them back
@@ -345,6 +347,7 @@ function LiveMap({
       map.remove();
       mapRef.current = null;
       fitControlRef.current = null;
+      drawnAccuracyRef.current = [];
       setMapInstance(null);
     };
   }, []);
@@ -380,6 +383,16 @@ function LiveMap({
         mapboxgl.GeoJSONSource | undefined;
       if (!src) continue;
       const p = byIndex.get(i);
+      // Only the circles that changed. `participants` is a new array on every
+      // fix — one a second while anyone moves — and redrawing all five meant
+      // 320 points of trigonometry and five uploads to the map's worker for
+      // the one circle that had moved.
+      const key =
+        p && p.accuracy
+          ? `${p.position.lat},${p.position.lng},${p.accuracy}`
+          : "";
+      if (drawnAccuracyRef.current[i] === key) continue;
+      drawnAccuracyRef.current[i] = key;
       src.setData(
         p && p.accuracy
           ? polygonFeature(accuracyCircleGeoJSON(p.position, p.accuracy))

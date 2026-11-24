@@ -73,13 +73,15 @@ graph TB
     A -.->|venue search| GP
 ```
 
-All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed.
+All browsers compute the meeting point client-side — no server needed. It starts as the geographic centroid (Cartesian mean on unit sphere) and moves to the point **balanced by travel time** once the Mapbox Matrix API has answered: of a dozen candidates between the participants, the one whose longest trip is shortest.
 
 Within each browser the derived work runs as a declared graph:
 
 ```mermaid
 graph LR
-    S[slots] --> M[midpoint]
+    S[slots] --> C[midpoint]
+    C --> M[meeting]
+    S --> M
     M --> V[venues]
     M --> D[destination]
     V --> D
@@ -107,9 +109,9 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 | Auth | Firebase Anonymous Auth (silent sign-in) |
 | Security | Firebase App Check (reCAPTCHA Enterprise) |
 | Real-time | Firebase 12 Realtime Database |
-| Routing | Mapbox Directions API (client-side) |
+| Routing | Mapbox Directions API with live traffic, Matrix API (client-side) |
 | Venues | Google Places API (New) — optional |
-| Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
+| Midpoint | Balanced by travel time (minimax over a Mapbox matrix); geographic centroid as the fallback |
 | i18n | i18next — English, Hebrew (full RTL) |
 | Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
 | Tests | Vitest + React Testing Library (344 tests) |
@@ -191,7 +193,7 @@ meet-me-halfway/
 2. **Create** — 6-character session code generated, URL becomes `/?code=XXXXX`
 3. **Join** — Up to 4 others open the shared link and join the session
 4. **Stream** — All locations stream to Firebase RTDB (throttled to 1 write/3s, uid-scoped)
-5. **Midpoint** — Client computes geographic centroid in real-time
+5. **Midpoint** — Client computes the geographic centroid at once, then the point balanced by travel time
 6. **Routes** — Mapbox Directions API fetches driving/walking routes for all participants
 7. **Venues** — Google Places API searches nearby; ranked by rating, proximity, popularity, open status
 8. **Navigate** — Tap a venue to pin as meeting point; one-tap Waze/Google Maps navigation

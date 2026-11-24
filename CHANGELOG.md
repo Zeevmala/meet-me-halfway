@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added — a meeting point balanced by travel time
+
+- **The midpoint is now halfway in time, not in distance.** It was the
+  geographic centroid, which one person on a motorway and one crossing a city
+  reach half an hour apart; the card said so ("N min apart") and did nothing
+  about it. One Mapbox Matrix request now asks how long everyone would take to
+  reach a dozen points between them, and the meeting point is the one whose
+  longest trip is shortest — snapped to a road, where the centroid was often a
+  field. It holds still while people drive to it, and falls back to the
+  centroid whenever the matrix cannot answer. The card's title says which it is
+- **Driving ETAs use live traffic.** Routes were asked for with Mapbox's
+  `driving` profile, which answers from typical speeds, and then refreshed
+  every minute "because traffic moves" — re-fetching an answer that could not
+  have changed
+
+### Fixed
+
+- **A refused API request was re-sent every few seconds, forever.** A 401 or
+  a 422 is not counted against the circuit breaker, rightly, and nothing else
+  stood between the failure and the next dispatch: a rotated Mapbox token
+  meant up to five route requests every three seconds from every open tab.
+  A refusal is now that input's answer, and the next attempt waits for the
+  input to change or the answer to age, as after a success
+- **Every accuracy circle was rebuilt on every GPS fix.** One fix a second
+  from anyone moving redrew all five — 320 points of trigonometry and five
+  uploads to the map's worker. Only the circle that changed is redrawn
+
 ### Fixed — the reload after a deploy
 
 - **A deploy put the error screen up in open tabs.** The reload that

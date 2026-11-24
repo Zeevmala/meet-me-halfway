@@ -31,9 +31,9 @@ graph, not nodes in it.**
 SOURCES (adapters — push into the runtime)   NODES (pure or policy-governed)
 
   useAuth ───────── uid ─┐
-  useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──┬──► venues ─┐
-  useLiveGeolocation ────┤   (clock)      (SoA,    │               │            │
-  ui.selectedVenueId ────┤                 stable) │               └──► destination
+  useLiveSession ────────┼──► liveness ──► slots ──┬──► midpoint ──► meeting ──┬──► venues ─┐
+  useLiveGeolocation ────┤   (clock)      (SoA,    │    (centroid)   (by time) │            │
+  ui.selectedVenueId ────┤                 stable) │                           └──► destination
   ui.travelProfile ──────┤                         │                        │
   ui.ownName ────────────┴──► presence             └──► phase               │
                              (RTDB write)                                   ▼
@@ -51,10 +51,14 @@ runtime walks `TOPO_ORDER`, and `assertAcyclic` runs at module load.
 ### Why the cycle check earns its place
 
 There is no cycle today. There is one waiting. Re-centring venue search on the
-selected venue, or deriving a time-balanced midpoint from route durations —
-both natural next features — close `midpoint → venues → destination →
-midpoint`. Either would ship as a hang discovered on somebody's phone. With
-the edges declared, it is a failing test that names both nodes.
+selected venue, or balancing the meeting point from the durations of the routes
+drawn to it — both natural next steps — close `meeting → venues → destination →
+routes → meeting`. Either would ship as a hang discovered on somebody's phone.
+With the edges declared, it is a failing test that names both nodes.
+
+The `meeting` node balances by travel time without closing it, because it does
+not read routes: it asks a matrix about candidate points derived from positions
+alone (below).
 
 ---
 
@@ -66,11 +70,47 @@ the edges declared, it is a failing test that names both nodes.
 | `slots` | pure | sources, `liveness` | `SlotVector` | — |
 | `presence` | effectful | session + own position | RTDB write | report failed |
 | `midpoint` | pure | `slots` | `LatLng \| null` | — |
+| `meeting` | effectful | counted `slots`, `midpoint`, profile | `MeetingAnswer`: the point balanced by travel time, tagged with the people and profile it answers | fall back to `midpoint` |
 | `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
-| `venues` | effectful | `midpoint` | raw `PlaceResult[]` | degrade to empty |
-| `destination` | pure | `midpoint`, `venues`, selection | `LatLng \| null` | — |
+| `venues` | effectful | `meeting` | raw `PlaceResult[]` | degrade to empty |
+| `destination` | pure | `meeting`, `venues`, selection | `LatLng \| null` | — |
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
+
+### The meeting point is balanced by travel time
+
+The centroid is halfway in distance. One person on a motorway and one crossing
+a city reach it half an hour apart, and the card used to report that gap
+("N min apart") without doing anything about it.
+
+`meeting` closes it with one Mapbox Matrix request: from everyone counted, to
+about a dozen candidate points — the centroid, and points on the way from it to
+each person (`lib/fair-meeting.ts`). It takes the candidate whose **longest trip
+is shortest**, the minimax point over travel time, with the mean trip breaking
+ties. Minimising the gap between arrivals would be the wrong objective: a point
+an hour beyond everyone has a gap of zero.
+
+- **The answer is on a road.** Mapbox snaps each candidate to the network and
+  the snapped point is what is published. The centroid was often a field.
+- **It holds still.** The point now shown is asked about again as the
+  incumbent, and a new one must beat it by a minute and 5%. Admission is
+  relative — a fifth of somebody's distance to the centroid, never under 1 km —
+  so people driving towards the point do not move it, or pay for the question.
+  There is no refresh on age: the matrix uses typical speeds, so the same
+  question has the same answer.
+- **It degrades to the centroid**, shown at once and whenever the matrix
+  cannot answer; `meetingBasis` in the snapshot says which is on screen, and
+  the card's title follows it. Its debounce (1 s) sits inside the routes' (3 s)
+  and the venues' (5 s), so neither is fetched for the centroid first.
+- **Cost:** people × candidates elements per request — 24 for two people, 60
+  for five — and one request per roster or travel-mode change plus the rare
+  re-balance.
+
+What it is not: a search. The candidates are sampled along straight lines, so
+a fair point far off them (around a bay, across a single bridge) is found only
+as well as snapping allows, and a point snapped onto a motorway is fair and
+useless — picking a venue is the remedy. Ranking the venues themselves by this
+matrix is the natural next step.
 
 ### Liveness holds one timer, not an interval
 

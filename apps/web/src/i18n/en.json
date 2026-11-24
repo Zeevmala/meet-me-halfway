@@ -21,6 +21,7 @@
     "participantNamed": "{{name}}",
     "offline": "Offline",
     "midpoint": "Midpoint",
+    "midpointByTime": "Balanced meeting point",
     "mapUnavailable": "The map can't be shown on this device. Distances and navigation still work.",
     "mapLabel": "Live map of everyone and the meeting point",
     "fitAll": "Show everyone",

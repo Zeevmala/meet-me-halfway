@@ -16,6 +16,7 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { TimerId } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PresenceValue } from "../lib/presence-rtdb";
+import type { FetchMatrix } from "../lib/matrix-api";
 import type { RouteInfo, TravelProfile } from "./types";
 
 export interface GraphPorts {
@@ -33,6 +34,8 @@ export interface GraphPorts {
     profile: TravelProfile,
     signal: AbortSignal,
   ) => Promise<Result<RouteInfo | null, ResourceError>>;
+  /** Travel times from every person to every candidate meeting point. */
+  readonly fetchMatrix: FetchMatrix;
   /**
    * Publish own location at the claimed slot. A write rather than a read, but
    * it reaches the graph through the same seam so a test can drive the
