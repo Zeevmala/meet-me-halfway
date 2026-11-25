@@ -336,7 +336,25 @@ export function createResource<I, O>(
       return;
     }
 
-    if (countsAgainstBreaker(result.error)) breaker.recordFailure(settledAtMs);
+    if (countsAgainstBreaker(result.error)) {
+      breaker.recordFailure(settledAtMs);
+    } else if (!isRetryableError(result.error)) {
+      // A refusal — a 401, a 422, a rules denial — is this input's answer:
+      // asking again gets it again, and the breaker, rightly, does not count
+      // it. Recording the input as accepted leaves the next attempt to
+      // `admits`, as after a success. Without this nothing stood between the
+      // failure and the next dispatch: the consumer re-offers its input when
+      // told of the failure, no accepted input meant "dispatch", and a revoked
+      // token was re-sent every debounce window for as long as the page lived.
+      acceptedInput = input;
+      acceptedAtMs = settledAtMs;
+      // It is also proof the dependency is up — it answered. As a half-open
+      // probe's result it has to close the breaker: recording neither success
+      // nor failure left it half-open with no probe outstanding and no wake
+      // armed, refusing every later call. One denied write on reconnecting
+      // after an outage, and own location was never published again.
+      breaker.recordSuccess();
+    }
     emit(degrade(result.error, settledAtMs));
     scheduleBreakerWake(settledAtMs);
   }

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refused API request was re-sent every few seconds, forever.** A 401 or
+  a 422 is not counted against the circuit breaker, rightly, and nothing else
+  stood between the failure and the next dispatch: a rotated Mapbox token
+  meant up to five route requests every three seconds from every open tab.
+  A refusal is now that input's answer, and the next attempt waits for the
+  input to change or the answer to age, as after a success
+- **One denied write after an outage stopped location sharing for good.** A
+  refusal answering the circuit breaker's probe was recorded as neither a
+  success nor a failure, leaving the breaker half-open with nothing
+  outstanding: every later call refused, for the life of the page. A refusal
+  is an answer, and closes it
+
 ### Fixed — the reload after a deploy
 
 - **A deploy put the error screen up in open tabs.** The reload that
