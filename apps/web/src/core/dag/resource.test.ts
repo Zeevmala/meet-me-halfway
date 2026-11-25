@@ -296,6 +296,38 @@ describe("createResource", () => {
     expect(r.getState().status).toBe("failed");
   });
 
+  // A consumer re-offers its input whenever it is notified, the graph runtime
+  // included. With a revoked token that was a request every debounce window,
+  // forever: the breaker does not count a 4xx, and nothing else stood in the
+  // way.
+  it("does not re-send a refused request because its consumer asks again", async () => {
+    const run = vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 401 }));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+    const input = { at: 0, tag: "a" };
+    r.subscribe(() => r.request(input));
+
+    r.request(input);
+    await t.advance(60_000);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(r.getState().status).toBe("failed");
+    expect(t.pending()).toBe(0);
+  });
+
+  it("asks again after a refusal once the input is worth a new call", async () => {
+    const run = vi.fn().mockResolvedValue(err({ kind: "HTTP", status: 401 }));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+    r.request({ at: 50, tag: "b" });
+    await t.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a timeout when the call outlives its deadline", async () => {
     const run = vi.fn().mockImplementation(() => new Promise(() => {}));
     const t = createTestPorts();
@@ -386,6 +418,39 @@ describe("createResource — breaker interaction", () => {
     expect(calls).toBe(3);
     expect(resource.getState().error?.kind).toBe("OPEN_CIRCUIT");
     expect(clock.pending()).toBe(0);
+  });
+});
+
+describe("createResource — a refusal as the half-open probe's answer", () => {
+  // Offline long enough to open the breaker, then one denied write on
+  // reconnecting: the breaker stayed half-open with nothing outstanding, and
+  // refused every call for the life of the page.
+  it("closes the breaker, so a later input is tried", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "offline" }))
+      .mockResolvedValueOnce(err({ kind: "NETWORK", detail: "offline" }))
+      .mockResolvedValueOnce(err({ kind: "DENIED", detail: "rules" }))
+      .mockResolvedValue(ok("recovered"));
+    const t = createTestPorts();
+    const r = createResource(makePolicy(run), t.ports);
+
+    r.request({ at: 0, tag: "a" });
+    await t.advance(1000);
+    r.request({ at: 20, tag: "b" });
+    await t.advance(1000);
+    expect(run).toHaveBeenCalledTimes(2);
+
+    // Past the cooldown the resource sends the probe itself, and it is refused.
+    await t.advance(6000);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(r.getState().error?.kind).toBe("DENIED");
+
+    r.request({ at: 40, tag: "c" });
+    await t.advance(1000);
+
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(r.getState().value).toBe("recovered");
   });
 });
 
