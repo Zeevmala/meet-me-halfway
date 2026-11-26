@@ -62,7 +62,7 @@ The store app loads `https://<origin>/` and holds no copy of the bundle. Three r
 
 The centroid is right while people are deciding and wrong once they are driving. The session needs one stored destination that outlives its writer.
 
-- **Schema.** `sessions/{code}/destination: { lat, lng, ts, by }`. `ts` equals the server's `now`; `by` is the writer's slot key, a string, so the rule can look the holder up without matching keys. Writable by any slot holder of a fresh session, readable by slot holders only, numbers range-checked, no other fields. Any holder may replace or clear it.
+- **Schema.** `sessions/{code}/destination: { lat, lng, ts, by }`. `ts` equals the server's `now`; `by` is the writer's slot key, a string, so the rule can look the holder up without matching keys. Writable by any slot holder of a fresh session, readable by slot holders only, numbers range-checked, no other fields. Write-once until cleared; any holder may clear it.
 - **Behaviour.** The first Navigate tap writes the destination shown on that device, then opens the navigation app. From then on every device shows and routes to the stored point. A participant who goes silent while a destination is set is shown as on the way, not dropped. Clearing it returns the session to the live centroid.
 - **Why session level and not the creator's record.** The meeting-point branch (`claude/nifty-mayer-iv17gy`) publishes `mlat`/`mlng` inside `participants/0`, which is deleted when the creator disconnects. The creator tapping Navigate is exactly that disconnect. The two fit together: the balanced point decides *where*, this field records *that it was agreed*.
 - **Rollout.** Expand/contract. The session node has `$other: false`, so the rules that accept `destination` deploy one release before any client writes it. The client ships behind a flag in the first release.
@@ -105,7 +105,7 @@ The adoption note (`design/adoption/meet-me-halfway.md` in the factory) lists fo
 | --- | --- | --- | --- |
 | 1a | Rules accept `destination` | rules tests cover holder write, non-holder denial, range, extra field; deployed. **Deployed 2026-11-26 (#119)** | session (schema is ask-first) |
 | 1b | Client writes and reads it, behind a flag | unit tests on the node and the runtime at `DEPARTED_THRESHOLD_MS`; e2e: A taps Navigate and leaves, B still has the destination. **Built 2026-11-26** behind `VITE_STORED_DESTINATION` | session |
-| 1c | Flag on, privacy policy updated | one release after 1a | session |
+| 1c | Flag on | `VITE_STORED_DESTINATION=true` in the deploy job. The policy already describes it, conditionally | session (touches `.github/`) |
 | 2 | Wake lock | test with a fake `navigator.wakeLock`: requested on publish, released on hide, re-requested on show | factory ticket |
 | 3 | Hosting serves asset links | `firebase.json` test; live fetch returns JSON | session (touches `firebase.json`) |
 | 4 | Android shell and CI build | signed `.aab` artifact from CI; installs; opens full screen; `/?code=` link opens the app | session (touches `.github/`) |
@@ -155,4 +155,4 @@ A custom domain does not block the beta: `web.app` can serve asset links. Moving
 
 - **Play target API level.** New apps must target a recent Android API. Check Bubblewrap's default against Play's current requirement when slice 4 is built.
 - **Asset-link fingerprint.** It is the Play app-signing key's, not the upload key's, and exists only after the first upload. Slice 3 ships the route; the fingerprint follows in a one-line change.
-- **Two writers of `destination`.** Two people tapping Navigate in the same second write two points. Last write wins and both devices converge on it; the first tapper's navigation app already has the earlier coordinate. Acceptable for a beta if the card shows that the destination changed.
+- **Two writers of `destination`.** Decided 2026-11-26: write-once until cleared, enforced by the rules; the refused writer re-reads and treats a stored destination as done. Left open: the refused device's navigation app already has its own coordinate, and the card does not yet say that the session agreed on another.

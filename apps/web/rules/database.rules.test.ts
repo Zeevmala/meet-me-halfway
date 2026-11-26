@@ -728,7 +728,31 @@ describe("destination — one stored meeting point, for the people in the sessio
 
   it("lets any slot holder set it", async () => {
     await assertSucceeds(as(CREATOR).ref(DEST).set(destination("0")));
+    await as(CREATOR).ref(DEST).remove();
     await assertSucceeds(as(JOINERS[0]).ref(DEST).set(destination("1")));
+  });
+
+  // "The first tap wins" was a check in the client, read off that device's
+  // own listener — so it held only while the device was connected. One that
+  // tapped Navigate in a tunnel queued its write, and on reconnecting moved
+  // the destination under people already driving to the first one. The
+  // database arbitrates, as it does for slots.
+  it("is write-once until cleared: a second write is refused, whoever makes it", async () => {
+    await as(CREATOR).ref(DEST).set(destination("0"));
+
+    await assertFails(
+      as(JOINERS[0])
+        .ref(DEST)
+        .set({ ...destination("1"), lat: 32.1 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(DEST)
+        .set({ ...destination("0"), lat: 32.1 }),
+    );
+
+    const snapshot = await as(CREATOR).ref(DEST).get();
+    expect(snapshot.val()).toMatchObject({ lat: 32.08, by: "0" });
   });
 
   it("lets every slot holder read it, and nobody else", async () => {
@@ -789,16 +813,16 @@ describe("destination — one stored meeting point, for the people in the sessio
     );
   });
 
-  it("lets another holder replace it, and any holder clear it", async () => {
+  it("lets any holder clear it, and a new one be set after that", async () => {
     await as(CREATOR).ref(DEST).set(destination("0"));
 
+    await assertFails(as(JOINERS[1]).ref(DEST).remove());
+    await assertSucceeds(as(JOINERS[0]).ref(DEST).remove());
     await assertSucceeds(
       as(JOINERS[0])
         .ref(DEST)
         .set({ ...destination("1"), lat: 32.1 }),
     );
-    await assertSucceeds(as(CREATOR).ref(DEST).remove());
-    await assertFails(as(JOINERS[1]).ref(DEST).remove());
   });
 
   // The property the field exists for.

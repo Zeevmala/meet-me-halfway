@@ -751,6 +751,19 @@ export function useLiveSession(uid: string): LiveSessionState {
             }));
         return ok(undefined);
       } catch (thrown) {
+        // The destination is write-once until cleared, and the database
+        // arbitrates: of two people setting off at once, one write is refused.
+        // That is the rule working, not a failure — the session has its
+        // destination — but a refusal with nothing stored means the write was
+        // denied structurally, which is one. Told apart by re-reading, as
+        // `claimSlot` does for a refused slot.
+        if (point !== null) {
+          const stored = await get(destinationRef).then(
+            (snap) => snap.val() !== null,
+            () => false,
+          );
+          if (stored) return ok(undefined);
+        }
         Sentry.captureException(thrown, {
           tags: {
             phase: point === null ? "clear-destination" : "set-destination",

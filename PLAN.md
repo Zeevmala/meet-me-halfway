@@ -22,10 +22,10 @@
       `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
       the rules can no longer reach production independently
 - [ ] Stored destination — built behind `VITE_STORED_DESTINATION`, rules
-      live. Next release: set it to `true` in the deploy job and describe the
-      stored point in `privacy.html` in that commit (the people who joined
-      can read it for the session's 24 hours; like the session record it is
-      not deleted automatically, only when someone clears it)
+      live, `privacy.html` describes it conditionally. Next release: set it
+      to `true` in the deploy job. Still to build: telling someone whose
+      navigation app is heading for a different point than the one the
+      session stored
 - [ ] Custom domain + SSL
 
 ## v2 Roadmap

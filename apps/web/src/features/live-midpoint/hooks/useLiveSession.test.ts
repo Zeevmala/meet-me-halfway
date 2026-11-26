@@ -1302,9 +1302,38 @@ describe("useLiveSession — the stored destination", () => {
     expect(mockRemove).toHaveBeenCalledWith(DESTINATION);
   });
 
+  // Write-once until cleared: of two people setting off at once, the database
+  // refuses one. The session has its destination, so that is not a failure.
+  it("counts a refusal as done when someone else's destination is already stored", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+    mockSet.mockRejectedValue(
+      Object.assign(new Error("Permission denied"), {
+        code: "PERMISSION_DENIED",
+      }),
+    );
+    mockGet.mockImplementation((r: { path?: string }) =>
+      Promise.resolve({
+        val: () =>
+          r?.path === "sessions/ABC234/destination"
+            ? { lat: 32.1, lng: 34.9, ts: 1, by: "1" }
+            : null,
+      }),
+    );
+
+    let outcome: Result<void, string> | null = null;
+    await act(async () => {
+      outcome = await result.current.agreeDestination(HAIFA);
+    });
+
+    expect(outcome).toEqual({ ok: true, value: undefined });
+  });
+
+  // A refusal with nothing stored was denied structurally, and is a failure.
   it("returns the refusal instead of throwing", async () => {
     mockStoredDestination = true;
     const { result } = await created();
+    mockGet.mockResolvedValue({ val: () => null });
     mockSet.mockRejectedValue(
       Object.assign(new Error("Permission denied"), {
         code: "PERMISSION_DENIED",

@@ -72,7 +72,7 @@
         },
         "destination": {
           ".read": "auth != null && data.parent().child('created').val() > now - 86400000 && (data.parent().child('slots/0').val() === auth.uid || data.parent().child('slots/1').val() === auth.uid || data.parent().child('slots/2').val() === auth.uid || data.parent().child('slots/3').val() === auth.uid || data.parent().child('slots/4').val() === auth.uid)",
-          ".write": "auth != null && root.child('sessions').child($code).child('created').val() > now - 86400000 && (root.child('sessions').child($code).child('slots/0').val() === auth.uid || root.child('sessions').child($code).child('slots/1').val() === auth.uid || root.child('sessions').child($code).child('slots/2').val() === auth.uid || root.child('sessions').child($code).child('slots/3').val() === auth.uid || root.child('sessions').child($code).child('slots/4').val() === auth.uid)",
+          ".write": "auth != null && root.child('sessions').child($code).child('created').val() > now - 86400000 && (root.child('sessions').child($code).child('slots/0').val() === auth.uid || root.child('sessions').child($code).child('slots/1').val() === auth.uid || root.child('sessions').child($code).child('slots/2').val() === auth.uid || root.child('sessions').child($code).child('slots/3').val() === auth.uid || root.child('sessions').child($code).child('slots/4').val() === auth.uid) && (!data.exists() || !newData.exists())",
           ".validate": "newData.hasChildren(['lat', 'lng', 'ts', 'by'])",
           "lat": {
             ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"

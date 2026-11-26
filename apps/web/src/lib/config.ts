@@ -65,10 +65,11 @@ export interface AppConfig {
    * shows and routes to it, and it stands when the people it was derived from
    * stop reporting. With it off the field is neither read nor written.
    *
-   * The rules that accept the field are live (#119). What turning it on needs
-   * is `public/privacy.html`, in the same commit: a location derived from
-   * people's positions is then kept in the session, readable by the people
-   * who joined, until someone clears it.
+   * The rules that accept the field are live (#119), and
+   * `public/privacy.html` describes it conditionally — "if stored meeting
+   * points are on" — because anyone can host this code with the switch on.
+   * What turning it on in production still needs is the line in the deploy
+   * job's build environment.
    */
   readonly storedDestination: boolean;
   /**

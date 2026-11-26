@@ -11,8 +11,10 @@ All notable changes to this project will be documented in this file.
   and every device then shows and routes to it. It stands when the person who
   tapped goes silent or leaves: the trip card used to fall back to "waiting"
   two minutes later, with no destination. Someone silent after that reads as
-  on the way, and Change goes back to the live meeting point. Off
-  (`VITE_STORED_DESTINATION`) until the privacy policy describes it
+  on the way, and Change goes back to the live meeting point. The first one
+  stored stands until it is cleared, and the database enforces that. Off
+  (`VITE_STORED_DESTINATION`) in production; the privacy policy describes it
+  for any copy of the app that turns it on
 - **The rules accept a stored destination.** `sessions/{code}/destination`,
   writable and readable by the session's slot holders only. Nothing writes
   it yet: the rules deploy a release ahead of the client, because a session
