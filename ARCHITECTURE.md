@@ -74,7 +74,7 @@ alone (below).
 | `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `meeting` | raw `PlaceResult[]` | degrade to empty |
 | `destination` | pure | `meeting`, `venues`, selection, the session's stored destination | `LatLng \| null`, and whether it is the stored one | — |
-| `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
+| `routes` | effectful | counted `slots` short of the destination, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer and where each starts | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
 
 ### The meeting point balanced by travel time — built, and switched off

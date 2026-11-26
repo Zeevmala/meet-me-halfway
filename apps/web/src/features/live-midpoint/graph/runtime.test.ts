@@ -845,6 +845,111 @@ describe("createRuntime — a stored destination", () => {
     r.dispose();
   });
 
+  // The destination holds still, so the last route set went on "answering" it
+  // however far its people had travelled: back from a navigation app the card
+  // showed the pre-departure ETA and the map a line from the old origin, until
+  // the refetch landed.
+  it("drops a route its person has left far behind, at once", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+    expect(r.getSnapshot().routes[0]).not.toBeNull();
+
+    // Twenty kilometres north, in one fix, as after a frozen tab.
+    r.setSources({
+      ownPosition: { lat: TEL_AVIV.lat + 0.18, lng: TEL_AVIV.lng },
+    });
+
+    expect(r.getSnapshot().routes[0]).toBeNull();
+    r.dispose();
+  });
+
+  it("keeps the published routes' reference while people move within their routes", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+    const before = r.getSnapshot().routes;
+
+    // Fifty metres: a new slot vector, the same routes.
+    r.setSources({
+      ownPosition: { lat: TEL_AVIV.lat + 0.00045, lng: TEL_AVIV.lng },
+    });
+
+    expect(r.getSnapshot().routes).toBe(before);
+    r.dispose();
+  });
+
+  // Nothing ended the refresh for someone already there: with the page open
+  // at the destination, a route a minute for as long as they stood.
+  it("asks for no route, and shows none, for someone who has arrived", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(session([], { storedDestination: HAIFA }));
+    await h.advance(10_000);
+    expect(r.getSnapshot().routes[0]).not.toBeNull();
+
+    r.setSources({ ownPosition: HAIFA });
+    vi.mocked(h.ports.fetchRoute).mockClear();
+    await h.advance(10 * 60_000);
+
+    expect(h.ports.fetchRoute).not.toHaveBeenCalled();
+    expect(r.getSnapshot().routes[0]).toBeNull();
+    r.dispose();
+  });
+
+  // While a destination is stored nobody is shown, searched around or routed
+  // to the live midpoint — and the search and the matrix went on asking.
+  it("stops the venue search, and clears its pins, while one is stored", async () => {
+    const h = createHarness({ meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(session([peer(1, JERUSALEM, h.now())]));
+    await h.advance(15_000);
+    expect(r.getSnapshot().venues.length).toBeGreaterThan(0);
+
+    r.setSources({ storedDestination: HAIFA });
+    vi.mocked(h.ports.searchVenues).mockClear();
+    await h.advance(10 * 60_000);
+
+    expect(h.ports.searchVenues).not.toHaveBeenCalled();
+    expect(r.getSnapshot().venues).toHaveLength(0);
+    r.dispose();
+  });
+
+  it("searches again once it is cleared", async () => {
+    const h = createHarness({ meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(15_000);
+    expect(h.ports.searchVenues).not.toHaveBeenCalled();
+
+    r.setSources({ storedDestination: null });
+    await h.advance(15_000);
+
+    expect(h.ports.searchVenues).toHaveBeenCalled();
+    expect(r.getSnapshot().venues.length).toBeGreaterThan(0);
+    r.dispose();
+  });
+
+  it("does not ask the matrix about a meeting point nobody is routed to", async () => {
+    const h = createHarness({ placesEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(15 * 60_000);
+
+    expect(h.ports.fetchMatrix).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
   // Off means off for reading too: with the switch off, whatever the database
   // holds, this device derives its destination as it always did.
   it("is ignored while the feature is off", async () => {

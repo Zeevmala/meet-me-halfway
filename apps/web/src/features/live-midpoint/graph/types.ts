@@ -16,6 +16,14 @@ export interface RouteSet {
   readonly dest: LatLng;
   readonly profile: TravelProfile;
   readonly bySlot: readonly (RouteInfo | null)[];
+  /**
+   * Where each slot's route starts — the position it was asked for from.
+   * A route is from somewhere as much as it is to somewhere: with the
+   * destination held still, a set fetched before someone left for a
+   * navigation app went on "answering" when they came back twenty kilometres
+   * on, and was published with its old ETA and its line from the old origin.
+   */
+  readonly from: readonly (LatLng | null)[];
 }
 
 /**

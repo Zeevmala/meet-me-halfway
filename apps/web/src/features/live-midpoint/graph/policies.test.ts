@@ -3,6 +3,9 @@ import {
   createMeetingPolicy,
   createVenuePolicy,
   createRoutePolicy,
+  ARRIVED_M,
+  ROUTE_ORIGIN_M,
+  routeStillTheirs,
   routesAnswer,
 } from "./policies";
 import type { MeetingInput, RouteInput, VenueInput } from "./policies";
@@ -233,11 +236,52 @@ describe("route policy", () => {
   });
 });
 
+describe("routeStillTheirs", () => {
+  /** `metres` north of `from`, near enough for these thresholds. */
+  const north = (from: LatLng, metres: number): LatLng => ({
+    lat: from.lat + metres / 111_320,
+    lng: from.lng,
+  });
+  const set = {
+    dest: JERUSALEM,
+    profile: "driving" as const,
+    bySlot: [null, null, null, null, null],
+    from: [TEL_AVIV, null, null, null, null],
+  };
+
+  it("holds for someone near where the route starts", () => {
+    expect(routeStillTheirs(set, 0, TEL_AVIV)).toBe(true);
+    expect(
+      routeStillTheirs(set, 0, north(TEL_AVIV, ROUTE_ORIGIN_M - 100)),
+    ).toBe(true);
+  });
+
+  // Back from a navigation app, kilometres on: the route starts somewhere
+  // they no longer are, and its ETA is from before they left.
+  it("stops once they are far from where it starts", () => {
+    expect(
+      routeStillTheirs(set, 0, north(TEL_AVIV, ROUTE_ORIGIN_M + 100)),
+    ).toBe(false);
+  });
+
+  it("stops once they have arrived", () => {
+    expect(routeStillTheirs(set, 0, north(JERUSALEM, ARRIVED_M - 10))).toBe(
+      false,
+    );
+  });
+
+  it("is nobody's without a position, or a start for that slot", () => {
+    expect(routeStillTheirs(set, 0, null)).toBe(false);
+    expect(routeStillTheirs(set, 1, TEL_AVIV)).toBe(false);
+  });
+});
+
 describe("routesAnswer", () => {
   const set = {
     dest: TEL_AVIV,
     profile: "driving" as const,
     bySlot: [null, null, null, null, null],
+    from: [null, null, null, null, null],
   };
 
   it("holds while the destination stays inside the route threshold", () => {

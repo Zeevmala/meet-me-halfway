@@ -37,6 +37,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Someone standing at the meeting point paid for a route a minute.** Nothing
+  ended the refresh on arrival. Within 100 m of the destination no route is
+  asked for or shown
 - **A refused API request was re-sent every few seconds, forever.** A 401 or
   a 422 is not counted against the circuit breaker, rightly, and nothing else
   stood between the failure and the next dispatch: a rotated Mapbox token

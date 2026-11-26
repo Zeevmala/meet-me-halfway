@@ -12,6 +12,7 @@ import { createResource } from "../../../core/dag/resource";
 import type { Resource } from "../../../core/dag/resource";
 import { rankVenues } from "../lib/venue-ranking";
 import type { PlaceResult, RankedVenue } from "../lib/venue-ranking";
+import { haversineDistance } from "../lib/geo-math";
 import type { LatLng } from "../lib/geo-math";
 import { MAX_PARTICIPANTS } from "../lib/participant-config";
 import type { ParticipantIndex } from "../lib/participant-config";
@@ -28,7 +29,9 @@ import {
   createRoutePolicy,
   createPresencePolicy,
   createMeetingPolicy,
+  ARRIVED_M,
   PRESENCE_HEARTBEAT_MS,
+  routeStillTheirs,
   routesAnswer,
 } from "./policies";
 import type {
@@ -209,7 +212,7 @@ export function createRuntime(
   );
   let publishedRoutes: readonly (RouteInfo | null)[] = EMPTY_ROUTES;
   let publishedFrom: RouteSet | null = null;
-  let publishedMask = "";
+  let publishedFor: SlotVector | null = null;
   let ranked: readonly RankedVenue[] = EMPTY_VENUES;
   let rankedFromRaw: PlaceResult[] | null = null;
   let rankedAtCenter: LatLng | null = null;
@@ -319,21 +322,57 @@ export function createRuntime(
   ): readonly (RouteInfo | null)[] {
     if (set === null || dest === null) return EMPTY_ROUTES;
     if (!routesAnswer(set, dest, sources.travelProfile)) return EMPTY_ROUTES;
-    const mask = of.counted.join(",");
-    if (set !== publishedFrom || mask !== publishedMask) {
+    if (set !== publishedFrom || of !== publishedFor) {
       publishedFrom = set;
-      publishedMask = mask;
-      publishedRoutes = set.bySlot.map((route, slot) =>
-        of.counted.includes(slot as ParticipantIndex) ? route : null,
+      publishedFor = of;
+      // A route is published for someone still counted, still short of the
+      // destination and still near where it starts. The last is what a held
+      // destination needs: the set goes on answering it for as long as it
+      // holds, however far its people have travelled since.
+      const next = set.bySlot.map((route, slot) =>
+        of.counted.includes(slot as ParticipantIndex) &&
+        routeStillTheirs(set, slot, of.positions[slot] ?? null)
+          ? route
+          : null,
       );
+      // Positions change on every fix and the answer rarely does: keep the
+      // array the map already has unless a route in it changed.
+      if (next.some((route, slot) => route !== publishedRoutes[slot])) {
+        publishedRoutes = next;
+      }
     }
     return publishedRoutes;
+  }
+
+  /**
+   * The positions routes are asked for: everyone counted who has not arrived,
+   * or `null` when that is nobody.
+   */
+  function positionsEnRoute(
+    of: SlotVector,
+    dest: LatLng,
+  ): readonly (LatLng | null)[] | null {
+    const counted = positionsCounted(of);
+    const arrived = (position: LatLng | null) =>
+      position !== null && haversineDistance(position, dest) < ARRIVED_M;
+    if (!counted.some(arrived)) {
+      return counted.some((position) => position !== null) ? counted : null;
+    }
+    const enRoute = counted.map((position) =>
+      arrived(position) ? null : position,
+    );
+    return enRoute.some((position) => position !== null) ? enRoute : null;
   }
 
   function compute(): void {
     let nextDestination: LatLng | null = null;
     let nextSelected: RankedVenue | null = null;
     let nextAgreed = false;
+    // A source, so every node may read it without an edge. While the session
+    // has a stored destination nobody is shown, searched around or routed to
+    // the live meeting point, so nothing is asked about it either: the venue
+    // search and the matrix went on being paid for, to answers nothing read.
+    const stored = ports.destinationEnabled ? sources.storedDestination : null;
 
     // Walk the declared order so the edge map governs execution rather than
     // merely documenting it. noFallthroughCasesInSwitch keeps this exhaustive.
@@ -423,12 +462,19 @@ export function createRuntime(
               // answer the matrix can no longer refresh ages out with the
               // resource's last-good window.
               const point = meeting.getState().value?.point ?? null;
-              meeting.request({
-                slots: positionsCounted(slots),
-                centroid,
-                profile: sources.travelProfile,
-                incumbent: point,
-              });
+              // With a destination stored the last answer goes on being
+              // published — so Change returns everyone to one point, at once
+              // — but it is not asked about again until then.
+              meeting.request(
+                stored !== null
+                  ? null
+                  : {
+                      slots: positionsCounted(slots),
+                      centroid,
+                      profile: sources.travelProfile,
+                      incumbent: point,
+                    },
+              );
               published = point;
             } else {
               meeting.request(null);
@@ -454,12 +500,15 @@ export function createRuntime(
           break;
         }
         case "venues": {
-          if (ports.placesEnabled && midpoint !== null) {
-            venues.request({ center: midpoint });
-          } else {
-            venues.request(null);
-          }
-          const raw = venues.getState().value;
+          const searching =
+            ports.placesEnabled && midpoint !== null && stored === null;
+          venues.request(
+            searching && midpoint !== null ? { center: midpoint } : null,
+          );
+          // The resource keeps its last value; with nothing being searched
+          // for, that value is not this tick's, and its pins would be drawn
+          // around a midpoint that has no marker.
+          const raw = searching ? venues.getState().value : null;
           // Re-rank per tick against the live midpoint: scores are relative
           // to the max distance within the returned set, so a ranking
           // computed for an older centre would be subtly wrong.
@@ -482,7 +531,7 @@ export function createRuntime(
             ranked,
             sources.selectedVenueId,
             midpoint,
-            ports.destinationEnabled ? sources.storedDestination : null,
+            stored,
           );
           nextDestination = result.destination;
           nextSelected = result.selectedVenue;
@@ -490,9 +539,13 @@ export function createRuntime(
           break;
         }
         case "routes": {
-          if (nextDestination !== null && slots.counted.length > 0) {
+          const enRoute =
+            nextDestination === null
+              ? null
+              : positionsEnRoute(slots, nextDestination);
+          if (nextDestination !== null && enRoute !== null) {
             routes.request({
-              slots: positionsCounted(slots),
+              slots: enRoute,
               dest: nextDestination,
               profile: sources.travelProfile,
             });

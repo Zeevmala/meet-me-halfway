@@ -131,6 +131,7 @@ Run by the `app-health` agent (`.claude/agents/app-health.md`) on `f866818`, in 
 Before an open test, not before the beta:
 
 - Route requests are N² per session: every client fetches a route for every occupied slot (`policies.ts:278`).
+- A device alone with a stored destination refreshes its own route about once a minute while its page is open and it has not arrived: 9 requests in 10 minutes, measured in the runtime harness, where there were none. It is the same refresh two people get; arrival now ends it.
 - e2e on WebKit and an Android descriptor; an axe pass on the loaded session in both languages.
 - The silent failures above report.
 - `privacy.html` and `terms.html` exist in Hebrew.

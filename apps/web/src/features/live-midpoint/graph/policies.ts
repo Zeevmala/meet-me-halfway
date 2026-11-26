@@ -28,6 +28,21 @@ import type {
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
 const ROUTE_ADMIT_M = 200;
+/**
+ * How far someone may be from where their route starts before it stops being
+ * theirs. Well clear of what a live refresh allows — admission at
+ * `ROUTE_ADMIT_M`, then the debounce and the fetch, at motorway speed — so a
+ * route in normal use is never hidden, and far short of the distance covered
+ * behind a navigation app.
+ */
+export const ROUTE_ORIGIN_M = 2_000;
+/**
+ * Within this of the destination a person has arrived, and needs no route.
+ * Nothing else ended the refresh: someone standing at the meeting point with
+ * the page open paid for a route a minute for as long as they stood there,
+ * and a stored destination made that true of one person alone.
+ */
+export const ARRIVED_M = 100;
 
 /** Refresh venues at least this often even while standing still. */
 const VENUE_TTL_MS = 5 * 60_000;
@@ -379,6 +394,23 @@ export function routesAnswer(
   );
 }
 
+/**
+ * Whether a slot's route in `set` is still the route of someone now at
+ * `position`: they have not arrived, and they are near where it starts.
+ */
+export function routeStillTheirs(
+  set: RouteSet,
+  slot: number,
+  position: LatLng | null,
+): boolean {
+  if (position === null) return false;
+  if (haversineDistance(position, set.dest) < ARRIVED_M) return false;
+  const origin = set.from[slot] ?? null;
+  return (
+    origin !== null && haversineDistance(origin, position) < ROUTE_ORIGIN_M
+  );
+}
+
 export function createRoutePolicy(
   ports: GraphPorts,
 ): ResourcePolicy<RouteInput, RouteSet> {
@@ -450,7 +482,12 @@ export function createRoutePolicy(
       }
 
       if (successes === 0 && firstError !== null) return err(firstError);
-      return ok({ dest: input.dest, profile: input.profile, bySlot });
+      return ok({
+        dest: input.dest,
+        profile: input.profile,
+        bySlot,
+        from: input.slots,
+      });
     },
   };
 }
