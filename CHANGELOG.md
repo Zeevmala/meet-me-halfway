@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The rules accept a stored destination.** `sessions/{code}/destination`,
+  writable and readable by the session's slot holders only. Nothing writes
+  it yet: the rules deploy a release ahead of the client, because a session
+  rejects fields its rules do not name. It exists because the meeting point
+  was derived from whoever was still reporting, and two minutes after one of
+  two people tapped Navigate the other had no destination
+
 ### Fixed
 
 - **A refused API request was re-sent every few seconds, forever.** A 401 or

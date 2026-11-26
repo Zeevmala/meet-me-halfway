@@ -632,3 +632,122 @@ describe("timestamps — the server's clock, not the device's", () => {
     );
   });
 });
+
+describe("destination — one stored meeting point, for the people in the session", () => {
+  // The meeting point was never stored: each device derived it from whoever was
+  // still reporting. Tapping Navigate sends the page to the background, which
+  // stops the reports, and two minutes later the person who stayed had no
+  // destination at all. A stored one outlives its writer.
+  const DEST = `sessions/${CODE}/destination`;
+
+  function destination(by: string) {
+    return { lat: 32.08, lng: 34.885, ts: SERVER_NOW, by };
+  }
+
+  beforeEach(async () => {
+    await as(JOINERS[0]).ref(`sessions/${CODE}/slots/1`).set(JOINERS[0]);
+  });
+
+  it("lets any slot holder set it", async () => {
+    await assertSucceeds(as(CREATOR).ref(DEST).set(destination("0")));
+    await assertSucceeds(as(JOINERS[0]).ref(DEST).set(destination("1")));
+  });
+
+  it("lets every slot holder read it, and nobody else", async () => {
+    await as(CREATOR).ref(DEST).set(destination("0"));
+
+    await assertSucceeds(as(CREATOR).ref(DEST).get());
+    await assertSucceeds(as(JOINERS[0]).ref(DEST).get());
+    await assertFails(as(JOINERS[1]).ref(DEST).get());
+    await assertFails(
+      testEnv.unauthenticatedContext().database().ref(DEST).get(),
+    );
+  });
+
+  it("refuses a write from someone holding no slot", async () => {
+    await assertFails(as(JOINERS[1]).ref(DEST).set(destination("1")));
+    await assertFails(as(JOINERS[1]).ref(DEST).set(destination("2")));
+  });
+
+  it("refuses a `by` naming a slot the writer does not hold", async () => {
+    await assertFails(as(JOINERS[0]).ref(DEST).set(destination("0")));
+    await assertFails(as(JOINERS[0]).ref(DEST).set(destination("7")));
+    await assertFails(
+      as(JOINERS[0])
+        .ref(DEST)
+        .set({ ...destination("1"), by: 1 }),
+    );
+  });
+
+  it("rejects out-of-range coordinates", async () => {
+    await assertFails(
+      as(CREATOR)
+        .ref(DEST)
+        .set({ ...destination("0"), lat: 91 }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(DEST)
+        .set({ ...destination("0"), lng: -181 }),
+    );
+  });
+
+  it("rejects a missing field and an unknown one", async () => {
+    await assertFails(
+      as(CREATOR).ref(DEST).set({ lat: 32.08, lng: 34.885, ts: SERVER_NOW }),
+    );
+    await assertFails(
+      as(CREATOR)
+        .ref(DEST)
+        .set({ ...destination("0"), name: "Cafe" }),
+    );
+  });
+
+  it("refuses a ts that is not the server's now", async () => {
+    await assertFails(
+      as(CREATOR)
+        .ref(DEST)
+        .set({ ...destination("0"), ts: Date.now() - 60_000 }),
+    );
+  });
+
+  it("lets another holder replace it, and any holder clear it", async () => {
+    await as(CREATOR).ref(DEST).set(destination("0"));
+
+    await assertSucceeds(
+      as(JOINERS[0])
+        .ref(DEST)
+        .set({ ...destination("1"), lat: 32.1 }),
+    );
+    await assertSucceeds(as(CREATOR).ref(DEST).remove());
+    await assertFails(as(JOINERS[1]).ref(DEST).remove());
+  });
+
+  // The property the field exists for.
+  it("outlives its writer's position", async () => {
+    await as(JOINERS[0])
+      .ref(`sessions/${CODE}/participants/1`)
+      .set(position(JOINERS[0]));
+    await as(JOINERS[0]).ref(DEST).set(destination("1"));
+
+    await as(JOINERS[0]).ref(`sessions/${CODE}/participants/1`).remove();
+
+    const snapshot = await as(CREATOR).ref(DEST).get();
+    expect(snapshot.val()).toMatchObject({ lat: 32.08, lng: 34.885, by: "1" });
+  });
+
+  it("is closed, both ways, once the session is over 24 hours old", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .database()
+        .ref(`sessions/${CODE}`)
+        .update({
+          created: Date.now() - 25 * 60 * 60 * 1000,
+          destination: { lat: 32.08, lng: 34.885, ts: Date.now(), by: "0" },
+        });
+    });
+
+    await assertFails(as(CREATOR).ref(DEST).get());
+    await assertFails(as(CREATOR).ref(DEST).set(destination("0")));
+  });
+});
