@@ -18,6 +18,21 @@ export interface RouteSet {
   readonly bySlot: readonly (RouteInfo | null)[];
 }
 
+/**
+ * What the meeting point is balanced by: `time` once the matrix has answered
+ * for the people now counted, `distance` — the geographic centroid — until
+ * then and whenever it cannot.
+ */
+export type MeetingBasis = "time" | "distance";
+
+/** The matrix's answer. */
+export interface MeetingAnswer {
+  /** Snapped to the road network; `null` when nowhere is reachable by all. */
+  readonly point: LatLng | null;
+  /** The longest trip to `point`, seconds. */
+  readonly worstSeconds: number;
+}
+
 export interface RouteInfo {
   geometry: GeoJSON.LineString;
   duration: number; // seconds
@@ -40,6 +55,8 @@ export interface ParticipantSource {
   /** Server-clock epoch ms of this participant's most recent RTDB write. */
   readonly lastSeen: number;
   readonly name: string | null;
+  /** The meeting point this participant published for the session, if any. */
+  readonly meet?: LatLng | null;
 }
 
 /**

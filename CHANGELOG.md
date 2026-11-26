@@ -12,6 +12,19 @@ All notable changes to this project will be documented in this file.
   rejects fields its rules do not name. It exists because the meeting point
   was derived from whoever was still reporting, and two minutes after one of
   two people tapped Navigate the other had no destination
+- **A meeting point balanced by travel time — built, behind a flag, off.**
+  The midpoint is the geographic centroid, which one person on a motorway and
+  one crossing a city reach half an hour apart. A `meeting` node now asks the
+  Mapbox Matrix API how long everyone would take to reach a dozen points
+  between them and takes the one whose longest trip is shortest, snapped to a
+  road. One device works it out — the creator's — and publishes it in the
+  record it already writes, so the session shows one point and it is deleted
+  with the creator's position. Off (`VITE_BALANCED_MEETING`) for one release:
+  the rules accepting the two new fields deploy first
+- **Driving ETAs use live traffic.** Routes were asked for with Mapbox's
+  `driving` profile, which answers from typical speeds, and then refreshed
+  every minute "because traffic moves" — re-fetching an answer that could not
+  have changed
 
 ### Fixed
 
@@ -26,6 +39,9 @@ All notable changes to this project will be documented in this file.
   success nor a failure, leaving the breaker half-open with nothing
   outstanding: every later call refused, for the life of the page. A refusal
   is an answer, and closes it
+- **Every accuracy circle was rebuilt on every GPS fix.** One fix a second
+  from anyone moving redrew all five — 320 points of trigonometry and five
+  uploads to the map's worker. Only the circle that changed is redrawn
 
 ### Fixed — the reload after a deploy
 

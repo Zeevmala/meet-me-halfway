@@ -4,7 +4,7 @@ import type { LatLng } from "../lib/geo-math";
 import { haversineDistance, formatDistance } from "../lib/geo-math";
 import { wazeLink, googleMapsLink } from "../lib/nav-links";
 import { etaParts, etaSpreadMinutes } from "../lib/eta";
-import type { RouteInfo, TravelProfile } from "../graph/types";
+import type { MeetingBasis, RouteInfo, TravelProfile } from "../graph/types";
 import type { ParticipantIndex } from "../lib/participant-config";
 import { NavigateGlyph } from "./icons";
 import "../styles/live-midpoint.css";
@@ -32,6 +32,12 @@ interface MidpointCardProps {
   travelProfile: TravelProfile;
   onProfileChange: (profile: TravelProfile) => void;
   selectedVenueName: string | null;
+  /**
+   * Whether the midpoint is balanced by travel time or is the geographic
+   * centroid. Named in the title: "Midpoint" over a point visibly nearer one
+   * person reads as a bug unless the card says what it is the middle of.
+   */
+  meetingBasis: MeetingBasis;
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
 }
@@ -64,6 +70,7 @@ export default memo(function MidpointCard({
   travelProfile,
   onProfileChange,
   selectedVenueName,
+  meetingBasis,
   routesStale,
 }: MidpointCardProps) {
   const { t } = useTranslation();
@@ -104,7 +111,11 @@ export default memo(function MidpointCard({
           <span className="live-trip-dest">
             {selectedVenueName
               ? t("live.meetAt", { name: selectedVenueName })
-              : t("live.midpoint")}
+              : t(
+                  meetingBasis === "time"
+                    ? "live.midpointByTime"
+                    : "live.midpoint",
+                )}
           </span>
           {spread !== null && (
             <span className="live-trip-spread">

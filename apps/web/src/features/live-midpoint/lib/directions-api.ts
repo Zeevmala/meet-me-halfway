@@ -17,6 +17,17 @@ interface DirectionsResponse {
   }[];
 }
 
+/**
+ * Driving is asked for with live traffic. The plain `driving` profile answers
+ * from typical speeds, so the ETA it gave at rush hour was the ETA at 3 a.m. —
+ * and refreshing it every minute, as the route policy does because "traffic
+ * moves", re-fetched an answer that could not have changed.
+ */
+const MAPBOX_PROFILE: Record<TravelProfile, string> = {
+  driving: "driving-traffic",
+  walking: "walking",
+};
+
 export type FetchRoute = (
   from: LatLng,
   to: LatLng,
@@ -50,7 +61,7 @@ export function createDirectionsClient(accessToken: string): FetchRoute {
     // card): the route is drawn as a 4px line, well above the residual
     // simplification error.
     const url =
-      `https://api.mapbox.com/directions/v5/mapbox/${profile}/` +
+      `https://api.mapbox.com/directions/v5/mapbox/${MAPBOX_PROFILE[profile]}/` +
       `${from.lng},${from.lat};${to.lng},${to.lat}` +
       `?geometries=geojson&overview=simplified&access_token=${accessToken}`;
 

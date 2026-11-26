@@ -22,12 +22,21 @@
       `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
       the rules can no longer reach production independently
 - [ ] Custom domain + SSL
-- [ ] Route geometry: request `overview=simplified` for non-local slots — the
-      last-known-good buffer doubles retained geometry, and full overview is
-      ~150–400 KB per route
 
 ## v2 Roadmap
 
+- [ ] Meeting point balanced by travel time (Mapbox Matrix, minimax) — built;
+      the creator computes it and publishes it in `participants/0`. Next
+      release: set `VITE_BALANCED_MEETING=true` in the deploy job, once this
+      release's rules are live, and add the Matrix request and the published
+      point to `privacy.html` in that commit. Tabs still on a bundle older
+      than this release cannot read the point and will show the centroid
+      until they reload — leave a full release between the two steps
+- [ ] Rank venues by the same matrix (fairness of the trip to each venue,
+      not straight-line distance from the meeting point)
+- [ ] One destination for the whole session: the picked venue is per device
+      today, so two people can navigate to different places. The same move
+      fixes it — the creator's record carries the pick
 - [ ] WhatsApp bot for session creation and invites
 - [ ] Transit/cycling travel profiles
 - [ ] Session history and favorite venues

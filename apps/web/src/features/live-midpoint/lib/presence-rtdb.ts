@@ -38,6 +38,13 @@ export interface PresenceValue {
   readonly lng: number;
   readonly accuracy: number;
   readonly name: string;
+  /**
+   * The meeting point this participant worked out for the session, if it is
+   * the one who does (the creator). It rides in this record so it needs no
+   * path, rule, listener or cleanup of its own: holders only may read it, and
+   * it is deleted with the position when the connection drops.
+   */
+  readonly meet?: { readonly lat: number; readonly lng: number } | null;
 }
 
 export interface PresenceWriter {
@@ -109,7 +116,12 @@ export function createPresenceWriter(db: Database): PresenceWriter {
       watchConnection();
 
       try {
-        await set(ownRef, { ...value, ts: serverTimestamp() });
+        const { meet, ...record } = value;
+        await set(ownRef, {
+          ...record,
+          ...(meet ? { mlat: meet.lat, mlng: meet.lng } : {}),
+          ts: serverTimestamp(),
+        });
         // The resource aborts a superseded write, but `set` has already been
         // sent over the WebSocket by then; report the abort so the epoch guard
         // discards the result rather than counting it as a success.

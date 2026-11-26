@@ -32,8 +32,8 @@ export const DATA_COLLECTION = {
  *
  * `dataCollection` gates categories of data, not what is inside them, and the
  * two things privacy.html says a report never carries sit where no category
- * reaches. Mapbox Directions puts every participant's coordinates in the URL
- * path — `urlQueryParams` filters queries only — and the SDK records that URL
+ * reaches. Mapbox Directions and Matrix put every participant's coordinates in
+ * the URL path — `urlQueryParams` filters queries only — and the SDK records that URL
  * in fetch breadcrumbs and request spans; a failed tile's URL names the area
  * on screen. The session code, which is what reads a session's locations, is
  * in the page URL every event carries and in Firebase's own console warnings
@@ -42,6 +42,9 @@ export const DATA_COLLECTION = {
 const REDACTIONS: readonly (readonly [RegExp, string])[] = [
   // `/directions/v5/mapbox/{profile}/{lng},{lat};{lng},{lat}`
   [/(\/directions\/v5\/[^/]+\/[^/]+\/)[^?#\s"']+/g, "$1[redacted]"],
+  // `/directions-matrix/v1/mapbox/{profile}/{lng},{lat};…` — everyone's
+  // position and every candidate meeting point.
+  [/(\/directions-matrix\/v1\/[^/]+\/[^/]+\/)[^?#\s"']+/g, "$1[redacted]"],
   // Map tiles: `/{z}/{x}/{y}` before the extension or query.
   [/\/\d{1,2}\/\d{1,8}\/\d{1,8}(?=[.@?#/]|$)/g, "/[redacted]"],
   // Any other coordinate pair, raw or URL-encoded.

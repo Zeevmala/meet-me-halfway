@@ -57,10 +57,11 @@ apps/web/test-results/
 # Legacy API artifacts (compiled-only, no source)
 apps/api/
 
-# Claude Code (keep commands/, the shared settings and their hooks tracked;
+# Claude Code (keep commands/, agents/, the shared settings and their hooks tracked;
 # settings.local.json and the hook's .verify-cache.json stay local)
 .claude/*
 !.claude/commands/
+!.claude/agents/
 !.claude/settings.json
 !.claude/hooks/
 

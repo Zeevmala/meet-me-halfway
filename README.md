@@ -73,13 +73,15 @@ graph TB
     A -.->|venue search| GP
 ```
 
-All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed.
+All browsers compute the midpoint client-side using a geographic centroid (Cartesian mean on unit sphere) — no server needed. A meeting point **balanced by travel time** (Mapbox Matrix API: of a dozen candidates between the participants, the one whose longest trip is shortest) is built and off by default — see `ARCHITECTURE.md` for why.
 
 Within each browser the derived work runs as a declared graph:
 
 ```mermaid
 graph LR
-    S[slots] --> M[midpoint]
+    S[slots] --> C[midpoint]
+    C --> M[meeting]
+    S --> M
     M --> V[venues]
     M --> D[destination]
     V --> D
@@ -107,9 +109,9 @@ nodes carry retry, circuit breaking and last-known-good degradation. See
 | Auth | Firebase Anonymous Auth (silent sign-in) |
 | Security | Firebase App Check (reCAPTCHA Enterprise) |
 | Real-time | Firebase 12 Realtime Database |
-| Routing | Mapbox Directions API (client-side) |
+| Routing | Mapbox Directions API with live traffic (client-side) |
 | Venues | Google Places API (New) — optional |
-| Midpoint | Geographic centroid (Cartesian mean on unit sphere) |
+| Midpoint | Geographic centroid (Cartesian mean on unit sphere); balanced by travel time behind a flag |
 | i18n | i18next — English, Hebrew (full RTL) |
 | Pipeline | Declared DAG + resource combinator (retry / breaker / degrade) |
 | Tests | Vitest + React Testing Library (344 tests) |
