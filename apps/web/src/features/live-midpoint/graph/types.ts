@@ -105,6 +105,12 @@ export interface GraphSources {
   readonly ownAccuracy: number | null;
   readonly participants: readonly ParticipantSource[];
   readonly selectedVenueId: string | null;
+  /**
+   * The destination the session has stored (`sessions/{code}/destination`),
+   * or `null`. Unlike everything derived from positions it outlives the
+   * people who were reporting when it was set.
+   */
+  readonly storedDestination: LatLng | null;
   readonly travelProfile: TravelProfile;
   /** Session identity — the presence node writes under these. */
   readonly sessionCode: string | null;
@@ -141,6 +147,8 @@ export interface LivenessResult {
 export interface DestinationResult {
   readonly destination: LatLng | null;
   readonly selectedVenue: RankedVenue | null;
+  /** The destination is the stored one, not something derived this tick. */
+  readonly agreed: boolean;
 }
 
 /**

@@ -514,6 +514,21 @@
   color: var(--live-text-muted);
 }
 
+/* The way back from an agreed destination to the live one. Quiet on purpose:
+   it is the exception, and Navigate is the action. */
+.live-trip-change {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--live-text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .live-profile-toggle {
   flex: none;
   display: flex;

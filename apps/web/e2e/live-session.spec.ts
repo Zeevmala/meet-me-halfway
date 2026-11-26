@@ -277,6 +277,61 @@ test("two devices meet, and the map draws them where they are", async ({
   }
 });
 
+// Navigate hands the phone to another app, and its page stops reporting. No
+// destination was stored, so whoever stayed lost theirs with it: the trip card
+// went back to "waiting". The tap now stores it, under the real rules, and it
+// outlives the person who tapped.
+test("the destination set on Navigate outlives the person who set off", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+
+  const creator = await openDevice(browser, TEL_AVIV, "/", { viewport: PHONE });
+  const codeBadge = creator.page.locator(".live-badge-code");
+  await expect(codeBadge).toHaveText(/^[2-9A-HJKMNP-Z]{6}$/, {
+    timeout: 30_000,
+  });
+  const code = (await codeBadge.textContent()) ?? "";
+  const joiner = await openDevice(browser, HAIFA, `/?code=${code}`);
+  for (const { page } of [creator, joiner]) {
+    await expect(page.locator(".live-nav-buttons")).toBeVisible({
+      timeout: 45_000,
+    });
+  }
+  await expect(joiner.page.locator(".live-eta-row")).toHaveCount(2);
+
+  // The creator sets off. The link opens the navigation app in a new tab,
+  // which is answered here: the suite does not reach the open web.
+  await creator.context.route(/waze\.com/, (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "" }),
+  );
+  const [navigationApp] = await Promise.all([
+    creator.page.waitForEvent("popup"),
+    creator.page.getByLabel("Navigate with Waze").click(),
+  ]);
+  await navigationApp.close();
+
+  // The joiner hears of it through the database, not from the creator's page.
+  await expect(joiner.page.locator(".live-trip-dest")).toHaveText(
+    "Meeting point set",
+    { timeout: 15_000 },
+  );
+
+  // Then the creator is gone altogether — the strongest form of going silent:
+  // their position is removed, and the joiner is alone in the session.
+  await creator.context.close();
+  await expect(joiner.page.locator(".live-eta-row")).toHaveCount(1, {
+    timeout: 30_000,
+  });
+
+  await expect(joiner.page.locator(".live-trip-dest")).toHaveText(
+    "Meeting point set",
+  );
+  await expect(joiner.page.locator(".live-nav-buttons")).toBeVisible();
+  await expect(joiner.page.locator(".live-marker--mid")).toHaveCount(1);
+  expect(joiner.cspViolations, "joiner: no CSP violations").toEqual([]);
+});
+
 // A link to a session the database never held. The rules deny that read rather
 // than answer empty, and the same denial greets a device that may read nothing
 // at all, so the join reads the `probe` rule before it blames the session.

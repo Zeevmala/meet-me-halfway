@@ -79,6 +79,9 @@
     "spread": "הפרש של {{minutes}} דק׳",
     "spreadEven": "מגיעים יחד",
     "staleTag": "לא עדכני",
+    "destinationAgreed": "נקודת המפגש נקבעה",
+    "destinationChange": "שינוי",
+    "onTheWayTag": "בדרך",
     "waze": "Waze",
     "googleMaps": "Google Maps"
   },

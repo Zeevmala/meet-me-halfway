@@ -38,6 +38,7 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     meetingEnabled: true,
+    destinationEnabled: false,
     ...overrides,
   };
 }

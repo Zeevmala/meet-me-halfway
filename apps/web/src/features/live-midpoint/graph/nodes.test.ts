@@ -48,6 +48,7 @@ function sources(overrides: Partial<GraphSources> = {}): GraphSources {
     ownAccuracy: 5,
     participants: [],
     selectedVenueId: null,
+    storedDestination: null,
     travelProfile: "driving",
     sessionCode: "ABC123",
     ownUid: "own-uid",
@@ -282,6 +283,28 @@ describe("deriveDestination", () => {
 
     expect(result.destination).toEqual(TEL_AVIV);
     expect(result.selectedVenue).toBeNull();
+  });
+
+  // The stored destination is the only one of the three every device holds.
+  it("puts the stored destination before a picked venue and the midpoint", () => {
+    const v = venue("v1", JERUSALEM);
+    const result = deriveDestination([v], "v1", TEL_AVIV, HAIFA);
+
+    expect(result.destination).toEqual(HAIFA);
+    expect(result.selectedVenue).toBeNull();
+    expect(result.agreed).toBe(true);
+  });
+
+  it("stands when there is no midpoint left to fall back to", () => {
+    const result = deriveDestination([], null, null, HAIFA);
+
+    expect(result.destination).toEqual(HAIFA);
+    expect(result.agreed).toBe(true);
+  });
+
+  it("is not agreed while nothing is stored", () => {
+    expect(deriveDestination([], null, TEL_AVIV).agreed).toBe(false);
+    expect(deriveDestination([], null, TEL_AVIV, null).agreed).toBe(false);
   });
 
   it("releases a selection that disappeared from a refreshed list", () => {

@@ -75,6 +75,7 @@ export function createServices(config: AppConfig): Services {
     writePresence: presence.write,
     placesEnabled: config.places !== null,
     meetingEnabled: config.balancedMeeting,
+    destinationEnabled: config.storedDestination,
   };
 
   return { config, firebase, graphPorts, presence, requestSemaphore };

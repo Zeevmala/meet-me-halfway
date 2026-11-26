@@ -75,6 +75,9 @@ function renderCard(
     selectedVenueName: null as string | null,
     meetingBasis: "distance" as "time" | "distance",
     routesStale: false,
+    agreed: false,
+    onNavigate: vi.fn(),
+    onChangeDestination: vi.fn(),
   };
   return render(<MidpointCard {...defaults} {...overrides} />);
 }
@@ -328,5 +331,62 @@ describe("MidpointCard", () => {
     renderCard({ ownRoute });
     const distance = screen.getByText(formatDistance(ownRoute.distance));
     expect(distance.tagName).toBe("BDI");
+  });
+});
+
+describe("MidpointCard — an agreed destination", () => {
+  it("tells the page before either navigation link is followed", () => {
+    const onNavigate = vi.fn();
+    renderCard({ onNavigate });
+
+    fireEvent.click(screen.getByLabelText("live.navigateWaze"));
+    fireEvent.click(screen.getByLabelText("live.navigateGoogle"));
+
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the destination is set, whatever it was derived from", () => {
+    renderCard({
+      agreed: true,
+      selectedVenueName: "Cafe",
+      meetingBasis: "time",
+    });
+
+    expect(screen.getByText("live.destinationAgreed")).toBeTruthy();
+    expect(screen.queryByText("live.midpointByTime")).toBeNull();
+    expect(screen.queryByText('live.meetAt:{"name":"Cafe"}')).toBeNull();
+  });
+
+  it("offers the way back only once one is agreed", () => {
+    const onChangeDestination = vi.fn();
+    const { rerender } = renderCard({ onChangeDestination });
+    expect(screen.queryByText("live.destinationChange")).toBeNull();
+    rerender(<></>);
+
+    renderCard({ agreed: true, onChangeDestination });
+    fireEvent.click(screen.getByText("live.destinationChange"));
+
+    expect(onChangeDestination).toHaveBeenCalledTimes(1);
+  });
+
+  // Their page is behind a navigation app: silence is what setting off looks
+  // like, and "Outdated — waiting for their location" was the wrong story.
+  it("reads a silent person as on the way, not as outdated", () => {
+    renderCard({
+      agreed: true,
+      otherParticipants: [
+        {
+          index: 1 as ParticipantIndex,
+          route: null,
+          position: otherPosition,
+          stale: true,
+          name: null,
+        },
+      ],
+    });
+
+    expect(screen.getByText("live.onTheWayTag")).toBeTruthy();
+    expect(screen.queryByText("live.staleTag")).toBeNull();
+    expect(screen.queryByText("live.participantStaleHint")).toBeNull();
   });
 });

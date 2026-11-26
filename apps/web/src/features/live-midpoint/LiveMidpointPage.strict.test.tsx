@@ -39,12 +39,15 @@ vi.mock("./hooks/useLiveSession", () => ({
     ownIndex: 0,
     ownName: "Me",
     participants: [],
+    destination: null,
     error: null,
     errorDetails: null,
     creatorUid: "test-uid",
     createSession: mockCreateSession,
     joinSession: mockJoinSession,
     setOwnName: vi.fn(),
+    agreeDestination: vi.fn(),
+    clearDestination: vi.fn(),
     cleanup: vi.fn(),
   }),
 }));
@@ -62,6 +65,7 @@ const testPorts: GraphPorts = {
   writePresence: vi.fn().mockResolvedValue(ok(undefined)),
   placesEnabled: false,
   meetingEnabled: false,
+  destinationEnabled: false,
 };
 
 const testServices = {

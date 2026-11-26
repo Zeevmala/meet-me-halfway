@@ -21,6 +21,11 @@
 - [x] Firebase RTDB security rules — published by the `deploy` job in
       `.github/workflows/web.yml`, in the same job as hosting, so the bundle and
       the rules can no longer reach production independently
+- [ ] Stored destination — built behind `VITE_STORED_DESTINATION`, rules
+      live. Next release: set it to `true` in the deploy job and describe the
+      stored point in `privacy.html` in that commit (the people who joined
+      can read it for the session's 24 hours; like the session record it is
+      not deleted automatically, only when someone clears it)
 - [ ] Custom domain + SSL
 
 ## v2 Roadmap

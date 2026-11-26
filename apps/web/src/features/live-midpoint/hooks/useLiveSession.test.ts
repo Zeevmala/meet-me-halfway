@@ -14,6 +14,11 @@ const mockRef = vi.fn((_db: unknown, path?: string) => ({ path }));
 let onValueCallback: ((snap: { val: () => unknown }) => void) | null = null;
 let onValueErrorCallback: ((err: Error) => void) | null = null;
 const mockOnValueUnsub = vi.fn();
+// The destination has a listener of its own. It is recorded apart from the
+// participants listener above, so the cases that drive that one are unchanged.
+let destinationCallback: ((snap: { val: () => unknown }) => void) | null = null;
+let destinationErrorCallback: ((err: Error) => void) | null = null;
+const mockDestinationUnsub = vi.fn();
 
 vi.mock("firebase/database", () => ({
   onValue: (
@@ -21,6 +26,11 @@ vi.mock("firebase/database", () => ({
     onSnap: (snap: { val: () => unknown }) => void,
     onErr: (err: Error) => void,
   ) => {
+    if ((_ref as { path?: string }).path?.endsWith("/destination")) {
+      destinationCallback = onSnap;
+      destinationErrorCallback = onErr;
+      return mockDestinationUnsub;
+    }
     onValueCallback = onSnap;
     onValueErrorCallback = onErr;
     return mockOnValueUnsub;
@@ -53,11 +63,15 @@ vi.mock("../../../hooks/useFirebase", () => ({
   }),
 }));
 
-// ── Mock the injected services (the hook only reads the presence writer) ──
+// ── Mock the injected services: the presence writer, and the one switch the
+// hook reads — whether the session's destination is stored. Off by default, as
+// in production; read inside the accessor so a case can turn it on. ──
 const mockPresenceRemove = vi.fn();
+let mockStoredDestination = false;
 vi.mock("../../../components/ServicesProvider", () => ({
   useServices: () => ({
     presence: { write: vi.fn(), remove: mockPresenceRemove },
+    config: { storedDestination: mockStoredDestination },
   }),
 }));
 
@@ -140,6 +154,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   onValueCallback = null;
   onValueErrorCallback = null;
+  destinationCallback = null;
+  destinationErrorCallback = null;
+  mockStoredDestination = false;
   mockSet.mockResolvedValue(undefined);
   mockUpdate.mockResolvedValue(undefined);
   mockRemove.mockResolvedValue(undefined);
@@ -1136,5 +1153,197 @@ describe("useLiveSession", () => {
       });
       expect(result.current.error).toBeNull();
     });
+  });
+});
+
+describe("useLiveSession — the stored destination", () => {
+  const HAIFA = { lat: 32.794, lng: 34.99 };
+  const DESTINATION = expect.objectContaining({
+    path: "sessions/ABC234/destination",
+  });
+
+  async function created() {
+    const hook = renderHook(() => useLiveSession(TEST_UID));
+    await act(async () => {
+      await hook.result.current.createSession(live());
+    });
+    return hook;
+  }
+
+  it("is neither listened to nor written while the feature is off", async () => {
+    const { result } = await created();
+
+    let outcome: Result<void, string> | null = null;
+    await act(async () => {
+      outcome = await result.current.agreeDestination(HAIFA);
+    });
+
+    expect(destinationCallback).toBeNull();
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false });
+    expect(result.current.destination).toBeNull();
+  });
+
+  it("publishes what the database holds, and null when it is cleared", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+    expect(result.current.destination).toBeNull();
+
+    act(() => {
+      destinationCallback?.({
+        val: () => ({ ...HAIFA, ts: 1_700_000_000_000, by: "1" }),
+      });
+    });
+    expect(result.current.destination).toEqual(HAIFA);
+
+    act(() => {
+      destinationCallback?.({ val: () => null });
+    });
+    expect(result.current.destination).toBeNull();
+  });
+
+  // It is a graph source: a new object for the same point is a wasted tick.
+  it("keeps the same object while the point is unchanged", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+    act(() => {
+      destinationCallback?.({ val: () => ({ ...HAIFA, ts: 1, by: "0" }) });
+    });
+    const first = result.current.destination;
+
+    act(() => {
+      destinationCallback?.({ val: () => ({ ...HAIFA, ts: 2, by: "1" }) });
+    });
+
+    expect(result.current.destination).toBe(first);
+  });
+
+  // The rules validate what is written; a snapshot is still untrusted input.
+  it("ignores a record whose coordinates are not coordinates", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+
+    for (const bad of [
+      { lat: "32", lng: 34.99 },
+      { lat: 91, lng: 34.99 },
+      { lat: 32.79 },
+    ]) {
+      act(() => {
+        destinationCallback?.({ val: () => bad });
+      });
+      expect(result.current.destination).toBeNull();
+    }
+  });
+
+  it("writes the point with the server's clock and the slot it holds", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+
+    let outcome: Result<void, string> | null = null;
+    await act(async () => {
+      outcome = await result.current.agreeDestination(HAIFA);
+    });
+
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledWith(DESTINATION, {
+      lat: HAIFA.lat,
+      lng: HAIFA.lng,
+      ts: SERVER_TIMESTAMP,
+      by: "0",
+    });
+    expect(outcome).toEqual({ ok: true, value: undefined });
+  });
+
+  // Navigate backgrounds the page next, so the write cannot wait on anything.
+  it("issues the write before the call returns", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+
+    let pending: Promise<Result<void, string>> | null = null;
+    act(() => {
+      pending = result.current.agreeDestination(HAIFA);
+      expect(mockSet).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await pending;
+    });
+  });
+
+  it("signs a joiner's write with the joiner's slot", async () => {
+    mockStoredDestination = true;
+    mockSession(
+      { created: Date.now(), creatorUid: PARTNER_UID },
+      { "0": PARTNER_UID },
+    );
+    const { result } = renderHook(() => useLiveSession(TEST_UID));
+    await act(async () => {
+      await result.current.joinSession("ABC234", live());
+    });
+    mockSet.mockClear();
+
+    await act(async () => {
+      await result.current.agreeDestination(HAIFA);
+    });
+
+    expect(mockSet).toHaveBeenCalledWith(
+      DESTINATION,
+      expect.objectContaining({ by: "1" }),
+    );
+  });
+
+  it("removes it on clear", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+
+    await act(async () => {
+      await result.current.clearDestination();
+    });
+
+    expect(mockRemove).toHaveBeenCalledWith(DESTINATION);
+  });
+
+  it("returns the refusal instead of throwing", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+    mockSet.mockRejectedValue(
+      Object.assign(new Error("Permission denied"), {
+        code: "PERMISSION_DENIED",
+      }),
+    );
+
+    let outcome: Result<void, string> | null = null;
+    await act(async () => {
+      outcome = await result.current.agreeDestination(HAIFA);
+    });
+
+    expect(outcome).toMatchObject({ ok: false });
+  });
+
+  // Losing this listener costs the stored destination, not the session.
+  it("falls back to no destination, and stays in the session, when its listener fails", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+    act(() => {
+      destinationCallback?.({ val: () => ({ ...HAIFA, ts: 1, by: "0" }) });
+    });
+
+    act(() => {
+      destinationErrorCallback?.(new Error("Permission denied"));
+    });
+
+    expect(result.current.destination).toBeNull();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("detaches its listener on cleanup", async () => {
+    mockStoredDestination = true;
+    const { result } = await created();
+
+    act(() => {
+      result.current.cleanup();
+    });
+
+    expect(mockDestinationUnsub).toHaveBeenCalledTimes(1);
   });
 });

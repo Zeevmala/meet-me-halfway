@@ -16,6 +16,7 @@ function complete(overrides: Partial<AppConfig> = {}): AppConfig {
     recaptchaSiteKey: "site-key",
     sentryDsn: null,
     balancedMeeting: false,
+    storedDestination: false,
     rtdbEmulatorHost: null,
     ...overrides,
   };

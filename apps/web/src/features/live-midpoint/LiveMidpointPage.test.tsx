@@ -76,6 +76,7 @@ const testPorts: GraphPorts = {
   writePresence: mockWritePresence,
   placesEnabled: false,
   meetingEnabled: false,
+  destinationEnabled: false,
 };
 
 const testServices = {
@@ -88,9 +89,9 @@ const testServices = {
 } satisfies Services;
 
 /** Render the page inside the injection boundary it now expects. */
-function renderPage() {
+function renderPage(ports: GraphPorts = testPorts) {
   return render(
-    <ServicesProvider services={testServices}>
+    <ServicesProvider services={{ ...testServices, graphPorts: ports }}>
       <LiveMidpointPage />
     </ServicesProvider>,
   );
@@ -133,8 +134,20 @@ vi.mock("./components/WaitingCard", () => ({
 }));
 
 // ── Mock MidpointCard ──
+// Records what the page hands it, as the map fake does: which destination the
+// trip is to, and the handlers the page gives the Navigate and Change controls.
+interface RecordedCardProps {
+  destination: { lat: number; lng: number };
+  agreed: boolean;
+  onNavigate: () => void;
+  onChangeDestination: () => void;
+}
+const midpointCardProps: RecordedCardProps[] = [];
 vi.mock("./components/MidpointCard", () => ({
-  default: () => <div data-testid="midpoint-card">MidpointCard</div>,
+  default: (props: RecordedCardProps) => {
+    midpointCardProps.push(props);
+    return <div data-testid="midpoint-card">MidpointCard</div>;
+  },
 }));
 
 // ── Mock VenueListCard ──
@@ -171,12 +184,15 @@ function defaultSession() {
     // roster fixture below unassignable — and the spread in the movement test
     // a spread of `never`.
     participants: [] as ParticipantInfo[],
+    destination: null as { lat: number; lng: number } | null,
     error: null,
     errorDetails: null,
     creatorUid: "test-uid",
     createSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     joinSession: vi.fn().mockResolvedValue({ ok: true, value: "ABC123" }),
     setOwnName: vi.fn(),
+    agreeDestination: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+    clearDestination: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
     withdraw: vi.fn(),
     cleanup: vi.fn(),
   };
@@ -185,6 +201,7 @@ function defaultSession() {
 beforeEach(() => {
   vi.clearAllMocks();
   liveMapProps.length = 0;
+  midpointCardProps.length = 0;
   mockSearchVenues.mockResolvedValue({ ok: true, value: [] });
   mockFetchRoute.mockResolvedValue({ ok: true, value: null });
   mockAuth.mockReturnValue({ status: "authenticated", uid: "test-uid" });
@@ -715,5 +732,98 @@ describe("LiveMidpointPage — render-path stability", () => {
 
     const second = liveMapProps[liveMapProps.length - 1];
     expect(second.participants).not.toBe(first.participants);
+  });
+});
+
+describe("LiveMidpointPage — an agreed destination", () => {
+  const HAIFA = { lat: 32.794, lng: 34.99 };
+  const storing: GraphPorts = { ...testPorts, destinationEnabled: true };
+  /** What the page last handed the trip card. */
+  const lastCard = () => midpointCardProps[midpointCardProps.length - 1];
+
+  function peerAt(lat: number, lng: number): ParticipantInfo {
+    return {
+      uid: "peer-uid",
+      position: { lat, lng },
+      accuracy: 10,
+      lastSeen: 0,
+      index: 1,
+      name: null,
+      meet: null,
+    };
+  }
+
+  // The defect this feature exists for: with the other person gone the page
+  // fell back to the waiting card, and the destination went with it.
+  it("keeps the trip card, to the stored point, when nobody else is reporting", () => {
+    mockSession.mockReturnValue({ ...defaultSession(), destination: HAIFA });
+
+    renderPage(storing);
+
+    expect(screen.getByTestId("midpoint-card")).toBeTruthy();
+    expect(screen.queryByTestId("waiting-card")).toBeNull();
+    expect(lastCard()?.destination).toEqual(HAIFA);
+    expect(lastCard()?.agreed).toBe(true);
+    expect(liveMapProps[liveMapProps.length - 1]?.midpoint).toEqual(HAIFA);
+  });
+
+  it("stores the destination on the first Navigate tap", () => {
+    const session = {
+      ...defaultSession(),
+      participants: [peerAt(31.77, 35.21)],
+    };
+    mockSession.mockReturnValue(session);
+    renderPage(storing);
+    const card = lastCard();
+    expect(card?.agreed).toBe(false);
+
+    card?.onNavigate();
+
+    expect(session.agreeDestination).toHaveBeenCalledTimes(1);
+    expect(session.agreeDestination).toHaveBeenCalledWith(card?.destination);
+  });
+
+  // Replacing an agreed destination is the Change control's job, not a side
+  // effect of someone else setting off a minute later.
+  it("does not overwrite a stored destination on a later Navigate tap", () => {
+    const session = {
+      ...defaultSession(),
+      participants: [peerAt(31.77, 35.21)],
+      destination: HAIFA,
+    };
+    mockSession.mockReturnValue(session);
+    renderPage(storing);
+
+    lastCard()?.onNavigate();
+
+    expect(session.agreeDestination).not.toHaveBeenCalled();
+  });
+
+  it("clears it from the Change control", () => {
+    const session = { ...defaultSession(), destination: HAIFA };
+    mockSession.mockReturnValue(session);
+    renderPage(storing);
+
+    lastCard()?.onChangeDestination();
+
+    expect(session.clearDestination).toHaveBeenCalledTimes(1);
+  });
+
+  // Off means off: nothing is stored, and a stored value is not shown.
+  it("neither writes nor shows one while the feature is off", () => {
+    const session = {
+      ...defaultSession(),
+      participants: [peerAt(31.77, 35.21)],
+      destination: HAIFA,
+    };
+    mockSession.mockReturnValue(session);
+    renderPage();
+    const card = lastCard();
+    expect(card?.agreed).toBe(false);
+    expect(card?.destination).not.toEqual(HAIFA);
+
+    card?.onNavigate();
+
+    expect(session.agreeDestination).not.toHaveBeenCalled();
   });
 });

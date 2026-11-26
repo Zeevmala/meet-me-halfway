@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   onValue,
   ref,
+  remove,
   set,
   get,
   serverTimestamp,
@@ -93,6 +94,11 @@ export interface LiveSessionState {
   ownIndex: ParticipantIndex | null;
   ownName: string;
   participants: ParticipantInfo[];
+  /**
+   * The destination the session has stored, or `null`. Always `null` while
+   * `AppConfig.storedDestination` is off: the field is then not listened to.
+   */
+  destination: LatLng | null;
   error: SessionErrorCode | null;
   /** Raw underlying error description — shown in the UI "Details" expander
    * and useful when users report a failure. */
@@ -116,6 +122,16 @@ export interface LiveSessionState {
     signal: AbortSignal,
   ) => Promise<Result<string, SessionFailure>>;
   setOwnName: (name: string) => void;
+  /**
+   * Store `point` as the session's destination, for everyone in it. Called on
+   * the tap that sends this device to a navigation app — the moment its page
+   * stops reporting — so the write is issued synchronously, before the page is
+   * backgrounded; the promise is for whoever is still here to hear of a
+   * refusal.
+   */
+  agreeDestination: (point: LatLng) => Promise<Result<void, string>>;
+  /** Remove the stored destination; every device goes back to the live one. */
+  clearDestination: () => Promise<Result<void, string>>;
   /** Remove own presence, keep listening. */
   withdraw: () => void;
   cleanup: () => void;
@@ -311,13 +327,15 @@ async function claimSlot(
  */
 export function useLiveSession(uid: string): LiveSessionState {
   const { db, appCheck, appCheckReady } = useFirebase();
-  const { presence } = useServices();
+  const { presence, config } = useServices();
+  const destinationEnabled = config.storedDestination;
 
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [code, setCode] = useState<string | null>(null);
   const [creatorUid, setCreatorUid] = useState<string | null>(null);
   const [ownIndex, setOwnIndex] = useState<ParticipantIndex | null>(null);
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
+  const [destination, setDestination] = useState<LatLng | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [ownName, setOwnNameState] = useState<string>(() =>
@@ -325,6 +343,7 @@ export function useLiveSession(uid: string): LiveSessionState {
   );
 
   const unsubRef = useRef<Unsubscribe | null>(null);
+  const destinationUnsubRef = useRef<Unsubscribe | null>(null);
   const codeRef = useRef<string | null>(null);
   const creatorUidRef = useRef<string | null>(null);
   // The slot we hold, kept in a ref so cleanup can remove the right node
@@ -402,6 +421,55 @@ export function useLiveSession(uid: string): LiveSessionState {
       );
     },
     [db, uid, appCheck],
+  );
+
+  /**
+   * Listen for the stored destination. Attached with the participants
+   * listener and for the same reason: only a slot holder may read it.
+   *
+   * A failure here costs the stored destination, not the session: the device
+   * goes on deriving one, as every device did before the field existed.
+   */
+  const listenForDestination = useCallback(
+    (sessionCode: string) => {
+      if (!destinationEnabled) return;
+      destinationUnsubRef.current = onValue(
+        ref(db, `sessions/${sessionCode}/destination`),
+        (snap) => {
+          const data = snap.val() as { lat?: unknown; lng?: unknown } | null;
+          // A snapshot is untrusted input to this process, whatever the rules
+          // validate on the way in.
+          const next: LatLng | null =
+            data !== null &&
+            isCoordinate(data.lat, 90) &&
+            isCoordinate(data.lng, 180)
+              ? { lat: data.lat, lng: data.lng }
+              : null;
+          // Keep the reference while the value is unchanged: it is a graph
+          // source, and a new object for the same point is a wasted tick.
+          setDestination((previous) =>
+            previous !== null &&
+            next !== null &&
+            previous.lat === next.lat &&
+            previous.lng === next.lng
+              ? previous
+              : next,
+          );
+        },
+        (listenError) => {
+          console.error("[session] destination listener error:", listenError);
+          Sentry.captureException(listenError, {
+            tags: {
+              phase: "listen-destination",
+              classified: classifyJoinError(listenError),
+            },
+            contexts: sessionContext(codeRef.current, appCheck !== null),
+          });
+          setDestination(null);
+        },
+      );
+    },
+    [db, appCheck, destinationEnabled],
   );
 
   /** Record a handshake failure once, in the shape the UI and the caller need. */
@@ -496,6 +564,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         // listener attached before the write is rejected with
         // permission_denied. (joinSession attaches its own after the claim.)
         listenForParticipants(sessionCode);
+        listenForDestination(sessionCode);
 
         return ok(sessionCode);
       } catch (thrown) {
@@ -510,7 +579,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         return err(fail("CREATE_FAILED", describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [
+      db,
+      uid,
+      appCheck,
+      appCheckReady,
+      listenForParticipants,
+      listenForDestination,
+      fail,
+    ],
   );
 
   /** Join an existing session. */
@@ -605,6 +682,7 @@ export function useLiveSession(uid: string): LiveSessionState {
         setStatus("ready");
 
         listenForParticipants(sessionCode);
+        listenForDestination(sessionCode);
         return ok(sessionCode);
       } catch (thrown) {
         if (signal.aborted) {
@@ -627,7 +705,15 @@ export function useLiveSession(uid: string): LiveSessionState {
         return err(fail(classified, describeError(thrown)));
       }
     },
-    [db, uid, appCheck, appCheckReady, listenForParticipants, fail],
+    [
+      db,
+      uid,
+      appCheck,
+      appCheckReady,
+      listenForParticipants,
+      listenForDestination,
+      fail,
+    ],
   );
 
   /**
@@ -641,6 +727,52 @@ export function useLiveSession(uid: string): LiveSessionState {
   const setOwnName = useCallback((raw: string) => {
     setOwnNameState(saveDisplayName(raw));
   }, []);
+
+  const writeDestination = useCallback(
+    async (point: LatLng | null): Promise<Result<void, string>> => {
+      const sessionCode = codeRef.current;
+      const slot = ownSlotRef.current;
+      if (!destinationEnabled || sessionCode === null || slot === null) {
+        return err("not in a session that stores a destination");
+      }
+      const destinationRef = ref(db, `sessions/${sessionCode}/destination`);
+      try {
+        // No await before this call: the SDK hands the write to the open
+        // socket as it is issued, and Navigate backgrounds the page next.
+        await (point === null
+          ? remove(destinationRef)
+          : set(destinationRef, {
+              lat: point.lat,
+              lng: point.lng,
+              // The rules require the server's clock and a slot the writer
+              // holds; the slot key is a string there, as it is under `slots`.
+              ts: serverTimestamp(),
+              by: String(slot),
+            }));
+        return ok(undefined);
+      } catch (thrown) {
+        Sentry.captureException(thrown, {
+          tags: {
+            phase: point === null ? "clear-destination" : "set-destination",
+            classified: classifyJoinError(thrown),
+          },
+          contexts: sessionContext(sessionCode, appCheck !== null),
+        });
+        return err(describeError(thrown));
+      }
+    },
+    [db, appCheck, destinationEnabled],
+  );
+
+  const agreeDestination = useCallback(
+    (point: LatLng) => writeDestination(point),
+    [writeDestination],
+  );
+
+  const clearDestination = useCallback(
+    () => writeDestination(null),
+    [writeDestination],
+  );
 
   /**
    * Remove own presence but stay in the session, still listening — for a
@@ -671,6 +803,10 @@ export function useLiveSession(uid: string): LiveSessionState {
       unsubRef.current();
       unsubRef.current = null;
     }
+    if (destinationUnsubRef.current) {
+      destinationUnsubRef.current();
+      destinationUnsubRef.current = null;
+    }
     withdraw();
   }, [withdraw]);
 
@@ -688,11 +824,14 @@ export function useLiveSession(uid: string): LiveSessionState {
     ownIndex,
     ownName,
     participants,
+    destination,
     error,
     errorDetails,
     createSession,
     joinSession,
     setOwnName,
+    agreeDestination,
+    clearDestination,
     withdraw,
     cleanup,
   };

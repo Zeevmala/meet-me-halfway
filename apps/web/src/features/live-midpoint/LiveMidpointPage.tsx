@@ -162,6 +162,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
       ownPosition: geo.position,
       ownAccuracy: geo.accuracy,
       participants: session.participants,
+      storedDestination: session.destination,
       sessionCode: session.code,
       ownUid: uid,
       ownName: session.ownName,
@@ -173,6 +174,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     uid,
     session.ownIndex,
     session.participants,
+    session.destination,
     session.code,
     session.ownName,
     session.status,
@@ -206,6 +208,42 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     },
     [runtime],
   );
+
+  // What the trip card is about. An agreed destination stands on its own:
+  // the people it was derived from may have stopped reporting — which is what
+  // setting off looks like — and the card has to outlive that. Without one the
+  // card needs somebody else here, as before.
+  const someoneElseHere =
+    graph.phase === "connected" || graph.phase === "some_stale";
+  const tripDestination = graph.destinationAgreed
+    ? graph.destination
+    : someoneElseHere && graph.midpoint
+      ? (graph.destination ?? graph.midpoint)
+      : null;
+
+  // Navigate hands this device to another app, and its page stops reporting.
+  // Storing where it is going first is what keeps the others' destination
+  // from following its silence. Once one is stored, a second tap changes
+  // nothing: replacing it is the Change control's job, not a side effect.
+  const { agreeDestination, clearDestination } = session;
+  const destinationEnabled = graphPorts.destinationEnabled;
+  const destinationAgreed = graph.destinationAgreed;
+  const handleNavigate = useCallback(() => {
+    if (!destinationEnabled || destinationAgreed || tripDestination === null) {
+      return;
+    }
+    // Failures are reported where the write is made; this device is leaving.
+    void agreeDestination(tripDestination);
+  }, [
+    destinationEnabled,
+    destinationAgreed,
+    tripDestination,
+    agreeDestination,
+  ]);
+
+  const handleChangeDestination = useCallback(() => {
+    void clearDestination();
+  }, [clearDestination]);
 
   // ── View projections ──
   // The graph already hands back referentially stable `slots` and `routes`
@@ -410,9 +448,6 @@ function LiveMidpointInner({ uid }: { uid: string }) {
 
   const ownIndex = session.ownIndex ?? (0 as ParticipantIndex);
 
-  const isConnected =
-    graph.phase === "connected" || graph.phase === "some_stale";
-
   // Read own position back out of the slot vector rather than from a second
   // source: everything on screen is keyed by slot, and this is that index.
   const ownPosition =
@@ -422,7 +457,7 @@ function LiveMidpointInner({ uid }: { uid: string }) {
     <main className="live-page" ref={setPageEl} style={overlayStyle}>
       <LiveMap
         participants={mapParticipants}
-        midpoint={graph.midpoint}
+        midpoint={graph.destinationAgreed ? graph.destination : graph.midpoint}
         routes={routeGeometries}
         venues={graph.venues}
         selectedVenue={graph.selectedVenue}
@@ -479,9 +514,11 @@ function LiveMidpointInner({ uid }: { uid: string }) {
         )}
 
         {session.code &&
-          (isConnected && graph.midpoint && ownPosition ? (
+          (tripDestination && ownPosition ? (
             <>
-              {placesEnabled && (
+              {/* A stored destination outranks a venue picked here, so the
+                  list would be a control that does nothing. */}
+              {placesEnabled && !graph.destinationAgreed && (
                 <Suspense fallback={null}>
                   <VenueListCard
                     venues={graph.venues}
@@ -496,12 +533,15 @@ function LiveMidpointInner({ uid }: { uid: string }) {
                 ownPosition={ownPosition}
                 ownRoute={routes[ownIndex] ?? null}
                 otherParticipants={otherParticipants}
-                destination={graph.destination ?? graph.midpoint}
+                destination={tripDestination}
                 travelProfile={graph.travelProfile}
                 onProfileChange={handleProfileChange}
                 selectedVenueName={graph.selectedVenue?.displayName ?? null}
                 meetingBasis={graph.meetingBasis}
                 routesStale={graph.routesDegraded}
+                agreed={graph.destinationAgreed}
+                onNavigate={handleNavigate}
+                onChangeDestination={handleChangeDestination}
               />
             </>
           ) : (

@@ -104,7 +104,7 @@ The adoption note (`design/adoption/meet-me-halfway.md` in the factory) lists fo
 | # | Slice | Done when | Built by |
 | --- | --- | --- | --- |
 | 1a | Rules accept `destination` | rules tests cover holder write, non-holder denial, range, extra field; deployed. **Deployed 2026-11-26 (#119)** | session (schema is ask-first) |
-| 1b | Client writes and reads it, behind a flag | unit tests on the node; e2e: A taps Navigate, B still has a destination at 121 s | session |
+| 1b | Client writes and reads it, behind a flag | unit tests on the node and the runtime at `DEPARTED_THRESHOLD_MS`; e2e: A taps Navigate and leaves, B still has the destination. **Built 2026-11-26** behind `VITE_STORED_DESTINATION` | session |
 | 1c | Flag on, privacy policy updated | one release after 1a | session |
 | 2 | Wake lock | test with a fake `navigator.wakeLock`: requested on publish, released on hide, re-requested on show | factory ticket |
 | 3 | Hosting serves asset links | `firebase.json` test; live fetch returns JSON | session (touches `firebase.json`) |

@@ -40,6 +40,14 @@ interface MidpointCardProps {
   meetingBasis: MeetingBasis;
   /** The last routes are being served after a failed refresh. */
   routesStale: boolean;
+  /**
+   * The destination is the one the session stored: it no longer follows the
+   * people on the map, so the card says so and offers the way back.
+   */
+  agreed: boolean;
+  /** A Navigate link was tapped, before the browser follows it. */
+  onNavigate: () => void;
+  onChangeDestination: () => void;
 }
 
 interface Row {
@@ -72,6 +80,9 @@ export default memo(function MidpointCard({
   selectedVenueName,
   meetingBasis,
   routesStale,
+  agreed,
+  onNavigate,
+  onChangeDestination,
 }: MidpointCardProps) {
   const { t } = useTranslation();
 
@@ -109,13 +120,15 @@ export default memo(function MidpointCard({
       <div className="live-trip-head">
         <div className="live-trip-title">
           <span className="live-trip-dest">
-            {selectedVenueName
-              ? t("live.meetAt", { name: selectedVenueName })
-              : t(
-                  meetingBasis === "time"
-                    ? "live.midpointByTime"
-                    : "live.midpoint",
-                )}
+            {agreed
+              ? t("live.destinationAgreed")
+              : selectedVenueName
+                ? t("live.meetAt", { name: selectedVenueName })
+                : t(
+                    meetingBasis === "time"
+                      ? "live.midpointByTime"
+                      : "live.midpoint",
+                  )}
           </span>
           {spread !== null && (
             <span className="live-trip-spread">
@@ -123,6 +136,15 @@ export default memo(function MidpointCard({
                 ? t("live.spreadEven")
                 : t("live.spread", { minutes: spread })}
             </span>
+          )}
+          {agreed && (
+            <button
+              type="button"
+              className="live-trip-change"
+              onClick={onChangeDestination}
+            >
+              {t("live.destinationChange")}
+            </button>
           )}
         </div>
         <div
@@ -160,8 +182,12 @@ export default memo(function MidpointCard({
               aria-hidden="true"
             />
             <span className="live-eta-name">{row.name}</span>
+            {/* Once a destination is agreed, silence is what setting off
+                looks like: their page is behind a navigation app. */}
             {row.stale && (
-              <span className="live-eta-tag">{t("live.staleTag")}</span>
+              <span className="live-eta-tag">
+                {t(agreed ? "live.onTheWayTag" : "live.staleTag")}
+              </span>
             )}
             <span className={`live-eta-time live-eta-time--p${row.index}`}>
               {row.route ? eta(row.route.duration) : "—"}
@@ -181,7 +207,7 @@ export default memo(function MidpointCard({
         ))}
       </ul>
 
-      {anyStale && (
+      {anyStale && !agreed && (
         <div className="live-eta-hint">{t("live.participantStaleHint")}</div>
       )}
 
@@ -197,6 +223,7 @@ export default memo(function MidpointCard({
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
+          onClick={onNavigate}
           aria-label={t("live.navigateWaze")}
         >
           <NavigateGlyph />
@@ -207,6 +234,7 @@ export default memo(function MidpointCard({
           target="_blank"
           rel="noopener noreferrer"
           className="live-btn live-btn--nav"
+          onClick={onNavigate}
           aria-label={t("live.navigateGoogle")}
         >
           <NavigateGlyph />

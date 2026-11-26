@@ -83,6 +83,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     recaptchaSiteKey: null,
     sentryDsn: null,
     balancedMeeting: false,
+    storedDestination: false,
     rtdbEmulatorHost: null,
     ...overrides,
   };

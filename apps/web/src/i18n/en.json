@@ -79,6 +79,9 @@
     "spread": "{{minutes}} min apart",
     "spreadEven": "Arrive together",
     "staleTag": "Outdated",
+    "destinationAgreed": "Meeting point set",
+    "destinationChange": "Change",
+    "onTheWayTag": "On the way",
     "waze": "Waze",
     "googleMaps": "Google Maps"
   },

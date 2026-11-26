@@ -73,7 +73,7 @@ alone (below).
 | `meeting` | effectful on the creator's device, a read of `participants/0` elsewhere | counted `slots`, `midpoint`, profile | `MeetingAnswer`: the point balanced by travel time, tagged with the people and profile it answers | fall back to `midpoint` |
 | `phase` | pure | status, `slots`, `liveness` | `SessionPhase` | — |
 | `venues` | effectful | `meeting` | raw `PlaceResult[]` | degrade to empty |
-| `destination` | pure | `meeting`, `venues`, selection | `LatLng \| null` | — |
+| `destination` | pure | `meeting`, `venues`, selection, the session's stored destination | `LatLng \| null`, and whether it is the stored one | — |
 | `routes` | effectful | counted `slots`, `destination`, profile | `RouteSet`: slot-keyed routes, tagged with the destination and profile they answer | degrade to last-good |
 | `frame` | pure | all of the above | `GraphSnapshot` | — |
 

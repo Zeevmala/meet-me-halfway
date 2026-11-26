@@ -58,6 +58,20 @@ export interface AppConfig {
    */
   readonly balancedMeeting: boolean;
   /**
+   * Honour and write a stored destination (`sessions/{code}/destination`).
+   *
+   * Off unless `VITE_STORED_DESTINATION` is `true`. With it on, the first
+   * Navigate tap stores the destination that device shows; every device then
+   * shows and routes to it, and it stands when the people it was derived from
+   * stop reporting. With it off the field is neither read nor written.
+   *
+   * The rules that accept the field are live (#119). What turning it on needs
+   * is `public/privacy.html`, in the same commit: a location derived from
+   * people's positions is then kept in the session, readable by the people
+   * who joined, until someone clears it.
+   */
+  readonly storedDestination: boolean;
+  /**
    * `host:port` of a Realtime Database emulator, for end-to-end tests only.
    *
    * The e2e suite drives the real client against the emulator loaded with the
@@ -88,6 +102,7 @@ export function createAppConfig(): AppConfig {
     recaptchaSiteKey: orNull(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
     sentryDsn: orNull(import.meta.env.VITE_SENTRY_DSN),
     balancedMeeting: import.meta.env.VITE_BALANCED_MEETING === "true",
+    storedDestination: import.meta.env.VITE_STORED_DESTINATION === "true",
     rtdbEmulatorHost: orNull(import.meta.env.VITE_RTDB_EMULATOR_HOST),
   };
 }

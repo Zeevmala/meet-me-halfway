@@ -200,8 +200,16 @@ export function deriveMidpoint(slots: SlotVector): LatLng | null {
 }
 
 /**
- * Resolve the meeting point: the selected venue if it still exists in the
- * current results, otherwise the midpoint.
+ * Resolve the meeting point: the stored destination if the session has one,
+ * else the selected venue if it still exists in the current results, else the
+ * midpoint.
+ *
+ * The stored destination comes first because it is the only one of the three
+ * that every device holds: the midpoint is derived from whoever is still
+ * reporting, and the picked venue is local to the device that picked it.
+ * Navigate backgrounds the page, which stops the reports, so two minutes
+ * after one of two people set off the other's midpoint was `null` — and the
+ * destination with it.
  *
  * This is a derivation rather than a write-back, which is the whole point.
  * Reconciliation used to be an effect that cleared the selection only when
@@ -214,13 +222,18 @@ export function deriveDestination(
   venues: readonly RankedVenue[],
   selectedVenueId: string | null,
   midpoint: LatLng | null,
+  stored: LatLng | null = null,
 ): DestinationResult {
+  if (stored !== null) {
+    return { destination: stored, selectedVenue: null, agreed: true };
+  }
   if (selectedVenueId === null) {
-    return { destination: midpoint, selectedVenue: null };
+    return { destination: midpoint, selectedVenue: null, agreed: false };
   }
   const selected = venues.find((venue) => venue.id === selectedVenueId) ?? null;
   return {
     destination: selected ? selected.location : midpoint,
     selectedVenue: selected,
+    agreed: false,
   };
 }

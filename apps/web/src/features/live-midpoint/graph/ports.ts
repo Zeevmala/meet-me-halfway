@@ -55,4 +55,10 @@ export interface GraphPorts {
   readonly placesEnabled: boolean;
   /** Whether the `meeting` node asks at all — `AppConfig.balancedMeeting`. */
   readonly meetingEnabled: boolean;
+  /**
+   * Whether a stored destination is honoured — `AppConfig.storedDestination`.
+   * Off means off for reading too: whatever the database holds, a device with
+   * this off derives its destination as before.
+   */
+  readonly destinationEnabled: boolean;
 }

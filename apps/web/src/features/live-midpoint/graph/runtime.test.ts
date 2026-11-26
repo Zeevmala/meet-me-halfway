@@ -94,6 +94,7 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
     meetingEnabled: true,
+    destinationEnabled: true,
     ...overrides,
   };
 
@@ -717,6 +718,150 @@ describe("createRuntime — departed peers and stale routes", () => {
 
     await h.advance(10_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
+    r.dispose();
+  });
+});
+
+describe("createRuntime — a stored destination", () => {
+  const HAIFA: LatLng = { lat: 32.794, lng: 34.99 };
+
+  function session(
+    participants: ParticipantSource[],
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      sessionCode: "ABC234",
+      ownUid: "own-uid",
+      ownSlot: 0 as const,
+      ownPosition: TEL_AVIV,
+      ownAccuracy: 10,
+      ownName: "Me",
+      sessionStatus: "ready" as const,
+      participants,
+      ...overrides,
+    };
+  }
+
+  // The defect: Navigate backgrounds the peer's page, their reports stop, and
+  // at DEPARTED_THRESHOLD_MS the midpoint — and the destination with it — went
+  // null for whoever stayed.
+  it("stands when the only peer goes silent", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
+
+    await h.advance(DEPARTED_THRESHOLD_MS);
+
+    const snapshot = r.getSnapshot();
+    expect(snapshot.midpoint).toBeNull();
+    expect(snapshot.destination).toEqual(HAIFA);
+    expect(snapshot.destinationAgreed).toBe(true);
+    r.dispose();
+  });
+
+  it("stands when the peer's record is removed outright", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+
+    r.setSources({ participants: [] });
+
+    expect(r.getSnapshot().destination).toEqual(HAIFA);
+    expect(r.getSnapshot().destinationAgreed).toBe(true);
+    r.dispose();
+  });
+
+  it("keeps this device's own route to it after everyone else has left", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+
+    r.setSources({ participants: [] });
+    await h.advance(10_000);
+
+    const snapshot = r.getSnapshot();
+    expect(snapshot.routes[0]).not.toBeNull();
+    expect(snapshot.routes[1]).toBeNull();
+    r.dispose();
+  });
+
+  it("routes to it, not to the midpoint", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+
+    const destinations = vi
+      .mocked(h.ports.fetchRoute)
+      .mock.calls.map((call) => call[1]);
+    expect(destinations.length).toBeGreaterThan(0);
+    for (const destination of destinations) {
+      expect(destination).toEqual(HAIFA);
+    }
+    r.dispose();
+  });
+
+  it("goes back to the live midpoint when it is cleared", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+
+    r.setSources({ storedDestination: null });
+
+    const snapshot = r.getSnapshot();
+    expect(snapshot.destinationAgreed).toBe(false);
+    expect(snapshot.destination).toEqual(snapshot.midpoint);
+    expect(snapshot.destination).not.toBeNull();
+    r.dispose();
+  });
+
+  it("keeps the snapshot's reference while the same point is offered again", async () => {
+    const h = createHarness({ placesEnabled: false, meetingEnabled: false });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+    const before = r.getSnapshot();
+
+    r.setSources({ storedDestination: { ...HAIFA } });
+
+    expect(r.getSnapshot()).toBe(before);
+    r.dispose();
+  });
+
+  // Off means off for reading too: with the switch off, whatever the database
+  // holds, this device derives its destination as it always did.
+  it("is ignored while the feature is off", async () => {
+    const h = createHarness({
+      placesEnabled: false,
+      meetingEnabled: false,
+      destinationEnabled: false,
+    });
+    const r = createRuntime(h.ports);
+    r.setSources(
+      session([peer(1, JERUSALEM, h.now())], { storedDestination: HAIFA }),
+    );
+    await h.advance(10_000);
+
+    const snapshot = r.getSnapshot();
+    expect(snapshot.destinationAgreed).toBe(false);
+    expect(snapshot.destination).toEqual(snapshot.midpoint);
     r.dispose();
   });
 });

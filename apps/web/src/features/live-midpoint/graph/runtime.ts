@@ -65,6 +65,7 @@ export const DEFAULT_SOURCES: GraphSources = {
   ownAccuracy: null,
   participants: [],
   selectedVenueId: null,
+  storedDestination: null,
   travelProfile: "driving",
   sessionCode: null,
   ownUid: null,
@@ -95,6 +96,11 @@ export interface GraphSnapshot {
   readonly venuesLoading: boolean;
   readonly selectedVenue: RankedVenue | null;
   readonly destination: LatLng | null;
+  /**
+   * `destination` is the one the session stored. It no longer follows the
+   * people on the map, and it stands when they stop reporting.
+   */
+  readonly destinationAgreed: boolean;
   readonly routes: readonly (RouteInfo | null)[];
   /** Routes are being served from cache after a failure. */
   readonly routesDegraded: boolean;
@@ -216,6 +222,7 @@ export function createRuntime(
     venuesLoading: false,
     selectedVenue: null,
     destination: null,
+    destinationAgreed: false,
     routes: EMPTY_ROUTES,
     routesDegraded: false,
     travelProfile: sources.travelProfile,
@@ -326,6 +333,7 @@ export function createRuntime(
   function compute(): void {
     let nextDestination: LatLng | null = null;
     let nextSelected: RankedVenue | null = null;
+    let nextAgreed = false;
 
     // Walk the declared order so the edge map governs execution rather than
     // merely documenting it. noFallthroughCasesInSwitch keeps this exhaustive.
@@ -474,9 +482,11 @@ export function createRuntime(
             ranked,
             sources.selectedVenueId,
             midpoint,
+            ports.destinationEnabled ? sources.storedDestination : null,
           );
           nextDestination = result.destination;
           nextSelected = result.selectedVenue;
+          nextAgreed = result.agreed;
           break;
         }
         case "routes": {
@@ -505,6 +515,7 @@ export function createRuntime(
             destination: sameLatLng(nextDestination, snapshot.destination)
               ? snapshot.destination
               : nextDestination,
+            destinationAgreed: nextAgreed,
             routes: routesToPublish(routeState.value, nextDestination, slots),
             routesDegraded: routeState.status === "degraded",
             travelProfile: sources.travelProfile,
@@ -519,6 +530,7 @@ export function createRuntime(
             next.venuesLoading !== snapshot.venuesLoading ||
             next.selectedVenue !== snapshot.selectedVenue ||
             next.destination !== snapshot.destination ||
+            next.destinationAgreed !== snapshot.destinationAgreed ||
             next.routes !== snapshot.routes ||
             next.routesDegraded !== snapshot.routesDegraded ||
             next.travelProfile !== snapshot.travelProfile ||
