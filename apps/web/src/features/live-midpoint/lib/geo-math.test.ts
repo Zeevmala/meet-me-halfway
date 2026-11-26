@@ -5,6 +5,7 @@ import {
   haversineDistance,
   formatDistance,
   accuracyCircleGeoJSON,
+  interpolate,
   type LatLng,
 } from "./geo-math";
 
@@ -286,5 +287,33 @@ describe("accuracyCircleGeoJSON", () => {
     const d = haversineDistance(TEL_AVIV, { lat, lng });
     expect(d).toBeGreaterThan(4);
     expect(d).toBeLessThan(6);
+  });
+});
+
+describe("interpolate", () => {
+  const A: LatLng = { lat: 32.0853, lng: 34.7818 };
+  const B: LatLng = { lat: 31.7683, lng: 35.2137 };
+
+  it("returns the endpoints at 0 and 1", () => {
+    expect(haversineDistance(interpolate(A, B, 0), A)).toBeLessThan(1);
+    expect(haversineDistance(interpolate(A, B, 1), B)).toBeLessThan(1);
+  });
+
+  it("is the spherical midpoint at one half", () => {
+    const half = interpolate(A, B, 0.5);
+    expect(haversineDistance(half, sphericalMidpoint(A, B))).toBeLessThan(1);
+  });
+
+  it("divides the distance in proportion", () => {
+    const quarter = interpolate(A, B, 0.25);
+    const total = haversineDistance(A, B);
+    expect(haversineDistance(A, quarter) / total).toBeCloseTo(0.25, 3);
+  });
+
+  // Linear in degrees, halfway between 179°E and 179°W is on the far side of
+  // the planet.
+  it("crosses the antimeridian the short way", () => {
+    const half = interpolate({ lat: 0, lng: 179 }, { lat: 0, lng: -179 }, 0.5);
+    expect(Math.abs(half.lng)).toBeCloseTo(180, 6);
   });
 });

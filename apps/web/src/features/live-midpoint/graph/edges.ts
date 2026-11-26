@@ -7,9 +7,10 @@
  * runtime acyclicity check.
  *
  * That check is the durable payoff. There is no cycle today, but there is one
- * waiting: re-centring venue search on the selected venue, or deriving a
- * time-balanced midpoint from route durations, both close the loop
- * `midpoint → venues → destination → midpoint`. Either would be a hang or an
+ * waiting: re-centring venue search on the selected venue, or balancing the
+ * meeting point from the durations of the routes drawn to it, both close the
+ * loop `meeting → venues → destination → routes → meeting`. (The `meeting`
+ * node balances by time without it: it asks a matrix about candidate points.) Either would be a hang or an
  * infinite render, discovered at runtime on a phone. Here it is a failed test.
  */
 
@@ -18,6 +19,7 @@ export type NodeId =
   | "slots"
   | "presence"
   | "midpoint"
+  | "meeting"
   | "phase"
   | "venues"
   | "destination"
@@ -34,18 +36,26 @@ export const EDGES: EdgeMap = {
   // heartbeat from a stationary participant as no change at all.
   liveness: [],
   slots: ["liveness"],
-  // A write, and a sink: it reads sources, and nothing derives from its value.
-  presence: [],
+  // A write, and a sink: nothing derives from its value. It follows `meeting`
+  // because the creator's record carries the point that node worked out.
+  presence: ["meeting"],
   midpoint: ["slots"],
   phase: ["slots", "liveness", "presence"],
-  venues: ["midpoint"],
-  destination: ["midpoint", "venues"],
+  // The point balanced by travel time — worked out by the creator's device,
+  // read by everyone else from the creator's record — falling back to the
+  // centroid `midpoint` derives. It reads people's positions, never route durations or the
+  // destination, which is what keeps the cycle the header warns of open:
+  // nothing downstream of `meeting` feeds it.
+  meeting: ["slots", "midpoint"],
+  venues: ["meeting"],
+  destination: ["meeting", "venues"],
   routes: ["slots", "destination"],
   frame: [
     "slots",
     "presence",
     "liveness",
     "midpoint",
+    "meeting",
     "phase",
     "venues",
     "destination",

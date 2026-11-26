@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { BrowserOptions } from "@sentry/react";
 import { createDirectionsClient } from "../features/live-midpoint/lib/directions-api";
+import { createMatrixClient } from "../features/live-midpoint/lib/matrix-api";
 
 // Held outside a vi.fn: init runs when ./sentry is first imported, before any
 // test, and mock call records do not survive into the tests.
@@ -34,6 +35,26 @@ async function directionsUrl(): Promise<string> {
     await createDirectionsClient("pk.test")(
       TEL_AVIV,
       HAIFA,
+      "driving",
+      new AbortController().signal,
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  return requested;
+}
+
+/** The URL the app's own Matrix client requests. */
+async function matrixUrl(): Promise<string> {
+  let requested = "";
+  vi.stubGlobal("fetch", (url: string) => {
+    requested = url;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+  });
+  try {
+    await createMatrixClient("pk.test")(
+      [TEL_AVIV, HAIFA],
+      [{ lat: 32.44, lng: 34.88 }],
       "driving",
       new AbortController().signal,
     );
@@ -78,10 +99,18 @@ describe("Sentry init", () => {
       attributes: { "url.full": { type: "string", value: url } },
     });
 
-    expect(breadcrumb?.data?.url).toContain("/driving/[redacted]?");
-    expect(span?.name).toContain("/driving/[redacted]?");
+    expect(breadcrumb?.data?.url).toContain("/driving-traffic/[redacted]?");
+    expect(span?.name).toContain("/driving-traffic/[redacted]?");
     expect(JSON.stringify([breadcrumb, span])).not.toMatch(COORDINATE_DIGITS);
     expect(event?.request?.url).toBe("https://x.web.app/?code=[redacted]");
+
+    const matrix = await matrixUrl();
+    const matrixBreadcrumb = options?.beforeBreadcrumb?.({
+      category: "fetch",
+      data: { method: "GET", url: matrix },
+    });
+    expect(matrixBreadcrumb?.data?.url).toContain("/driving/[redacted]?");
+    expect(JSON.stringify(matrixBreadcrumb)).not.toMatch(COORDINATE_DIGITS);
   });
 });
 
@@ -91,7 +120,22 @@ describe("redact", () => {
 
     expect(redacted).not.toMatch(COORDINATE_DIGITS);
     expect(redacted).toContain(
-      "https://api.mapbox.com/directions/v5/mapbox/driving/[redacted]?",
+      "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/[redacted]?",
+    );
+  });
+
+  // The matrix request carries the same positions, lng first and padded to
+  // six decimals — a different string from the one Directions sends.
+  it("removes every participant's position from a Matrix request", async () => {
+    const url = await matrixUrl();
+    expect(url).toMatch(/34\.7818\d*,32\.0853/);
+
+    const redacted = redact(url);
+
+    expect(redacted).not.toMatch(COORDINATE_DIGITS);
+    expect(redacted).not.toContain("32.44");
+    expect(redacted).toContain(
+      "https://api.mapbox.com/directions-matrix/v1/mapbox/driving/[redacted]?",
     );
   });
 

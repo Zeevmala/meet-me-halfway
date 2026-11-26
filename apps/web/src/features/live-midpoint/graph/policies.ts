@@ -16,7 +16,14 @@ import type { ResourceError } from "../../../core/dag/errors";
 import type { ResourcePolicy } from "../../../core/dag/resource";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { GraphPorts } from "./ports";
-import type { RouteInfo, RouteSet, TravelProfile } from "./types";
+import { candidatePoints, pickFairest } from "../lib/fair-meeting";
+import { MATRIX_MAX_COORDINATES } from "../lib/matrix-api";
+import type {
+  MeetingAnswer,
+  RouteInfo,
+  RouteSet,
+  TravelProfile,
+} from "./types";
 
 const SEARCH_RADIUS_M = 1_000;
 const VENUE_ADMIT_M = 100;
@@ -97,6 +104,13 @@ export interface PresenceInput {
   readonly position: LatLng;
   readonly accuracy: number;
   readonly name: string;
+  /** The meeting point to publish with it — the creator's, else `null`. */
+  readonly meet: LatLng | null;
+}
+
+function samePoint(a: LatLng | null, b: LatLng | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.lat === b.lat && a.lng === b.lng;
 }
 
 /** One RTDB write per this window, matching the old WRITE_THROTTLE_MS. */
@@ -163,13 +177,17 @@ export function createPresencePolicy(
       previous.slot !== next.slot ||
       previous.uid !== next.uid ||
       previous.name !== next.name ||
+      // The session is waiting on it: everyone else shows the point this
+      // record carries.
+      !samePoint(previous.meet, next.meet) ||
       haversineDistance(previous.position, next.position) >= PRESENCE_ADMIT_M ||
       // The heartbeat: peers infer staleness from the age of this write, so it
       // has to keep landing even for someone standing still.
       nowMs - previousAtMs >= PRESENCE_WRITE_MS,
     identity: (input) =>
       `pr:${input.code}:${input.slot}:${input.uid}:${input.name}:` +
-      cellKey(input.position, PRESENCE_ADMIT_M),
+      cellKey(input.position, PRESENCE_ADMIT_M) +
+      (input.meet === null ? "" : `:${input.meet.lat},${input.meet.lng}`),
     run: async (input, signal) => {
       const result = await ports.writePresence(
         input.code,
@@ -180,6 +198,7 @@ export function createPresencePolicy(
           lng: input.position.lng,
           accuracy: input.accuracy,
           name: input.name,
+          meet: input.meet,
         },
         signal,
       );
@@ -195,7 +214,7 @@ export interface RouteInput {
   readonly profile: TravelProfile;
 }
 
-function occupancyKey(slots: readonly (LatLng | null)[]): string {
+export function occupancyKey(slots: readonly (LatLng | null)[]): string {
   return slots.map((slot) => (slot === null ? "-" : "x")).join("");
 }
 
@@ -211,6 +230,135 @@ function anySlotMoved(
     if (haversineDistance(a, b) >= thresholdM) return true;
   }
   return false;
+}
+
+export interface MeetingInput {
+  /** Slot-keyed positions; `null` is a slot not counted. */
+  readonly slots: readonly (LatLng | null)[];
+  readonly centroid: LatLng;
+  readonly profile: TravelProfile;
+  /**
+   * The meeting point now shown, if it is the matrix's. Asked about again so a
+   * new point has to beat it (`pickFairest`). Never read by `admits` or
+   * `identity`: it changes with every answer, and an answer must not be a
+   * reason to ask again.
+   */
+  readonly incumbent: LatLng | null;
+}
+
+/** Most candidate points per request, the incumbent included. */
+const MEETING_CANDIDATES = 12;
+/**
+ * How far someone has to move before the meeting point is worked out again:
+ * this fraction of their distance to the centroid, and never less than the
+ * floor. Relative, because what shifts a time-balanced point is a change in
+ * somebody's share of the trip — 500 m matters two kilometres out and not at
+ * forty — and because people driving towards it would otherwise re-ask every
+ * few seconds, for a point that should hold still while they are on their way.
+ * The matrix is billed per source × destination.
+ */
+const MEETING_ADMIT_FRACTION = 0.2;
+const MEETING_ADMIT_MIN_M = 1_000;
+/**
+ * Ask again after this long whatever has moved. Not for freshness — the
+ * matrix uses typical speeds, so the answer would be the same — but because a
+ * refusal is recorded as its input's answer (`core/dag/resource.ts`), and with
+ * no clause on age a single stray 4xx left two people standing still on the
+ * centroid for as long as they stood.
+ */
+const MEETING_TTL_MS = 10 * 60_000;
+
+function movedEnoughToRebalance(
+  previous: MeetingInput,
+  next: MeetingInput,
+): boolean {
+  for (let i = 0; i < next.slots.length; i++) {
+    const a = previous.slots[i];
+    const b = next.slots[i];
+    if (a == null || b == null) continue;
+    const threshold = Math.max(
+      MEETING_ADMIT_MIN_M,
+      MEETING_ADMIT_FRACTION * haversineDistance(a, previous.centroid),
+    );
+    if (haversineDistance(a, b) >= threshold) return true;
+  }
+  return false;
+}
+
+/**
+ * The meeting point balanced by travel time: one Matrix request from everyone
+ * counted to a handful of candidate points, and the candidate whose longest
+ * trip is shortest (`lib/fair-meeting.ts`).
+ *
+ * Refreshed on age only rarely (`MEETING_TTL_MS`): the matrix uses typical
+ * speeds, not live traffic, so the same question has the same answer until
+ * somebody moves. A long last-good window for the same reason — a point that was fair ten minutes ago still is,
+ * and falling back to the centroid on one failed refresh would move the place
+ * people are driving to.
+ */
+export function createMeetingPolicy(
+  ports: GraphPorts,
+): ResourcePolicy<MeetingInput, MeetingAnswer> {
+  return {
+    id: "meeting",
+    // Short, so the answer lands inside the routes' and venues' own debounce:
+    // they then fetch once, for the balanced point, not for the centroid first.
+    debounceMs: 1_000,
+    maxWaitMs: 3_000,
+    timeoutMs: 8_000,
+    // Longer than the refresh: one failed refresh must not send the whole
+    // session back to the centroid, and with the two equal it always did.
+    staleAfterMs: 3 * MEETING_TTL_MS,
+    retryAttempts: 2,
+    retryBaseMs: 1_000,
+    breaker: {
+      failureThreshold: 4,
+      baseOpenMs: 30_000,
+      maxOpenMs: 5 * 60_000,
+      multiplier: 2,
+    },
+    admits: (previous, next, previousAtMs, nowMs) =>
+      previous.profile !== next.profile ||
+      occupancyKey(previous.slots) !== occupancyKey(next.slots) ||
+      movedEnoughToRebalance(previous, next) ||
+      nowMs - previousAtMs >= MEETING_TTL_MS,
+    identity: (input) =>
+      `m:${input.profile}:${occupancyKey(input.slots)}:` +
+      cellKey(input.centroid, MEETING_ADMIT_MIN_M),
+    run: async (
+      input,
+      signal,
+    ): Promise<Result<MeetingAnswer, ResourceError>> => {
+      const people = input.slots.filter(
+        (position): position is LatLng => position !== null,
+      );
+      const hasIncumbent = input.incumbent !== null;
+      const budget =
+        Math.min(MEETING_CANDIDATES, MATRIX_MAX_COORDINATES - people.length) -
+        (hasIncumbent ? 1 : 0);
+      const sampled = candidatePoints(people, input.centroid, budget);
+      const candidates =
+        input.incumbent === null ? sampled : [input.incumbent, ...sampled];
+
+      const matrix = await ports.fetchMatrix(
+        people,
+        candidates,
+        input.profile,
+        signal,
+      );
+      if (!matrix.ok) return err(matrix.error);
+
+      const choice = pickFairest(
+        matrix.value.durations,
+        hasIncumbent ? 0 : null,
+      );
+      return ok({
+        point:
+          choice === null ? null : (matrix.value.snapped[choice.index] ?? null),
+        worstSeconds: choice?.worstSeconds ?? 0,
+      });
+    },
+  };
 }
 
 /**

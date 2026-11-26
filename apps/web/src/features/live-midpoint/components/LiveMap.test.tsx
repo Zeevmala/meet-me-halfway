@@ -77,6 +77,7 @@ function fakeMap(
   const handlers = new Map<string, ((event: unknown) => void)[]>();
   const controls: unknown[] = [];
   const added: { id: string; minzoom?: number; beforeId?: string }[] = [];
+  const sources = new Map<string, { setData: ReturnType<typeof vi.fn> }>();
   const map = {
     on: (event: string, handler: (event: unknown) => void) => {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -89,9 +90,11 @@ function fakeMap(
     touchZoomRotate: { disableRotation: vi.fn() },
     keyboard: { disableRotation: vi.fn() },
     getStyle: () => ({ layers: styleLayers }),
-    getSource: () => undefined,
+    getSource: (id: string) => sources.get(id),
     getLayer: (id: string) => added.find((layer) => layer.id === id),
-    addSource: vi.fn(),
+    addSource: vi.fn((id: string) => {
+      sources.set(id, { setData: vi.fn() });
+    }),
     addLayer: vi.fn(
       (layer: { id: string; minzoom?: number }, beforeId?: string) => {
         added.push({ ...layer, beforeId });
@@ -106,7 +109,7 @@ function fakeMap(
       for (const handler of handlers.get(event) ?? []) handler(payload);
     });
   };
-  return { map, controls, added, fire };
+  return { map, controls, added, sources, fire };
 }
 
 function participant(
@@ -300,6 +303,45 @@ describe("LiveMap", () => {
       const accuracy = fake.added.filter((l) => l.id.startsWith("accuracy-"));
       expect(accuracy).toHaveLength(10);
       for (const layer of accuracy) expect(layer.minzoom).toBe(12);
+    });
+
+    // `participants` is a new array on every fix, one a second while anyone
+    // moves; all five circles used to be rebuilt and re-uploaded each time.
+    it("redraws only the accuracy circle that changed", () => {
+      const fake = fakeMap();
+      mapbox.construct = () => fake.map;
+      const own = { ...participant(0, TEL_AVIV, true), accuracy: 20 };
+      const peer = { ...participant(1, HAIFA), accuracy: 30 };
+      const { rerender } = render(
+        <LiveMap {...PROPS} participants={[own, peer]} />,
+      );
+      fake.fire("load");
+      const drawn = (slot: number) =>
+        fake.sources.get(`accuracy-${slot}`)?.setData.mock.calls.length;
+      const before = [drawn(0), drawn(1), drawn(2)];
+
+      const moved = { ...own, position: { lat: 32.09, lng: 34.79 } };
+      rerender(<LiveMap {...PROPS} participants={[moved, { ...peer }]} />);
+
+      expect(drawn(0)).toBe((before[0] ?? 0) + 1);
+      expect(drawn(1)).toBe(before[1]);
+      expect(drawn(2)).toBe(before[2]);
+    });
+
+    it("clears the circle of someone who left", () => {
+      const fake = fakeMap();
+      mapbox.construct = () => fake.map;
+      const peer = { ...participant(1, HAIFA), accuracy: 30 };
+      const { rerender } = render(<LiveMap {...PROPS} participants={[peer]} />);
+      fake.fire("load");
+
+      rerender(<LiveMap {...PROPS} participants={[]} />);
+
+      const calls = fake.sources.get("accuracy-1")?.setData.mock.calls ?? [];
+      expect(calls[calls.length - 1]?.[0]).toEqual({
+        type: "FeatureCollection",
+        features: [],
+      });
     });
 
     // The e2e suite's mock style has no layers at all.

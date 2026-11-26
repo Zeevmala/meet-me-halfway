@@ -27,14 +27,22 @@ import {
   createVenuePolicy,
   createRoutePolicy,
   createPresencePolicy,
+  createMeetingPolicy,
   PRESENCE_HEARTBEAT_MS,
   routesAnswer,
 } from "./policies";
-import type { PresenceInput, RouteInput, VenueInput } from "./policies";
+import type {
+  MeetingInput,
+  PresenceInput,
+  RouteInput,
+  VenueInput,
+} from "./policies";
 import type { GraphPorts } from "./ports";
 import type {
   GraphSources,
   LivenessResult,
+  MeetingAnswer,
+  MeetingBasis,
   RouteInfo,
   RouteSet,
   SessionPhase,
@@ -43,6 +51,8 @@ import type {
 } from "./types";
 
 const TOP_VENUES = 5;
+/** The creator's slot — a server invariant (`slots/0` validates `creatorUid`). */
+const CREATOR_SLOT: ParticipantIndex = 0;
 
 const EMPTY_VENUES: readonly RankedVenue[] = Object.freeze([]);
 const EMPTY_ROUTES: readonly (RouteInfo | null)[] = Object.freeze(
@@ -75,7 +85,12 @@ const NO_LIVENESS: LivenessResult = Object.freeze({
 
 export interface GraphSnapshot {
   readonly slots: SlotVector;
+  /**
+   * The meeting point: balanced by travel time when `meetingBasis` says so,
+   * the geographic centroid otherwise.
+   */
   readonly midpoint: LatLng | null;
+  readonly meetingBasis: MeetingBasis;
   readonly venues: readonly RankedVenue[];
   readonly venuesLoading: boolean;
   readonly selectedVenue: RankedVenue | null;
@@ -151,13 +166,26 @@ export function createRuntime(
     createPresencePolicy(ports),
     ports,
   );
+  const meeting: Resource<MeetingInput, MeetingAnswer> = createResource(
+    createMeetingPolicy(ports),
+    ports,
+  );
 
   // Memo cells. Each holds the previous output so an unchanged computation
   // returns the identical reference and the snapshot stays stable — which
   // useSyncExternalStore requires of getSnapshot.
   let liveness: LivenessResult = NO_LIVENESS;
   let slots: SlotVector = buildSlotVector(sources, liveness);
+  /** The geographic centroid — the `midpoint` node. */
+  let centroid: LatLng | null = null;
+  /** What is published as the midpoint — the `meeting` node. */
   let midpoint: LatLng | null = null;
+  let meetingBasis: MeetingBasis = "distance";
+  /**
+   * The balanced point the session shares this tick: the creator's own answer
+   * on the creator's device, what the creator published on everyone else's.
+   */
+  let published: LatLng | null = null;
   let phase: SessionPhase = "idle";
   // One timer for the whole liveness concern, armed at the next instant some
   // participant's staleness flips. Replaces a 10s setInterval that ran for the
@@ -183,6 +211,7 @@ export function createRuntime(
   let snapshot: GraphSnapshot = {
     slots,
     midpoint: null,
+    meetingBasis: "distance",
     venues: EMPTY_VENUES,
     venuesLoading: false,
     selectedVenue: null,
@@ -338,6 +367,8 @@ export function createRuntime(
               position,
               accuracy: sources.ownAccuracy ?? 0,
               name: sources.ownName,
+              // Only the creator publishes one; a joiner holds the creator's.
+              meet: slot === CREATOR_SLOT ? published : null,
             });
             armHeartbeat(true);
           } else {
@@ -352,6 +383,65 @@ export function createRuntime(
         }
         case "midpoint": {
           const next = deriveMidpoint(slots);
+          if (!sameLatLng(next, centroid)) centroid = next;
+          break;
+        }
+        case "meeting": {
+          let next = centroid;
+          meetingBasis = "distance";
+          published = null;
+          if (centroid === null) {
+            meeting.request(null);
+          } else if (slots.ownSlot === CREATOR_SLOT) {
+            // One device works the point out — the creator's, which the rules
+            // already single out — and publishes it in its own record. Worked
+            // out on every device it was a different point on each: it depends
+            // on that device's travel mode, on the positions it last asked
+            // about, and on the point it already shows.
+            // And only while it can publish: a point this device adopted but
+            // could not write — no fix yet, location denied — was one nobody
+            // else had.
+            if (
+              ports.meetingEnabled &&
+              sources.sessionCode !== null &&
+              sources.ownUid !== null &&
+              sources.ownPosition !== null
+            ) {
+              // The last answer stands until the next one replaces it, through
+              // a change of roster or travel mode. Dropping to the centroid
+              // while the matrix was asked again moved every device twice —
+              // each fetching routes twice — and for those seconds the creator
+              // and the joiners, who hear of it a write later, disagreed. An
+              // answer the matrix can no longer refresh ages out with the
+              // resource's last-good window.
+              const point = meeting.getState().value?.point ?? null;
+              meeting.request({
+                slots: positionsCounted(slots),
+                centroid,
+                profile: sources.travelProfile,
+                incumbent: point,
+              });
+              published = point;
+            } else {
+              meeting.request(null);
+            }
+          } else {
+            // Everyone else shows what the creator published, while the
+            // creator is still counted. With no creator there is no point,
+            // and every device falls back to the same centroid.
+            // Behind the same switch as the writing: off means off, whatever
+            // a record holds.
+            meeting.request(null);
+            if (ports.meetingEnabled && slots.counted.includes(CREATOR_SLOT)) {
+              published =
+                sources.participants.find((p) => p.index === CREATOR_SLOT)
+                  ?.meet ?? null;
+            }
+          }
+          if (published !== null) {
+            next = published;
+            meetingBasis = "time";
+          }
           if (!sameLatLng(next, midpoint)) midpoint = next;
           break;
         }
@@ -408,6 +498,7 @@ export function createRuntime(
           const next: GraphSnapshot = {
             slots,
             midpoint,
+            meetingBasis,
             venues: ranked,
             venuesLoading: venueState.status === "pending",
             selectedVenue: nextSelected,
@@ -423,6 +514,7 @@ export function createRuntime(
           if (
             next.slots !== snapshot.slots ||
             next.midpoint !== snapshot.midpoint ||
+            next.meetingBasis !== snapshot.meetingBasis ||
             next.venues !== snapshot.venues ||
             next.venuesLoading !== snapshot.venuesLoading ||
             next.selectedVenue !== snapshot.selectedVenue ||
@@ -462,6 +554,7 @@ export function createRuntime(
   venues.subscribe(tick);
   routes.subscribe(tick);
   presence.subscribe(tick);
+  meeting.subscribe(tick);
 
   function setSources(patch: Partial<GraphSources>): void {
     if (disposed) return;
@@ -497,6 +590,7 @@ export function createRuntime(
       venues.dispose();
       routes.dispose();
       presence.dispose();
+      meeting.dispose();
       listeners.clear();
     },
     isDisposed: () => disposed,

@@ -69,11 +69,13 @@ const testPorts: GraphPorts = {
   cancel: () => {},
   searchVenues: mockSearchVenues,
   fetchRoute: mockFetchRoute,
+  fetchMatrix: vi.fn(),
   // The presence node publishes own location through this seam. Nothing here
   // schedules, so it is never actually driven — it exists so the fake satisfies
   // the same contract production does.
   writePresence: mockWritePresence,
   placesEnabled: false,
+  meetingEnabled: false,
 };
 
 const testServices = {
@@ -643,6 +645,7 @@ describe("LiveMidpointPage — render-path stability", () => {
         accuracy: 12,
         lastSeen: Date.now(),
         name: "Peer",
+        meet: null,
       },
     ];
   }

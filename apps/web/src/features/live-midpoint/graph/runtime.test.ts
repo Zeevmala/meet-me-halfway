@@ -7,7 +7,8 @@ import type { ParticipantSource, RouteInfo } from "./types";
 import type { LatLng } from "../lib/geo-math";
 import type { ParticipantIndex } from "../lib/participant-config";
 import type { PlaceResult } from "../lib/venue-ranking";
-import { ok } from "../../../core/dag/result";
+import type { FetchMatrix } from "../lib/matrix-api";
+import { ok, err } from "../../../core/dag/result";
 import type { TimerId } from "../../../core/dag/resource";
 
 const TEL_AVIV: LatLng = { lat: 32.08, lng: 34.78 };
@@ -82,8 +83,17 @@ function createHarness(overrides: Partial<GraphPorts> = {}) {
     },
     searchVenues: vi.fn().mockResolvedValue(ok(PLACES)),
     fetchRoute: vi.fn().mockResolvedValue(ok(route(1000))),
+    // No candidate reachable: the meeting point stays the centroid, which is
+    // what every case here that does not override this is about.
+    fetchMatrix: vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() => destinations.map(() => null)),
+        snapped: destinations,
+      }),
+    ),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
+    meetingEnabled: true,
     ...overrides,
   };
 
@@ -708,5 +718,273 @@ describe("createRuntime — departed peers and stale routes", () => {
     await h.advance(10_000);
     expect(r.getSnapshot().routes.filter(Boolean).length).toBeGreaterThan(0);
     r.dispose();
+  });
+});
+
+describe("createRuntime — meeting point balanced by travel time", () => {
+  const FAIR: LatLng = { lat: 31.85, lng: 35.1 };
+  const FAIRER: LatLng = { lat: 31.8, lng: 35.15 };
+
+  /** A matrix whose last candidate is quick for everyone, snapped to `at`. */
+  function matrixAnswering(at: LatLng) {
+    return vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() =>
+          destinations.map((_, i) =>
+            i === destinations.length - 1 ? 600 : 3000,
+          ),
+        ),
+        snapped: destinations.map((d, i) =>
+          i === destinations.length - 1 ? at : d,
+        ),
+      }),
+    );
+  }
+
+  const SESSION = {
+    sessionCode: "ABC234",
+    ownUid: "own-uid",
+    ownName: "Me",
+    sessionStatus: "ready" as const,
+  };
+
+  /** The creator's device, in a session it can publish to. */
+  const PAIR = {
+    ...SESSION,
+    ownSlot: 0 as const,
+    ownPosition: TEL_AVIV,
+    participants: [peer(1, JERUSALEM)],
+  };
+
+  it("shows the centroid at once, then the balanced point when it arrives", async () => {
+    const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+    const r = createRuntime(h.ports, PAIR);
+
+    const centroid = r.getSnapshot().midpoint;
+    expect(centroid).not.toBeNull();
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+
+    await h.advance(1_500);
+
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+  });
+
+  // The answer lands inside the routes' and venues' debounce, so neither is
+  // fetched for the centroid first.
+  it("routes and searches once, to the balanced point", async () => {
+    const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+    createRuntime(h.ports, PAIR);
+
+    await h.advance(20_000);
+
+    expect(h.ports.searchVenues).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.ports.searchVenues).mock.calls[0]?.[0]).toEqual(FAIR);
+    expect(h.ports.fetchRoute).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(h.ports.fetchRoute).mock.calls) {
+      expect(call[1]).toEqual(FAIR);
+    }
+  });
+
+  it("asks once while nobody moves, however often the graph ticks", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, PAIR);
+
+    await h.advance(1_500);
+    r.setSources({ participants: [peer(1, { ...JERUSALEM }, 5)] });
+    r.setSources({ serverTimeOffsetMs: 40 });
+    await h.advance(20_000);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the centroid when the matrix fails, and says the basis is distance", async () => {
+    const h = createHarness({
+      fetchMatrix: vi
+        .fn<FetchMatrix>()
+        .mockResolvedValue(err({ kind: "HTTP", status: 401 })),
+    });
+    const r = createRuntime(h.ports, PAIR);
+    const centroid = r.getSnapshot().midpoint;
+
+    await h.advance(10_000);
+
+    expect(r.getSnapshot().midpoint).toBe(centroid);
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+    // Everything downstream still runs, to the centroid.
+    expect(h.ports.fetchRoute).toHaveBeenCalled();
+  });
+
+  // Dropping to the centroid while the matrix was asked again moved every
+  // device twice, and the joiners a write later than the creator.
+  it("keeps its point when someone joins, until the matrix answers for them", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, { ...PAIR, ...SESSION });
+    await h.advance(1_500);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+
+    fetchMatrix.mockImplementation(matrixAnswering(FAIRER));
+    r.setSources({
+      participants: [peer(1, JERUSALEM), peer(2, { lat: 32.79, lng: 34.99 })],
+    });
+
+    expect(r.getSnapshot().midpoint).toEqual(FAIR);
+    expect(r.getSnapshot().meetingBasis).toBe("time");
+
+    await h.advance(1_500);
+
+    expect(r.getSnapshot().midpoint).toEqual(FAIRER);
+    expect(fetchMatrix.mock.calls[1]?.[0]).toHaveLength(3);
+  });
+
+  // A point adopted but not written — no fix yet, location denied — was one
+  // nobody else in the session had.
+  it("works nothing out on a creator that cannot publish", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, {
+      ...SESSION,
+      ownSlot: 0,
+      ownPosition: null,
+      participants: [peer(1, JERUSALEM), peer(2, { lat: 32.79, lng: 34.99 })],
+    });
+
+    await h.advance(20_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+  });
+
+  it("offers the point it is showing as the incumbent of the next question", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    const r = createRuntime(h.ports, PAIR);
+    await h.advance(1_500);
+
+    // Far enough to be worth asking again.
+    r.setSources({ ownPosition: { lat: 31.95, lng: 34.8 } });
+    await h.advance(1_500);
+
+    expect(fetchMatrix).toHaveBeenCalledTimes(2);
+    expect(fetchMatrix.mock.calls[1]?.[1][0]).toEqual(FAIR);
+  });
+
+  // Off in production until the point is shared by the session: worked out
+  // per device, two phones can show points kilometres apart.
+  it("asks nothing and keeps the centroid when it is switched off", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix, meetingEnabled: false });
+    const r = createRuntime(h.ports, PAIR);
+    const centroid = r.getSnapshot().midpoint;
+
+    await h.advance(20_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
+    expect(r.getSnapshot().midpoint).toBe(centroid);
+    expect(r.getSnapshot().meetingBasis).toBe("distance");
+  });
+
+  describe("one point for the whole session", () => {
+    const session = SESSION;
+
+    it("is published by the creator, in the record it already writes", async () => {
+      const h = createHarness({ fetchMatrix: matrixAnswering(FAIR) });
+      createRuntime(h.ports, { ...PAIR, ...session });
+
+      await h.advance(10_000);
+
+      const writes = vi.mocked(h.ports.writePresence).mock.calls;
+      expect(writes[writes.length - 1]?.[2].meet).toEqual(FAIR);
+    });
+
+    // Worked out on every device it was a different point on each.
+    it("is read, never worked out, by everyone else", async () => {
+      const fetchMatrix = matrixAnswering(FAIRER);
+      const h = createHarness({ fetchMatrix });
+      const r = createRuntime(h.ports, {
+        ...session,
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [{ ...peer(0, TEL_AVIV), meet: FAIR }],
+      });
+
+      await h.advance(10_000);
+
+      expect(fetchMatrix).not.toHaveBeenCalled();
+      expect(r.getSnapshot().midpoint).toEqual(FAIR);
+      expect(r.getSnapshot().meetingBasis).toBe("time");
+      const writes = vi.mocked(h.ports.writePresence).mock.calls;
+      expect(writes[writes.length - 1]?.[2].meet).toBeNull();
+    });
+
+    it("is the same centroid on every device while the creator has published none", () => {
+      const h = createHarness();
+      const creator = createRuntime(h.ports, PAIR);
+      const joiner = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [peer(0, TEL_AVIV)],
+      });
+
+      expect(joiner.getSnapshot().meetingBasis).toBe("distance");
+      expect(joiner.getSnapshot().midpoint).toEqual(
+        creator.getSnapshot().midpoint,
+      );
+    });
+
+    // A point left in the record of a creator who has gone silent is for a
+    // group that no longer exists.
+    it("is dropped once the creator has departed", () => {
+      const h = createHarness();
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [
+          { ...peer(0, TEL_AVIV, -DEPARTED_THRESHOLD_MS), meet: FAIR },
+          peer(2, { lat: 32.79, lng: 34.99 }),
+        ],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+      expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+    });
+
+    it("ignores a published point while the feature is switched off", () => {
+      const h = createHarness({ meetingEnabled: false });
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [{ ...peer(0, TEL_AVIV), meet: FAIR }],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+      expect(r.getSnapshot().midpoint).not.toEqual(FAIR);
+    });
+
+    it("ignores a point published by anyone but the creator", () => {
+      const h = createHarness();
+      const r = createRuntime(h.ports, {
+        ownSlot: 1,
+        ownPosition: JERUSALEM,
+        participants: [
+          peer(0, TEL_AVIV),
+          { ...peer(2, { lat: 32.79, lng: 34.99 }), meet: FAIR },
+        ],
+      });
+
+      expect(r.getSnapshot().meetingBasis).toBe("distance");
+    });
+  });
+
+  it("asks nothing with nobody to meet", async () => {
+    const fetchMatrix = matrixAnswering(FAIR);
+    const h = createHarness({ fetchMatrix });
+    createRuntime(h.ports, { ownSlot: 0, ownPosition: TEL_AVIV });
+
+    await h.advance(10_000);
+
+    expect(fetchMatrix).not.toHaveBeenCalled();
   });
 });

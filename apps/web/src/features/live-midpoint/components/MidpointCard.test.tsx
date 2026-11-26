@@ -73,6 +73,7 @@ function renderCard(
     travelProfile: "driving" as const,
     onProfileChange: vi.fn(),
     selectedVenueName: null as string | null,
+    meetingBasis: "distance" as "time" | "distance",
     routesStale: false,
   };
   return render(<MidpointCard {...defaults} {...overrides} />);
@@ -147,6 +148,14 @@ describe("MidpointCard", () => {
 
     expect(screen.queryByText("live.staleTag")).toBeNull();
     expect(screen.queryByText("live.participantStaleHint")).toBeNull();
+  });
+
+  // Balanced by time, the point sits visibly nearer one person; the title
+  // says what it is the middle of.
+  it("names a midpoint balanced by travel time as one", () => {
+    renderCard({ meetingBasis: "time" });
+    expect(screen.getByText("live.midpointByTime")).toBeTruthy();
+    expect(screen.queryByText("live.midpoint")).toBeNull();
   });
 
   it("titles the card with the venue when one is picked, else the midpoint", () => {

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { createVenuePolicy, createRoutePolicy, routesAnswer } from "./policies";
-import type { RouteInput, VenueInput } from "./policies";
+import {
+  createMeetingPolicy,
+  createVenuePolicy,
+  createRoutePolicy,
+  routesAnswer,
+} from "./policies";
+import type { MeetingInput, RouteInput, VenueInput } from "./policies";
+import { geographicCentroid, haversineDistance } from "../lib/geo-math";
+import type { FetchMatrix } from "../lib/matrix-api";
 import type { GraphPorts } from "./ports";
 import type { LatLng } from "../lib/geo-math";
 import { ok, err } from "../../../core/dag/result";
@@ -20,8 +27,17 @@ function makePorts(overrides: Partial<GraphPorts> = {}): GraphPorts {
     cancel: () => {},
     searchVenues: vi.fn().mockResolvedValue(ok([])),
     fetchRoute: vi.fn().mockResolvedValue(ok(null)),
+    // No candidate reachable: the meeting point stays the centroid, which is
+    // what every case here that does not override this is about.
+    fetchMatrix: vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() => destinations.map(() => null)),
+        snapped: destinations,
+      }),
+    ),
     writePresence: vi.fn().mockResolvedValue(ok(undefined)),
     placesEnabled: true,
+    meetingEnabled: true,
     ...overrides,
   };
 }
@@ -236,5 +252,184 @@ describe("routesAnswer", () => {
 
   it("lapses when the travel profile changes", () => {
     expect(routesAnswer(set, TEL_AVIV, "walking")).toBe(false);
+  });
+});
+
+describe("meeting policy", () => {
+  function meetingInput(
+    slots: readonly (LatLng | null)[],
+    overrides: Partial<MeetingInput> = {},
+  ): MeetingInput {
+    const people = slots.filter((s): s is LatLng => s !== null);
+    return {
+      slots,
+      centroid: geographicCentroid(people),
+      profile: "driving",
+      incumbent: null,
+      ...overrides,
+    };
+  }
+
+  const PAIR = [TEL_AVIV, JERUSALEM, null, null, null];
+  const policy = createMeetingPolicy(makePorts());
+  const signal = new AbortController().signal;
+
+  /** A matrix in which only candidate `best` is quick for everyone. */
+  function matrixFavouring(best: number): FetchMatrix {
+    return async (sources, destinations) =>
+      ok({
+        durations: sources.map(() =>
+          destinations.map((_, i) => (i === best ? 600 : 3000)),
+        ),
+        snapped: destinations.map((d) => ({ lat: d.lat + 0.001, lng: d.lng })),
+      });
+  }
+
+  it("asks about the centroid and points towards each person, within Mapbox's limit", async () => {
+    const fetchMatrix = vi.fn<FetchMatrix>(matrixFavouring(0));
+    const p = createMeetingPolicy(makePorts({ fetchMatrix }));
+
+    await p.run(meetingInput(PAIR), signal);
+
+    const [sources, destinations, profile] = fetchMatrix.mock.calls[0] ?? [];
+    expect(sources).toEqual([TEL_AVIV, JERUSALEM]);
+    expect(profile).toBe("driving");
+    expect(destinations?.[0]).toEqual(
+      geographicCentroid([TEL_AVIV, JERUSALEM]),
+    );
+    expect(destinations?.length).toBeGreaterThan(4);
+    expect(
+      (sources?.length ?? 0) + (destinations?.length ?? 0),
+    ).toBeLessThanOrEqual(25);
+  });
+
+  it("stays within Mapbox's limit with every slot taken", async () => {
+    const fetchMatrix = vi.fn<FetchMatrix>(matrixFavouring(0));
+    const p = createMeetingPolicy(makePorts({ fetchMatrix }));
+    const full = [TEL_AVIV, JERUSALEM, FAR, NEARBY, TEL_AVIV];
+
+    await p.run(meetingInput(full, { incumbent: FAR }), signal);
+
+    const [sources, destinations] = fetchMatrix.mock.calls[0] ?? [];
+    expect(sources).toHaveLength(5);
+    expect(destinations?.length).toBeLessThanOrEqual(12);
+  });
+
+  // The centroid may be a field; the answer is where the road is.
+  it("answers with the fairest candidate as snapped to the road", async () => {
+    const fetchMatrix = vi.fn<FetchMatrix>(matrixFavouring(3));
+    const p = createMeetingPolicy(makePorts({ fetchMatrix }));
+
+    const result = await p.run(meetingInput(PAIR), signal);
+
+    const asked = fetchMatrix.mock.calls[0]?.[1][3];
+    expect(result.ok).toBe(true);
+    if (!result.ok || asked === undefined) return;
+    expect(result.value).toEqual({
+      point: { lat: asked.lat + 0.001, lng: asked.lng },
+      worstSeconds: 600,
+    });
+  });
+
+  it("asks about the current point first, and keeps it against a marginal gain", async () => {
+    const fetchMatrix = vi.fn<FetchMatrix>(async (sources, destinations) =>
+      ok({
+        durations: sources.map(() =>
+          destinations.map((_, i) => (i === 2 ? 1770 : 1800)),
+        ),
+        snapped: destinations,
+      }),
+    );
+    const p = createMeetingPolicy(makePorts({ fetchMatrix }));
+
+    const result = await p.run(meetingInput(PAIR, { incumbent: FAR }), signal);
+
+    expect(fetchMatrix.mock.calls[0]?.[1][0]).toBe(FAR);
+    expect(result.ok && result.value.point).toBe(FAR);
+  });
+
+  it("answers no point, not a failure, when nowhere is reachable by all", async () => {
+    const result = await policy.run(meetingInput(PAIR), signal);
+
+    expect(result.ok && result.value.point).toBeNull();
+  });
+
+  it("passes a transport failure on", async () => {
+    const fetchMatrix = vi
+      .fn<FetchMatrix>()
+      .mockResolvedValue(err({ kind: "HTTP", status: 503 }));
+    const p = createMeetingPolicy(makePorts({ fetchMatrix }));
+
+    const result = await p.run(meetingInput(PAIR), signal);
+
+    expect(result).toEqual({ ok: false, error: { kind: "HTTP", status: 503 } });
+  });
+
+  describe("admits", () => {
+    const before = meetingInput(PAIR);
+
+    it("a change of travel mode or of who is counted", () => {
+      expect(
+        policy.admits(before, meetingInput(PAIR, { profile: "walking" }), 0, 0),
+      ).toBe(true);
+      expect(
+        policy.admits(
+          before,
+          meetingInput([TEL_AVIV, JERUSALEM, FAR, null, null]),
+          0,
+          0,
+        ),
+      ).toBe(true);
+    });
+
+    // Tel Aviv is ~27 km from the centroid, so a fifth of that is the bar:
+    // people on their way must not re-ask every few hundred metres.
+    it("not a move that is small beside the trip", () => {
+      const moved = { lat: TEL_AVIV.lat - 0.02, lng: TEL_AVIV.lng };
+      expect(haversineDistance(TEL_AVIV, moved)).toBeGreaterThan(2_000);
+
+      expect(
+        policy.admits(
+          before,
+          meetingInput([moved, JERUSALEM, null, null, null]),
+          0,
+          0,
+        ),
+      ).toBe(false);
+    });
+
+    it("a move that changes somebody's share of the trip", () => {
+      const moved = { lat: TEL_AVIV.lat - 0.07, lng: TEL_AVIV.lng };
+
+      expect(
+        policy.admits(
+          before,
+          meetingInput([moved, JERUSALEM, null, null, null]),
+          0,
+          0,
+        ),
+      ).toBe(true);
+    });
+
+    // Typical speeds, not live traffic: the same question, the same answer.
+    // The rare refresh is what lets a refused request be asked again.
+    it("on age only after ten minutes", () => {
+      expect(policy.admits(before, meetingInput(PAIR), 0, 9 * 60_000)).toBe(
+        false,
+      );
+      expect(policy.admits(before, meetingInput(PAIR), 0, 10 * 60_000)).toBe(
+        true,
+      );
+    });
+
+    // An answer changes the incumbent; it must not be a reason to ask again.
+    it("not a change of incumbent", () => {
+      expect(
+        policy.admits(before, meetingInput(PAIR, { incumbent: FAR }), 0, 0),
+      ).toBe(false);
+      expect(policy.identity(meetingInput(PAIR, { incumbent: FAR }))).toBe(
+        policy.identity(before),
+      );
+    });
   });
 });
