@@ -10,14 +10,15 @@ The app is already launched: it is a URL, and a joiner needs no install. A store
 2. **The screen has to stay on while sharing.** A locked phone stops reporting.
 3. **The store app is a shell onto the hosted origin.** Android: a Trusted Web Activity. iOS: stay on the web for this beta.
 
-## Decisions this draft needs
+## Decisions
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome |
 | --- | --- | --- |
-| D1 | Which store first | Google Play, internal track. iOS stays web for this beta; a separate design covers TestFlight |
-| D2 | How much of the Cartowolf adoption lands before store screenshots | Ticket 1 and the `--live-gray` contrast fix. Palette swap and Mapbox Standard after the beta |
-| D3 | Firebase plan | Stay on Spark for a closed beta. Move to Blaze, with a budget alert, before any open test |
-| D4 | Slot 0 keeps a fixed colour when the palette changes | Open. Blocks adoption ticket 2 only |
+| D1 | Which store first | **Decided 2026-11-26: Google Play, internal track.** iOS stays web for this beta; a separate design covers TestFlight |
+| D2 | How much of the Cartowolf adoption lands before store screenshots | **Decided 2026-11-26: ticket 1 and the `--live-gray` contrast fix.** Palette swap and Mapbox Standard after the beta |
+| D3 | Order of work | **Decided 2026-11-26: the stored destination first,** then the wake lock, then the shell |
+| D4 | Firebase plan | Open. Recommended: stay on Spark for a closed beta; Blaze, with a budget alert, before any open test |
+| D5 | Slot 0 keeps a fixed colour when the palette changes | Open. Blocks adoption ticket 2 only |
 
 ## What was measured
 
@@ -61,7 +62,7 @@ The store app loads `https://<origin>/` and holds no copy of the bundle. Three r
 
 The centroid is right while people are deciding and wrong once they are driving. The session needs one stored destination that outlives its writer.
 
-- **Schema.** `sessions/{code}/destination: { lat, lng, ts, by }`. `ts` equals the server's `now`; `by` is the writer's slot. Writable by any slot holder of a fresh session, readable by slot holders only, numbers range-checked, no other fields. Any holder may replace or clear it.
+- **Schema.** `sessions/{code}/destination: { lat, lng, ts, by }`. `ts` equals the server's `now`; `by` is the writer's slot key, a string, so the rule can look the holder up without matching keys. Writable by any slot holder of a fresh session, readable by slot holders only, numbers range-checked, no other fields. Any holder may replace or clear it.
 - **Behaviour.** The first Navigate tap writes the destination shown on that device, then opens the navigation app. From then on every device shows and routes to the stored point. A participant who goes silent while a destination is set is shown as on the way, not dropped. Clearing it returns the session to the live centroid.
 - **Why session level and not the creator's record.** The meeting-point branch (`claude/nifty-mayer-iv17gy`) publishes `mlat`/`mlng` inside `participants/0`, which is deleted when the creator disconnects. The creator tapping Navigate is exactly that disconnect. The two fit together: the balanced point decides *where*, this field records *that it was agreed*.
 - **Rollout.** Expand/contract. The session node has `$other: false`, so the rules that accept `destination` deploy one release before any client writes it. The client ships behind a flag in the first release.
@@ -102,7 +103,7 @@ The adoption note (`design/adoption/meet-me-halfway.md` in the factory) lists fo
 
 | # | Slice | Done when | Built by |
 | --- | --- | --- | --- |
-| 1a | Rules accept `destination` | rules tests cover holder write, non-holder denial, range, extra field; deployed | session (schema is ask-first) |
+| 1a | Rules accept `destination` | rules tests cover holder write, non-holder denial, range, extra field; deployed. **Built 2026-11-26, not yet deployed** | session (schema is ask-first) |
 | 1b | Client writes and reads it, behind a flag | unit tests on the node; e2e: A taps Navigate, B still has a destination at 121 s | session |
 | 1c | Flag on, privacy policy updated | one release after 1a | session |
 | 2 | Wake lock | test with a fake `navigator.wakeLock`: requested on publish, released on hide, re-requested on show | factory ticket |
